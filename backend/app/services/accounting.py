@@ -89,6 +89,36 @@ class PostToLedgerResult(BaseModel):
     )
 
 
+class UnbalancedJournalEntryError(Exception):
+    """Exception raised when an unbalanced journal entry save is attempted."""
+
+    def __init__(self, validation_result: DoubleEntryValidationResult):
+        self.validation_result = validation_result
+        err_msg = "; ".join(validation_result.errors)
+        super().__init__(f"Cannot save unbalanced journal entry: {err_msg}")
+
+
+class SaveJournalEntryResult(BaseModel):
+    """Structured result returned by save_journal_entry_safely."""
+
+    success: bool = Field(
+        ..., description="True if journal entry passed validation and was saved"
+    )
+    journal_entry_id: str | None = Field(
+        default=None, description="ID of the created/updated journal entry"
+    )
+    status: str = Field(..., description="Final status assigned to journal entry")
+    validation_result: DoubleEntryValidationResult = Field(
+        ..., description="Double-entry balance validation output"
+    )
+    sensitive_check_result: SensitiveAccountCheckResult = Field(
+        ..., description="Sensitive account inspection output"
+    )
+    errors: list[str] = Field(
+        default_factory=list, description="List of errors if saving failed"
+    )
+
+
 def _to_decimal(val: Any) -> Decimal:
     """Helper to convert float/int/str/Decimal safely to Decimal (2 decimals)."""
     if val is None:
@@ -420,7 +450,7 @@ def post_journal_entry_to_ledger(
 
     Actions on Success:
     - Update `status = "posted"`.
-    - Set `posted_at = datetime.now(timezone.utc)`.
+    - Set `posted_at = datetime.now(UTC)`.
     - If db_session provided: commit to database.
 
     Args:
@@ -512,5 +542,155 @@ def post_journal_entry_to_ledger(
         journal_entry_id=entry_id,
         status="posted",
         posted_at=posted_at_iso,
+        errors=[],
+    )
+
+
+def save_journal_entry_safely(
+    journal_data: dict[str, Any] | Any,
+    db_session: Any | None = None,
+    chart_of_accounts: Sequence[Any] | None = None,
+    raise_on_error: bool = False,
+) -> SaveJournalEntryResult:
+    """Validate and safely persist a journal entry to DB with strict guardrails.
+
+    Guardrail Rules:
+    1. Double-Entry Balance Check: Runs `validate_double_entry(lines)`.
+       If `is_valid` is False -> REJECT IMMEDIATELY! Do NOT save to DB.
+    2. Sensitive Account Check: Runs `check_sensitive_accounts(lines, COA)`.
+       If sensitive accounts are present -> auto-flag `requires_human_review = True`,
+       set status to `"review_required"`, and record risk flags.
+
+    Args:
+        journal_data: Dict or Pydantic/ORM model with entry fields & lines.
+        db_session: Optional SQLAlchemy Session for persistence.
+        chart_of_accounts: Optional sequence of COA entries for sensitive check.
+        raise_on_error: If True, raise `UnbalancedJournalEntryError` on fail.
+
+    Returns:
+        SaveJournalEntryResult with validation breakdown and save status.
+    """
+    if isinstance(journal_data, dict):
+        lines = journal_data.get("lines", [])
+        raw_status = journal_data.get("status", "draft")
+        entry_date = journal_data.get("entry_date") or date.today()
+        description = journal_data.get("description", "Journal Entry")
+        doc_id = journal_data.get("document_id")
+        ext_id = journal_data.get("extraction_id")
+        agent_name = journal_data.get("agent_name", "BookkeepingAgent")
+        conf_score = journal_data.get("confidence_score", 1.0)
+        rationale = journal_data.get("rationale")
+        existing_flags = journal_data.get("risk_flags") or []
+    else:
+        lines = getattr(journal_data, "lines", [])
+        raw_status = getattr(journal_data, "status", "draft")
+        entry_date = getattr(journal_data, "entry_date", None) or date.today()
+        description = getattr(journal_data, "description", "Journal Entry")
+        doc_id = getattr(journal_data, "document_id", None)
+        ext_id = getattr(journal_data, "extraction_id", None)
+        agent_name = getattr(journal_data, "agent_name", "BookkeepingAgent")
+        conf_score = getattr(journal_data, "confidence_score", 1.0)
+        rationale = getattr(journal_data, "rationale", None)
+        existing_flags = getattr(journal_data, "risk_flags", []) or []
+
+    # 1. Double-Entry Validation Guardrail
+    val_res = validate_double_entry(lines)
+    if not val_res.is_valid:
+        logger.warning(
+            "Guardrail Triggered: Rejected attempt to save unbalanced journal entry. "
+            "Errors: %s",
+            val_res.errors,
+        )
+        if raise_on_error:
+            raise UnbalancedJournalEntryError(val_res)
+
+        sens_res = SensitiveAccountCheckResult(
+            has_sensitive_account=False,
+            requires_human_review=False,
+            sensitive_lines=[],
+            risk_flags=[],
+        )
+        return SaveJournalEntryResult(
+            success=False,
+            journal_entry_id=None,
+            status="rejected",
+            validation_result=val_res,
+            sensitive_check_result=sens_res,
+            errors=[f"Guardrail Rejection: {err}" for err in val_res.errors],
+        )
+
+    # 2. Sensitive Account Check Guardrail
+    sens_res = check_sensitive_accounts(lines, chart_of_accounts=chart_of_accounts)
+
+    final_status = raw_status
+    merged_risk_flags = list(set(existing_flags + sens_res.risk_flags))
+
+    if sens_res.requires_human_review and final_status != "posted":
+        final_status = "review_required"
+
+    created_id: str | None = None
+
+    if db_session:
+        from app.models.journal import JournalEntry, JournalEntryLine
+
+        new_entry = JournalEntry(
+            document_id=doc_id,
+            extraction_id=ext_id,
+            entry_date=entry_date,
+            description=description,
+            status=final_status,
+            agent_name=agent_name,
+            confidence_score=conf_score,
+            rationale=rationale,
+            risk_flags=merged_risk_flags,
+        )
+
+        for line_idx, line in enumerate(lines, start=1):
+            if isinstance(line, dict):
+                ac_code = str(line.get("account_code", ""))
+                ac_name = str(line.get("account_name", ""))
+                deb = float(line.get("debit_amount", 0.0))
+                cred = float(line.get("credit_amount", 0.0))
+                l_desc = line.get("description")
+            else:
+                ac_code = str(getattr(line, "account_code", ""))
+                ac_name = str(getattr(line, "account_name", ""))
+                deb = float(getattr(line, "debit_amount", 0.0))
+                cred = float(getattr(line, "credit_amount", 0.0))
+                l_desc = getattr(line, "description", None)
+
+            orm_line = JournalEntryLine(
+                line_number=line_idx,
+                account_code=ac_code,
+                account_name=ac_name,
+                debit_amount=deb,
+                credit_amount=cred,
+                description=l_desc,
+            )
+            new_entry.lines.append(orm_line)
+
+        try:
+            db_session.add(new_entry)
+            db_session.commit()
+            db_session.refresh(new_entry)
+            created_id = str(new_entry.id)
+        except Exception as e:
+            logger.error("Database error saving journal entry: %s", str(e))
+            db_session.rollback()
+            return SaveJournalEntryResult(
+                success=False,
+                journal_entry_id=None,
+                status="failed",
+                validation_result=val_res,
+                sensitive_check_result=sens_res,
+                errors=[f"Database save error: {str(e)}"],
+            )
+
+    return SaveJournalEntryResult(
+        success=True,
+        journal_entry_id=created_id,
+        status=final_status,
+        validation_result=val_res,
+        sensitive_check_result=sens_res,
         errors=[],
     )

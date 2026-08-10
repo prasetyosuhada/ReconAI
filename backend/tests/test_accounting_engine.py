@@ -1,8 +1,11 @@
+import pytest
 from app.agents.schemas import ProposedJournalLine
 from app.services.accounting import (
+    UnbalancedJournalEntryError,
     check_sensitive_accounts,
     find_exact_reconciliation_matches,
     post_journal_entry_to_ledger,
+    save_journal_entry_safely,
     validate_double_entry,
 )
 
@@ -262,3 +265,64 @@ def test_post_journal_entry_to_ledger_unbalanced_rejection():
     result = post_journal_entry_to_ledger(entry)
     assert result.success is False
     assert any("validation failed" in err.lower() for err in result.errors)
+
+
+def test_save_journal_entry_safely_unbalanced_rejected():
+    data = {
+        "description": "Unbalanced Office Expense",
+        "status": "draft",
+        "lines": [
+            {"account_code": "5100", "debit_amount": 100000.0, "credit_amount": 0.0},
+            {"account_code": "2000", "debit_amount": 0.0, "credit_amount": 90000.0},
+        ],
+    }
+    result = save_journal_entry_safely(data)
+    assert result.success is False
+    assert result.status == "rejected"
+    assert any("Guardrail Rejection" in err for err in result.errors)
+
+
+def test_save_journal_entry_safely_raise_on_error():
+    data = {
+        "description": "Unbalanced Office Expense",
+        "status": "draft",
+        "lines": [
+            {"account_code": "5100", "debit_amount": 100000.0, "credit_amount": 0.0},
+            {"account_code": "2000", "debit_amount": 0.0, "credit_amount": 90000.0},
+        ],
+    }
+    with pytest.raises(UnbalancedJournalEntryError) as exc_info:
+        save_journal_entry_safely(data, raise_on_error=True)
+    assert "Cannot save unbalanced journal entry" in str(exc_info.value)
+
+
+def test_save_journal_entry_safely_sensitive_account_flags_review():
+    data = {
+        "description": "Equipment Purchase via Bank",
+        "status": "draft",
+        "lines": [
+            {"account_code": "1500", "debit_amount": 500000.0, "credit_amount": 0.0},
+            {"account_code": "1010", "debit_amount": 0.0, "credit_amount": 500000.0},
+        ],
+    }
+    result = save_journal_entry_safely(data)
+    assert result.success is True
+    assert result.status == "review_required"
+    assert result.sensitive_check_result.has_sensitive_account is True
+    assert "cash_bank_account_used" in result.sensitive_check_result.risk_flags
+
+
+def test_save_journal_entry_safely_valid():
+    data = {
+        "description": "Office Supplies Expense Credit AP",
+        "status": "draft",
+        "lines": [
+            {"account_code": "5100", "debit_amount": 50000.0, "credit_amount": 0.0},
+            {"account_code": "2000", "debit_amount": 0.0, "credit_amount": 50000.0},
+        ],
+    }
+    result = save_journal_entry_safely(data)
+    assert result.success is True
+    assert result.status == "draft"
+    assert result.validation_result.is_valid is True
+    assert result.sensitive_check_result.has_sensitive_account is False
