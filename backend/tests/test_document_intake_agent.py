@@ -39,7 +39,7 @@ def test_document_intake_agent_success(mock_get_llm):
     mock_get_llm.return_value = mock_llm
 
     response = run_document_intake_agent(
-        raw_text="TOKO GRAMEDIA\n15-07-2026\nSubtotal: 100000\nPPN: 11000\nTotal: 111000",
+        raw_text="TOKO GRAMEDIA\n15-07-2026\nTotal: 111000",
         original_filename="receipt.pdf",
     )
 
