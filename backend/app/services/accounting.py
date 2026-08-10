@@ -30,6 +30,24 @@ class DoubleEntryValidationResult(BaseModel):
     )
 
 
+class SensitiveAccountCheckResult(BaseModel):
+    """Structured result returned by sensitive account checking."""
+
+    has_sensitive_account: bool = Field(
+        ..., description="True if any sensitive account was referenced in lines"
+    )
+    requires_human_review: bool = Field(
+        ..., description="True if human review is mandatory due to sensitive accounts"
+    )
+    sensitive_lines: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Details of lines referencing sensitive accounts",
+    )
+    risk_flags: list[str] = Field(
+        default_factory=list, description="List of triggered risk flags"
+    )
+
+
 def _to_decimal(val: Any) -> Decimal:
     """Helper to convert float/int/str/Decimal safely to Decimal (2 decimals)."""
     if val is None:
@@ -120,4 +138,92 @@ def validate_double_entry(
         total_credit=float(total_credit_dec),
         difference=float(diff_dec),
         errors=errors,
+    )
+
+
+def check_sensitive_accounts(
+    lines: Sequence[Any],
+    chart_of_accounts: Sequence[Any] | None = None,
+) -> SensitiveAccountCheckResult:
+    """Check if any journal entry line touches a sensitive account.
+
+    Sensitive accounts include:
+    - Cash Account (1000)
+    - Bank Account (1010)
+    - Tax Payable / PPN (2100)
+    - Owner Equity / Capital (3000)
+    - Suspense Account (9999)
+    - Any account with `is_sensitive=True` in Chart of Accounts.
+
+    Args:
+        lines: Sequence of line dicts, Pydantic models, or ORM objects.
+        chart_of_accounts: Optional sequence of COA dicts or ORM objects.
+
+    Returns:
+        SensitiveAccountCheckResult containing details and risk flags.
+    """
+    sensitive_codes: set[str] = {"1000", "1010", "2100", "3000", "9999"}
+    coa_map: dict[str, dict[str, Any]] = {}
+
+    if chart_of_accounts:
+        for coa in chart_of_accounts:
+            if isinstance(coa, dict):
+                code = str(coa.get("account_code", ""))
+                is_sens = bool(coa.get("is_sensitive", False))
+                name = coa.get("account_name", "")
+            else:
+                code = str(getattr(coa, "account_code", ""))
+                is_sens = bool(getattr(coa, "is_sensitive", False))
+                name = getattr(coa, "account_name", "")
+
+            if code:
+                coa_map[code] = {"is_sensitive": is_sens, "name": name}
+                if is_sens:
+                    sensitive_codes.add(code)
+
+    sensitive_lines: list[dict[str, Any]] = []
+    risk_flags: set[str] = set()
+
+    for idx, line in enumerate(lines or []):
+        if isinstance(line, dict):
+            code = str(line.get("account_code", ""))
+            name = line.get("account_name", "")
+            debit = float(line.get("debit_amount", 0.0))
+            credit = float(line.get("credit_amount", 0.0))
+        else:
+            code = str(getattr(line, "account_code", ""))
+            name = getattr(line, "account_name", "")
+            debit = float(getattr(line, "debit_amount", 0.0))
+            credit = float(getattr(line, "credit_amount", 0.0))
+
+        is_sensitive = code in sensitive_codes or coa_map.get(code, {}).get(
+            "is_sensitive", False
+        )
+
+        if is_sensitive:
+            sensitive_lines.append(
+                {
+                    "line_index": idx,
+                    "account_code": code,
+                    "account_name": name or coa_map.get(code, {}).get("name", ""),
+                    "debit_amount": debit,
+                    "credit_amount": credit,
+                }
+            )
+            risk_flags.add("uses_sensitive_account")
+
+            if code in ("1000", "1010"):
+                risk_flags.add("cash_bank_account_used")
+            if code == "9999":
+                risk_flags.add("suspense_account_used")
+            if code == "2100":
+                risk_flags.add("tax_payable_account_used")
+
+    has_sensitive = len(sensitive_lines) > 0
+
+    return SensitiveAccountCheckResult(
+        has_sensitive_account=has_sensitive,
+        requires_human_review=has_sensitive,
+        sensitive_lines=sensitive_lines,
+        risk_flags=sorted(list(risk_flags)),
     )

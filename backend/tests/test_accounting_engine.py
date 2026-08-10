@@ -1,5 +1,8 @@
 from app.agents.schemas import ProposedJournalLine
-from app.services.accounting import validate_double_entry
+from app.services.accounting import (
+    check_sensitive_accounts,
+    validate_double_entry,
+)
 
 
 def test_validate_double_entry_valid_dict():
@@ -78,3 +81,56 @@ def test_validate_double_entry_compound_journal():
     assert result.total_debit == 111000.0
     assert result.total_credit == 111000.0
     assert result.difference == 0.0
+
+
+def test_check_sensitive_accounts_none():
+    lines = [
+        {"account_code": "5100", "account_name": "Office Supplies Expense"},
+        {"account_code": "2000", "account_name": "Accounts Payable"},
+    ]
+    result = check_sensitive_accounts(lines)
+    assert result.has_sensitive_account is False
+    assert result.requires_human_review is False
+    assert len(result.sensitive_lines) == 0
+    assert len(result.risk_flags) == 0
+
+
+def test_check_sensitive_accounts_bank_account():
+    lines = [
+        {"account_code": "5100", "account_name": "Office Supplies Expense"},
+        {"account_code": "1010", "account_name": "Bank Account"},
+    ]
+    result = check_sensitive_accounts(lines)
+    assert result.has_sensitive_account is True
+    assert result.requires_human_review is True
+    assert len(result.sensitive_lines) == 1
+    assert result.sensitive_lines[0]["account_code"] == "1010"
+    assert "uses_sensitive_account" in result.risk_flags
+    assert "cash_bank_account_used" in result.risk_flags
+
+
+def test_check_sensitive_accounts_suspense_account():
+    lines = [
+        {"account_code": "9999", "account_name": "Suspense Account"},
+        {"account_code": "1000", "account_name": "Cash Account"},
+    ]
+    result = check_sensitive_accounts(lines)
+    assert result.has_sensitive_account is True
+    assert result.requires_human_review is True
+    assert len(result.sensitive_lines) == 2
+    assert "suspense_account_used" in result.risk_flags
+    assert "cash_bank_account_used" in result.risk_flags
+
+
+def test_check_sensitive_accounts_custom_coa():
+    lines = [
+        {"account_code": "6000", "account_name": "Owner Drawings"},
+        {"account_code": "2000", "account_name": "Accounts Payable"},
+    ]
+    coa = [
+        {"account_code": "6000", "account_name": "Owner Drawings", "is_sensitive": True}
+    ]
+    result = check_sensitive_accounts(lines, chart_of_accounts=coa)
+    assert result.has_sensitive_account is True
+    assert result.requires_human_review is True
+    assert result.sensitive_lines[0]["account_code"] == "6000"
