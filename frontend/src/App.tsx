@@ -9,7 +9,8 @@ function App() {
           Agentic AI Accounting Automation
         </h1>
         <p className="text-slate-400 text-base leading-relaxed">
-          Intelligent bookkeeping pipeline powered by LangGraph, deterministic accounting guardrails, and human-in-the-loop review.
+          Intelligent bookkeeping pipeline powered by LangGraph, deterministic accounting
+          guardrails, and human-in-the-loop review.
         </p>
         <div className="pt-4 flex items-center justify-center gap-4">
           <a

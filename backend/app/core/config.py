@@ -1,5 +1,3 @@
-import os
-from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,14 +16,14 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "reconai"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    DATABASE_URL: Optional[str] = None
+    DATABASE_URL: str | None = None
 
     # LLM Provider API Keys
-    OPENAI_API_KEY: Optional[str] = None
-    GEMINI_API_KEY: Optional[str] = None
+    OPENAI_API_KEY: str | None = None
+    GEMINI_API_KEY: str | None = None
 
     # CORS Origins
-    CORS_ORIGINS: List[str] = [
+    CORS_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
