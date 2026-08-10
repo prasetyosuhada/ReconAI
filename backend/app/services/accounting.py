@@ -5,7 +5,9 @@ and ledger posting guardrails.
 """
 
 import logging
+import re
 from collections.abc import Sequence
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -48,6 +50,29 @@ class SensitiveAccountCheckResult(BaseModel):
     )
 
 
+class ExactMatchResult(BaseModel):
+    """Structured result returned by exact reconciliation matching."""
+
+    is_exact_match: bool = Field(
+        ..., description="True if a single deterministic exact match is found"
+    )
+    confidence_score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Match confidence score (1.00 for exact match)",
+    )
+    matched_entry_id: str | None = Field(
+        default=None, description="ID of the exact matched journal entry if found"
+    )
+    match_details: dict[str, Any] | None = Field(
+        default=None, description="Metadata details of the exact match"
+    )
+    evaluated_candidates: list[dict[str, Any]] = Field(
+        default_factory=list, description="List of evaluated candidate matches"
+    )
+
+
 def _to_decimal(val: Any) -> Decimal:
     """Helper to convert float/int/str/Decimal safely to Decimal (2 decimals)."""
     if val is None:
@@ -55,6 +80,35 @@ def _to_decimal(val: Any) -> Decimal:
     if isinstance(val, Decimal):
         return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _normalize_string(s: str | None) -> str:
+    """Normalize string by converting to lowercase and stripping special chars."""
+    if not s:
+        return ""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _vendor_strings_match(s1: str | None, s2: str | None) -> bool:
+    """Check if two vendor/description strings match using normalized token overlap."""
+    if not s1 or not s2:
+        return False
+    norm1 = _normalize_string(s1)
+    norm2 = _normalize_string(s2)
+    if not norm1 or not norm2:
+        return False
+
+    if norm1 in norm2 or norm2 in norm1:
+        return True
+
+    words1 = {w for w in re.findall(r"[a-z0-9]+", s1.lower()) if len(w) >= 3}
+    words2 = {w for w in re.findall(r"[a-z0-9]+", s2.lower()) if len(w) >= 3}
+
+    if not words1 or not words2:
+        return False
+
+    common = words1.intersection(words2)
+    return len(common) > 0
 
 
 def validate_double_entry(
@@ -226,4 +280,111 @@ def check_sensitive_accounts(
         requires_human_review=has_sensitive,
         sensitive_lines=sensitive_lines,
         risk_flags=sorted(list(risk_flags)),
+    )
+
+
+def find_exact_reconciliation_matches(
+    bank_transaction: Any,
+    candidate_journal_entries: Sequence[Any],
+    date_window_days: int = 3,
+) -> ExactMatchResult:
+    """Perform deterministic exact matching between bank tx and candidate entries.
+
+    Matching Rules for Exact Match (Confidence = 1.00):
+    1. Exact Amount Match: abs(bank_amount) == journal_entry_amount (diff < 0.01).
+    2. Date Proximity: abs((tx_date - entry_date).days) <= date_window_days (default 3).
+    3. Vendor / Description Match: Token overlap match for vendor/description strings.
+
+    Args:
+        bank_transaction: Dict or object with amount, transaction_date, description.
+        candidate_journal_entries: Sequence of candidate journal entry dicts/objects.
+        date_window_days: Max allowed date diff in days for exact match (default 3).
+
+    Returns:
+        ExactMatchResult with high-confidence match details.
+    """
+
+    def parse_date(d: Any) -> date | None:
+        if isinstance(d, date):
+            return d
+        if isinstance(d, datetime):
+            return d.date()
+        if isinstance(d, str):
+            try:
+                return datetime.strptime(d[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+        return None
+
+    if isinstance(bank_transaction, dict):
+        bank_amount = abs(float(bank_transaction.get("amount", 0.0)))
+        tx_date = parse_date(bank_transaction.get("transaction_date"))
+        tx_desc = bank_transaction.get("description", "")
+    else:
+        bank_amount = abs(float(getattr(bank_transaction, "amount", 0.0)))
+        tx_date = parse_date(getattr(bank_transaction, "transaction_date", None))
+        tx_desc = getattr(bank_transaction, "description", "")
+
+    evaluated: list[dict[str, Any]] = []
+    exact_matches: list[dict[str, Any]] = []
+
+    for entry in candidate_journal_entries or []:
+        if isinstance(entry, dict):
+            entry_id = str(entry.get("id", ""))
+            entry_date = parse_date(entry.get("entry_date"))
+            entry_desc = entry.get("description", "")
+            debit = float(entry.get("total_debit", 0.0))
+            credit = float(entry.get("total_credit", 0.0))
+            entry_amt = max(debit, credit)
+        else:
+            entry_id = str(getattr(entry, "id", ""))
+            entry_date = parse_date(getattr(entry, "entry_date", None))
+            entry_desc = getattr(entry, "description", "")
+            debit = float(getattr(entry, "total_debit", 0.0))
+            credit = float(getattr(entry, "total_credit", 0.0))
+            entry_amt = max(debit, credit)
+
+        amount_diff = abs(bank_amount - entry_amt)
+        amount_matched = amount_diff < 0.01
+
+        days_diff = None
+        date_matched = False
+        if tx_date and entry_date:
+            days_diff = abs((tx_date - entry_date).days)
+            date_matched = days_diff <= date_window_days
+
+        vendor_matched = _vendor_strings_match(tx_desc, entry_desc)
+
+        is_exact = amount_matched and date_matched and vendor_matched
+
+        candidate_eval = {
+            "entry_id": entry_id,
+            "amount_matched": amount_matched,
+            "amount_diff": round(amount_diff, 2),
+            "date_matched": date_matched,
+            "days_diff": days_diff,
+            "vendor_matched": vendor_matched,
+            "is_exact_match": is_exact,
+        }
+        evaluated.append(candidate_eval)
+
+        if is_exact:
+            exact_matches.append(candidate_eval)
+
+    if len(exact_matches) == 1:
+        match = exact_matches[0]
+        return ExactMatchResult(
+            is_exact_match=True,
+            confidence_score=1.00,
+            matched_entry_id=match["entry_id"],
+            match_details=match,
+            evaluated_candidates=evaluated,
+        )
+
+    return ExactMatchResult(
+        is_exact_match=False,
+        confidence_score=0.00,
+        matched_entry_id=None,
+        match_details=None,
+        evaluated_candidates=evaluated,
     )

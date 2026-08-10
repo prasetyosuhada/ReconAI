@@ -1,6 +1,7 @@
 from app.agents.schemas import ProposedJournalLine
 from app.services.accounting import (
     check_sensitive_accounts,
+    find_exact_reconciliation_matches,
     validate_double_entry,
 )
 
@@ -134,3 +135,74 @@ def test_check_sensitive_accounts_custom_coa():
     assert result.has_sensitive_account is True
     assert result.requires_human_review is True
     assert result.sensitive_lines[0]["account_code"] == "6000"
+
+
+def test_find_exact_reconciliation_matches_success():
+    bank_tx = {
+        "amount": -111000.0,
+        "transaction_date": "2026-08-05",
+        "description": "TOKO GRAMEDIA JAKARTA",
+    }
+    candidates = [
+        {
+            "id": "je-101",
+            "entry_date": "2026-08-03",  # 2 days diff (<= 3 days)
+            "description": "Toko Gramedia Stationary",
+            "total_debit": 111000.0,
+        },
+        {
+            "id": "je-102",
+            "entry_date": "2026-08-05",
+            "description": "Indomaret Snacks",
+            "total_debit": 50000.0,
+        },
+    ]
+
+    result = find_exact_reconciliation_matches(bank_tx, candidates)
+    assert result.is_exact_match is True
+    assert result.confidence_score == 1.00
+    assert result.matched_entry_id == "je-101"
+    assert result.match_details["amount_matched"] is True
+    assert result.match_details["date_matched"] is True
+    assert result.match_details["vendor_matched"] is True
+
+
+def test_find_exact_reconciliation_matches_date_out_of_window():
+    bank_tx = {
+        "amount": -111000.0,
+        "transaction_date": "2026-08-15",
+        "description": "TOKO GRAMEDIA JAKARTA",
+    }
+    candidates = [
+        {
+            "id": "je-101",
+            "entry_date": "2026-08-01",  # 14 days diff (> 3 days)
+            "description": "Toko Gramedia Stationary",
+            "total_debit": 111000.0,
+        }
+    ]
+
+    result = find_exact_reconciliation_matches(bank_tx, candidates)
+    assert result.is_exact_match is False
+    assert result.confidence_score == 0.00
+    assert result.matched_entry_id is None
+
+
+def test_find_exact_reconciliation_matches_amount_mismatch():
+    bank_tx = {
+        "amount": -120000.0,
+        "transaction_date": "2026-08-05",
+        "description": "TOKO GRAMEDIA JAKARTA",
+    }
+    candidates = [
+        {
+            "id": "je-101",
+            "entry_date": "2026-08-05",
+            "description": "Toko Gramedia Stationary",
+            "total_debit": 111000.0,
+        }
+    ]
+
+    result = find_exact_reconciliation_matches(bank_tx, candidates)
+    assert result.is_exact_match is False
+    assert result.confidence_score == 0.00
