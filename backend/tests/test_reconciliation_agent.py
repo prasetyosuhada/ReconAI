@@ -116,7 +116,8 @@ def test_reconciliation_agent_competing_matches_heuristic(mock_get_llm):
         ],
     )
 
-    # Multiple candidates >= 0.85 -> Heuristic must force status to needs_review & possible_match_review_required
+    # Multiple candidates >= 0.85 -> Heuristic must force status
+    # to needs_review & possible_match_review_required
     assert response.status == "needs_review"
     assert response.result.recommended_status == "possible_match_review_required"
     assert any("Multiple competing candidate matches" in w for w in response.warnings)
