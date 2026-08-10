@@ -75,6 +75,11 @@ class BookkeepingState(TypedDict, total=False):
     """State schema for Bookkeeping Agent & Workflow."""
 
     document_id: str | None
+    original_filename: str
+    mime_type: str
+    stored_file_path: str
+    demo_currency: str
+    raw_text: str | None
     extraction_id: str | None
     vendor_name: str | None
     transaction_date: str | None
