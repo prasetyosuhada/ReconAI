@@ -1,7 +1,18 @@
+from unittest.mock import MagicMock, patch
+
 from app.agents.orchestrator import (
+    document_processing_graph,
+    reconciliation_graph,
     route_after_bookkeeping,
     route_after_extraction,
     route_after_reconciliation,
+)
+from app.agents.schemas import (
+    BookkeepingResponse,
+    BookkeepingResult,
+    DocumentExtractionResult,
+    DocumentIntakeResponse,
+    ProposedJournalLine,
 )
 
 
@@ -108,3 +119,103 @@ def test_route_after_reconciliation_review_required():
         }
     )
     assert next_step == "reconciliation_review_required"
+
+
+@patch("app.agents.document_intake.get_llm")
+@patch("app.agents.bookkeeping.get_llm")
+def test_document_processing_graph_end_to_end_success(
+    mock_bookkeeping_llm, mock_intake_llm
+):
+    # Setup Document Intake Agent mock response
+    mock_intake_base = MagicMock()
+    mock_intake_struct = MagicMock()
+    mock_intake_struct.invoke.return_value = DocumentIntakeResponse(
+        agent_name="document_intake_agent",
+        status="completed",
+        confidence_score=0.95,
+        rationale="High quality extraction",
+        warnings=[],
+        result=DocumentExtractionResult(
+            document_type="invoice",
+            vendor_name="PT Media Utama",
+            transaction_date="2026-08-01",
+            currency="IDR",
+            subtotal_amount=500000.0,
+            tax_amount=55000.0,
+            total_amount=555000.0,
+            line_items=[],
+        ),
+    )
+    mock_intake_base.with_structured_output.return_value = mock_intake_struct
+    mock_intake_llm.return_value = mock_intake_base
+
+    # Setup Bookkeeping Agent mock response (non-sensitive account)
+    mock_bk_base = MagicMock()
+    mock_bk_struct = MagicMock()
+    mock_bk_struct.invoke.return_value = BookkeepingResponse(
+        agent_name="bookkeeping_agent",
+        status="completed",
+        confidence_score=0.90,
+        rationale="Office supplies classification",
+        warnings=[],
+        result=BookkeepingResult(
+            entry_date="2026-08-01",
+            description="Purchase from PT Media Utama",
+            journal_lines=[
+                ProposedJournalLine(
+                    account_code="5100",
+                    account_name="Office Supplies Expense",
+                    debit_amount=555000.0,
+                    credit_amount=0.0,
+                ),
+                ProposedJournalLine(
+                    account_code="2000",
+                    account_name="Accounts Payable",
+                    debit_amount=0.0,
+                    credit_amount=555000.0,
+                ),
+            ],
+            is_balanced=True,
+            uses_sensitive_account=False,
+            risk_flags=[],
+        ),
+    )
+    mock_bk_base.with_structured_output.return_value = mock_bk_struct
+    mock_bookkeeping_llm.return_value = mock_bk_base
+
+    # Invoke compiled LangGraph DAG
+    initial_state = {
+        "raw_text": "PT Media Utama Invoice Total 555000",
+        "original_filename": "invoice_media.pdf",
+        "chart_of_accounts": [
+            {
+                "account_code": "5100",
+                "account_name": "Office Supplies",
+                "is_sensitive": False,
+            },
+            {
+                "account_code": "2000",
+                "account_name": "Accounts Payable",
+                "is_sensitive": False,
+            },
+        ],
+    }
+
+    final_state = document_processing_graph.invoke(initial_state)
+
+    assert final_state["vendor_name"] == "PT Media Utama"
+    assert final_state["total_amount"] == 555000.0
+    assert final_state["status"] == "ready_to_post"
+    assert final_state["needs_review"] is False
+
+
+def test_reconciliation_graph_end_to_end_unmatched():
+    initial_state = {
+        "bank_transaction": {"id": "tx-100", "amount": 250000.0},
+        "candidate_journal_entries": [],
+    }
+
+    final_state = reconciliation_graph.invoke(initial_state)
+
+    assert final_state["needs_review"] is True
+    assert final_state["status"] == "unmatched_review_required"

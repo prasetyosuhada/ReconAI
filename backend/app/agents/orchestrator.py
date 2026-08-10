@@ -6,7 +6,9 @@ to enforce confidence thresholds (confidence < 0.85 -> needs_review) and risk ru
 """
 
 import logging
-from typing import Literal
+from typing import Any, Literal
+
+from langgraph.graph import END, START, StateGraph
 
 from app.agents.bookkeeping import run_bookkeeping_agent
 from app.agents.document_intake import run_document_intake_agent
@@ -279,3 +281,95 @@ def reconciliation_node(state: ReconciliationState) -> ReconciliationState:
         "status": result.recommended_status,
         "needs_review": next_step == "reconciliation_review_required",
     }
+
+
+def review_router_node(state: dict[str, Any]) -> dict[str, Any]:
+    """LangGraph node capturing human review queue payloads when routing to review."""
+    logger.info("Executing review_router_node - Routing to Human Review Queue...")
+    warnings = list(state.get("warnings", []))
+    if "Routed to human review queue for manual verification." not in warnings:
+        warnings.append("Routed to human review queue for manual verification.")
+
+    return {
+        **state,
+        "needs_review": True,
+        "warnings": warnings,
+    }
+
+
+# ==========================================
+# 3. LangGraph StateGraph DAG Builders
+# ==========================================
+
+
+def build_document_processing_graph() -> Any:
+    """Build and compile the Document Intake -> Bookkeeping LangGraph workflow DAG."""
+    builder = StateGraph(BookkeepingState)
+
+    # 1. Add nodes
+    builder.add_node("document_intake", document_intake_node)
+    builder.add_node("bookkeeping", bookkeeping_node)
+    builder.add_node("review_router", review_router_node)
+
+    # 2. Set entry point
+    builder.add_edge(START, "document_intake")
+
+    # 3. Add conditional edges after extraction
+    builder.add_conditional_edges(
+        "document_intake",
+        route_after_extraction,
+        {
+            "proceed_to_bookkeeping": "bookkeeping",
+            "extraction_review_required": "review_router",
+            "failed": END,
+        },
+    )
+
+    # 4. Add conditional edges after bookkeeping
+    builder.add_conditional_edges(
+        "bookkeeping",
+        route_after_bookkeeping,
+        {
+            "ready_to_post": END,
+            "bookkeeping_review_required": "review_router",
+            "failed": END,
+        },
+    )
+
+    # 5. Review router leads to END
+    builder.add_edge("review_router", END)
+
+    return builder.compile()
+
+
+def build_reconciliation_graph() -> Any:
+    """Build and compile the Bank Reconciliation LangGraph workflow DAG."""
+    builder = StateGraph(ReconciliationState)
+
+    # 1. Add nodes
+    builder.add_node("reconciliation", reconciliation_node)
+    builder.add_node("review_router", review_router_node)
+
+    # 2. Set entry point
+    builder.add_edge(START, "reconciliation")
+
+    # 3. Add conditional edges after reconciliation
+    builder.add_conditional_edges(
+        "reconciliation",
+        route_after_reconciliation,
+        {
+            "matched": END,
+            "reconciliation_review_required": "review_router",
+            "failed": END,
+        },
+    )
+
+    # 4. Review router leads to END
+    builder.add_edge("review_router", END)
+
+    return builder.compile()
+
+
+# Global compiled graphs instance for reuse across FastAPI routes
+document_processing_graph = build_document_processing_graph()
+reconciliation_graph = build_reconciliation_graph()
