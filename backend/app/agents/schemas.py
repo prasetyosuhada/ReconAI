@@ -112,7 +112,7 @@ class BookkeepingResult(BaseModel):
     )
     description: str = Field(..., description="Header journal entry description")
     journal_lines: list[ProposedJournalLine] = Field(
-        ..., min_items=2, description="Double-entry lines (minimum 2 lines)"
+        ..., min_length=2, description="Double-entry lines (minimum 2 lines)"
     )
     is_balanced: bool = Field(
         ..., description="Whether sum of debits equals sum of credits"
