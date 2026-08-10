@@ -60,6 +60,7 @@ ReconAI is an agentic AI platform that automates core bookkeeping workflows — 
 
 - Docker & Docker Compose
 - Python 3.11+
+- [`uv`](https://github.com/astral-sh/uv) (Fast Python package & environment manager)
 - Node.js 18+
 
 ### 1. Clone & Environment Setup
@@ -83,16 +84,16 @@ docker compose up -d
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+
+# Install dependencies & create virtualenv automatically
+uv sync
 
 # Run migrations & seed data
-alembic upgrade head
-python seed.py
+uv run alembic upgrade head
+uv run python seed.py
 
 # Start FastAPI server
-uvicorn main:app --reload --port 8000
+uv run uvicorn main:app --reload --port 8000
 ```
 
 ### 4. Frontend Setup
