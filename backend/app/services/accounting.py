@@ -7,7 +7,7 @@ and ledger posting guardrails.
 import logging
 import re
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -70,6 +70,22 @@ class ExactMatchResult(BaseModel):
     )
     evaluated_candidates: list[dict[str, Any]] = Field(
         default_factory=list, description="List of evaluated candidate matches"
+    )
+
+
+class PostToLedgerResult(BaseModel):
+    """Structured result returned by post_journal_entry_to_ledger."""
+
+    success: bool = Field(
+        ..., description="True if journal entry was successfully posted to ledger"
+    )
+    journal_entry_id: str = Field(..., description="ID of the journal entry")
+    status: str = Field(..., description="Updated status of the journal entry")
+    posted_at: str | None = Field(
+        default=None, description="ISO timestamp when the entry was posted"
+    )
+    errors: list[str] = Field(
+        default_factory=list, description="List of errors if posting failed"
     )
 
 
@@ -387,4 +403,114 @@ def find_exact_reconciliation_matches(
         matched_entry_id=None,
         match_details=None,
         evaluated_candidates=evaluated,
+    )
+
+
+def post_journal_entry_to_ledger(
+    journal_entry: Any,
+    db_session: Any | None = None,
+    posted_by: str = "system",
+) -> PostToLedgerResult:
+    """Post a draft or approved journal entry to the general ledger deterministically.
+
+    Guardrail Checks:
+    1. Status Check: Entry status MUST NOT be already 'posted' or 'voided'/'rejected'.
+    2. Double-Entry Balance Check: Must pass `validate_double_entry(lines)`.
+       If unbalanced or invalid, posting MUST fail and reject!
+
+    Actions on Success:
+    - Update `status = "posted"`.
+    - Set `posted_at = datetime.now(timezone.utc)`.
+    - If db_session provided: commit to database.
+
+    Args:
+        journal_entry: Dict or SQLAlchemy JournalEntry ORM model.
+        db_session: Optional SQLAlchemy session for persistence.
+        posted_by: Optional user/system identifier.
+
+    Returns:
+        PostToLedgerResult detailing posting success, timestamp, and errors.
+    """
+    errors: list[str] = []
+
+    if isinstance(journal_entry, dict):
+        entry_id = str(journal_entry.get("id", "unknown"))
+        current_status = str(journal_entry.get("status", "draft"))
+        lines = journal_entry.get("lines", [])
+    else:
+        entry_id = str(getattr(journal_entry, "id", "unknown"))
+        current_status = str(getattr(journal_entry, "status", "draft"))
+        lines = getattr(journal_entry, "lines", [])
+
+    if current_status == "posted":
+        errors.append(f"Journal entry [{entry_id}] is already posted to ledger.")
+        return PostToLedgerResult(
+            success=False,
+            journal_entry_id=entry_id,
+            status=current_status,
+            errors=errors,
+        )
+
+    if current_status in ("voided", "rejected"):
+        errors.append(f"Cannot post a {current_status} journal entry [{entry_id}].")
+        return PostToLedgerResult(
+            success=False,
+            journal_entry_id=entry_id,
+            status=current_status,
+            errors=errors,
+        )
+
+    validation_res = validate_double_entry(lines)
+    if not validation_res.is_valid:
+        errors.append(
+            f"Posting rejected for journal [{entry_id}]: "
+            f"Double-entry validation failed."
+        )
+        errors.extend(validation_res.errors)
+        return PostToLedgerResult(
+            success=False,
+            journal_entry_id=entry_id,
+            status=current_status,
+            errors=errors,
+        )
+
+    now_utc = datetime.now(UTC)
+    posted_at_iso = now_utc.isoformat()
+
+    if isinstance(journal_entry, dict):
+        journal_entry["status"] = "posted"
+        journal_entry["posted_at"] = posted_at_iso
+    else:
+        journal_entry.status = "posted"
+        journal_entry.posted_at = now_utc
+
+    if db_session:
+        try:
+            db_session.add(journal_entry)
+            db_session.commit()
+            if hasattr(db_session, "refresh"):
+                db_session.refresh(journal_entry)
+        except Exception as e:
+            logger.error("DB Error posting journal entry %s: %s", entry_id, str(e))
+            if hasattr(db_session, "rollback"):
+                db_session.rollback()
+            return PostToLedgerResult(
+                success=False,
+                journal_entry_id=entry_id,
+                status=current_status,
+                errors=[f"Database commit error: {str(e)}"],
+            )
+
+    logger.info(
+        "Successfully posted journal entry %s to ledger at %s",
+        entry_id,
+        posted_at_iso,
+    )
+
+    return PostToLedgerResult(
+        success=True,
+        journal_entry_id=entry_id,
+        status="posted",
+        posted_at=posted_at_iso,
+        errors=[],
     )

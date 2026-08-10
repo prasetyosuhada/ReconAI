@@ -2,6 +2,7 @@ from app.agents.schemas import ProposedJournalLine
 from app.services.accounting import (
     check_sensitive_accounts,
     find_exact_reconciliation_matches,
+    post_journal_entry_to_ledger,
     validate_double_entry,
 )
 
@@ -206,3 +207,58 @@ def test_find_exact_reconciliation_matches_amount_mismatch():
     result = find_exact_reconciliation_matches(bank_tx, candidates)
     assert result.is_exact_match is False
     assert result.confidence_score == 0.00
+
+
+def test_post_journal_entry_to_ledger_success():
+    entry = {
+        "id": "je-201",
+        "status": "draft",
+        "lines": [
+            {"debit_amount": 75000.0, "credit_amount": 0.0},
+            {"debit_amount": 0.0, "credit_amount": 75000.0},
+        ],
+    }
+    result = post_journal_entry_to_ledger(entry)
+    assert result.success is True
+    assert result.status == "posted"
+    assert result.posted_at is not None
+    assert entry["status"] == "posted"
+
+
+def test_post_journal_entry_to_ledger_already_posted():
+    entry = {
+        "id": "je-202",
+        "status": "posted",
+        "lines": [
+            {"debit_amount": 75000.0, "credit_amount": 0.0},
+            {"debit_amount": 0.0, "credit_amount": 75000.0},
+        ],
+    }
+    result = post_journal_entry_to_ledger(entry)
+    assert result.success is False
+    assert any("already posted" in err for err in result.errors)
+
+
+def test_post_journal_entry_to_ledger_voided():
+    entry = {
+        "id": "je-203",
+        "status": "voided",
+        "lines": [],
+    }
+    result = post_journal_entry_to_ledger(entry)
+    assert result.success is False
+    assert any("Cannot post a voided" in err for err in result.errors)
+
+
+def test_post_journal_entry_to_ledger_unbalanced_rejection():
+    entry = {
+        "id": "je-204",
+        "status": "draft",
+        "lines": [
+            {"debit_amount": 100000.0, "credit_amount": 0.0},
+            {"debit_amount": 0.0, "credit_amount": 50000.0},  # Unbalanced
+        ],
+    }
+    result = post_journal_entry_to_ledger(entry)
+    assert result.success is False
+    assert any("validation failed" in err.lower() for err in result.errors)
