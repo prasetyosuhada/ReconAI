@@ -62,6 +62,61 @@ export interface ReviewItemListResponse {
   offset: number
 }
 
+// Ledger & Trial Balance Interfaces
+export interface JournalLineResponse {
+  id: string
+  line_number: number
+  account_id: string
+  account_code: string
+  account_name: string
+  debit_amount: number
+  credit_amount: number
+  description?: string
+}
+
+export interface JournalEntryResponse {
+  id: string
+  document_id?: string
+  extraction_id?: string
+  entry_date: string
+  description: string
+  status: string // draft, review_required, approved, posted, rejected
+  agent_name?: string
+  confidence_score?: number
+  rationale?: string
+  risk_flags?: string[]
+  total_debit: number
+  total_credit: number
+  posted_at?: string
+  created_at: string
+  updated_at?: string
+  lines?: JournalLineResponse[]
+}
+
+export interface JournalEntryListResponse {
+  items: JournalEntryResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface TrialBalanceAccountBalance {
+  account_code: string
+  account_name: string
+  account_type: string
+  debit_balance: number
+  credit_balance: number
+}
+
+export interface TrialBalanceResponse {
+  as_of_date: string
+  status: string // balanced, unbalanced
+  total_debits: number
+  total_credits: number
+  difference: number
+  accounts: TrialBalanceAccountBalance[]
+}
+
 export async function uploadDocument(file: File): Promise<DocumentUploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
@@ -183,6 +238,53 @@ export async function rejectReviewItem(
   if (!response.ok) {
     const err = await response.json().catch(() => ({}))
     throw new Error(err.detail || 'Failed to reject review item')
+  }
+
+  return response.json()
+}
+
+// General Ledger API
+export async function fetchJournalEntries(params?: {
+  status?: string
+  document_id?: string
+  limit?: number
+  offset?: number
+}): Promise<JournalEntryListResponse> {
+  const query = new URLSearchParams()
+  if (params?.status) query.append('status', params.status)
+  if (params?.document_id) query.append('document_id', params.document_id)
+  if (params?.limit) query.append('limit', params.limit.toString())
+  if (params?.offset) query.append('offset', params.offset.toString())
+
+  const url = `${API_BASE_URL}/ledger${query.toString() ? `?${query.toString()}` : ''}`
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch journal entries')
+  }
+
+  return response.json()
+}
+
+export async function fetchJournalEntryDetail(
+  journalEntryId: string
+): Promise<JournalEntryResponse> {
+  const response = await fetch(`${API_BASE_URL}/ledger/journal-entries/${journalEntryId}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch journal entry ${journalEntryId}`)
+  }
+  return response.json()
+}
+
+export async function fetchTrialBalance(asOfDate?: string): Promise<TrialBalanceResponse> {
+  const query = new URLSearchParams()
+  if (asOfDate) query.append('as_of_date', asOfDate)
+
+  const url = `${API_BASE_URL}/ledger/trial-balance${query.toString() ? `?${query.toString()}` : ''}`
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch trial balance')
   }
 
   return response.json()

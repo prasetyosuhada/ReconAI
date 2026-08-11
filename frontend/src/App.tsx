@@ -3,9 +3,9 @@ import { MainLayout } from './components/layout/MainLayout'
 import type { NavTab } from './components/layout/Sidebar'
 import { DocumentIntakeView } from './components/documents/DocumentIntakeView'
 import { ReviewQueueView } from './components/review/ReviewQueueView'
+import { GeneralLedgerView } from './components/ledger/GeneralLedgerView'
 import {
   ArrowLeftRight,
-  BookOpen,
   CheckCircle2,
   FileText,
   History,
@@ -88,15 +88,7 @@ function App() {
         />
       )}
 
-      {activeTab === 'ledger' && (
-        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
-          <BookOpen className="w-12 h-12 text-indigo-400 mx-auto" />
-          <h3 className="text-xl font-bold text-white">General Ledger & Trial Balance</h3>
-          <p className="text-slate-400 text-sm max-w-md mx-auto">
-            View posted journal entries and real-time trial balance reports.
-          </p>
-        </div>
-      )}
+      {activeTab === 'ledger' && <GeneralLedgerView />}
 
       {activeTab === 'reconciliation' && (
         <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
