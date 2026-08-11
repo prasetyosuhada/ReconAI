@@ -1,0 +1,183 @@
+"""FastAPI Documents API Router (Upload & Management)."""
+
+import logging
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.db.session import get_db
+from app.models.audit import AuditEvent
+from app.models.document import Document
+from app.schemas.document import DocumentResponse
+from app.services.document_processing import process_document_background
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/documents", tags=["Documents"])
+
+ALLOWED_MIME_TYPES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+}
+
+UPLOAD_STORAGE_DIR = Path("./storage/uploads")
+
+
+def _get_upload_dir() -> Path:
+    """Ensure upload storage directory exists."""
+    UPLOAD_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    return UPLOAD_STORAGE_DIR
+
+
+@router.post(
+    "/upload",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload document and trigger AI processing workflow",
+)
+@router.post(
+    "",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+    include_in_schema=False,
+)
+async def upload_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    document_type: str = Form("unknown"),
+    db: Session = Depends(get_db),
+) -> DocumentResponse:
+    """Upload invoice/receipt document (PDF/JPEG/PNG) and trigger background intake.
+
+    - Validates file type and size.
+    - Saves file to disk storage.
+    - Saves Document record in database.
+    - Creates `document_uploaded` audit event.
+    - Enqueues LangGraph background processing task.
+    """
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file must have a valid filename.",
+        )
+
+    content_type = file.content_type or ""
+    filename_lower = file.filename.lower()
+    is_valid_type = (
+        content_type in ALLOWED_MIME_TYPES
+        or filename_lower.endswith(".pdf")
+        or filename_lower.endswith((".jpg", ".jpeg", ".png", ".webp"))
+    )
+
+    if not is_valid_type:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type. Allowed: PDF, JPEG, PNG.",
+        )
+
+    file_bytes = await file.read()
+    file_size = len(file_bytes)
+
+    if file_size == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty.",
+        )
+
+    # Save to disk
+    storage_dir = _get_upload_dir()
+    doc_uuid = uuid.uuid4()
+    safe_filename = f"{doc_uuid}_{Path(file.filename).name}"
+    stored_path = storage_dir / safe_filename
+
+    with open(stored_path, "wb") as f:
+        f.write(file_bytes)
+
+    now_utc = datetime.now(UTC)
+    effective_mime = (
+        content_type
+        if content_type in ALLOWED_MIME_TYPES
+        else ("application/pdf" if filename_lower.endswith(".pdf") else "image/jpeg")
+    )
+
+    valid_doc_type = (
+        document_type if document_type in ("invoice", "receipt") else "unknown"
+    )
+
+    # Save Document record to DB
+    doc_record = Document(
+        id=doc_uuid,
+        original_filename=file.filename,
+        stored_file_path=str(stored_path.resolve()),
+        mime_type=effective_mime,
+        file_size_bytes=file_size,
+        document_type=valid_doc_type,
+        status="uploaded",
+        uploaded_at=now_utc,
+    )
+    db.add(doc_record)
+
+    # Record Audit Event
+    audit_record = AuditEvent(
+        event_type="document_uploaded",
+        source_type="document",
+        source_id=doc_uuid,
+        actor_type="human",
+        actor_name="api_user",
+        input_snapshot={
+            "original_filename": file.filename,
+            "file_size_bytes": file_size,
+            "document_type": document_type,
+            "mime_type": effective_mime,
+        },
+        output_snapshot={
+            "status": "uploaded",
+            "stored_file_path": str(stored_path.resolve()),
+        },
+    )
+    db.add(audit_record)
+    db.commit()
+    db.refresh(doc_record)
+
+    # Add background processing task
+    background_tasks.add_task(
+        process_document_background,
+        document_id=str(doc_uuid),
+        stored_file_path=str(stored_path.resolve()),
+        mime_type=effective_mime,
+        original_filename=file.filename,
+        document_type=document_type,
+    )
+
+    self_link = f"{settings.API_V1_STR}/documents/{doc_uuid}"
+    audit_link = (
+        f"{settings.API_V1_STR}/audit-events?source_type=document&source_id={doc_uuid}"
+    )
+
+    return DocumentResponse(
+        id=str(doc_record.id),
+        original_filename=doc_record.original_filename,
+        document_type=doc_record.document_type,
+        status="extracting",
+        uploaded_at=doc_record.uploaded_at,
+        links={
+            "self": self_link,
+            "audit_events": audit_link,
+        },
+    )

@@ -1,4 +1,5 @@
 import pytest
+
 from app.agents.schemas import ProposedJournalLine
 from app.services.accounting import (
     UnbalancedJournalEntryError,
