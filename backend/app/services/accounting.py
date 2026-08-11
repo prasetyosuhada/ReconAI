@@ -6,6 +6,7 @@ and ledger posting guardrails.
 
 import logging
 import re
+import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -631,6 +632,7 @@ def save_journal_entry_safely(
     created_id: str | None = None
 
     if db_session:
+        from app.models.coa import ChartOfAccount
         from app.models.journal import JournalEntry, JournalEntryLine
 
         new_entry = JournalEntry(
@@ -648,21 +650,42 @@ def save_journal_entry_safely(
         for line_idx, line in enumerate(lines, start=1):
             if isinstance(line, dict):
                 ac_code = str(line.get("account_code", ""))
-                ac_name = str(line.get("account_name", ""))
+                ac_name = str(line.get("account_name", "Unassigned Account"))
                 deb = float(line.get("debit_amount", 0.0))
                 cred = float(line.get("credit_amount", 0.0))
                 l_desc = line.get("description")
             else:
                 ac_code = str(getattr(line, "account_code", ""))
-                ac_name = str(getattr(line, "account_name", ""))
+                ac_name = str(getattr(line, "account_name", "Unassigned Account"))
                 deb = float(getattr(line, "debit_amount", 0.0))
                 cred = float(getattr(line, "credit_amount", 0.0))
                 l_desc = getattr(line, "description", None)
 
+            # Lookup or auto-create ChartOfAccount record for FK
+            coa_record = None
+            if ac_code:
+                coa_record = (
+                    db_session.query(ChartOfAccount)
+                    .filter(ChartOfAccount.account_code == ac_code)
+                    .first()
+                )
+
+            if not coa_record:
+                is_sens = ac_code in ("1000", "1010", "2100", "3000", "9999")
+                coa_record = ChartOfAccount(
+                    id=uuid.uuid4(),
+                    account_code=ac_code or f"AUTO_{uuid.uuid4().hex[:6]}",
+                    account_name=ac_name or "Auto Generated Account",
+                    account_type="expense" if deb > 0 else "liability",
+                    normal_balance="debit" if deb > 0 else "credit",
+                    is_sensitive=is_sens,
+                )
+                db_session.add(coa_record)
+                db_session.flush()
+
             orm_line = JournalEntryLine(
                 line_number=line_idx,
-                account_code=ac_code,
-                account_name=ac_name,
+                account_id=coa_record.id,
                 debit_amount=deb,
                 credit_amount=cred,
                 description=l_desc,
