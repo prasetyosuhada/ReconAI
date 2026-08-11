@@ -2,17 +2,6 @@ import io
 import uuid
 from unittest.mock import patch
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from app.db.base import Base
-from app.db.session import get_db
-from app.main import app
 from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry
@@ -20,44 +9,8 @@ from app.models.review import ReviewItem
 from app.services.document_processing import process_document_background
 
 
-@compiles(JSONB, "sqlite")
-def compile_jsonb_sqlite(type_, compiler, **kw):
-    return "JSON"
-
-
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-@pytest.fixture(autouse=True)
-def setup_db():
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
-
-
-client = TestClient(app)
-
-
 @patch("app.api.v1.documents.process_document_background")
-def test_upload_document_success_pdf(mock_bg_task):
+def test_upload_document_success_pdf(mock_bg_task, client):
     file_content = b"%PDF-1.4 dummy pdf content for invoice"
     file = ("receipt_001.pdf", io.BytesIO(file_content), "application/pdf")
 
@@ -79,7 +32,7 @@ def test_upload_document_success_pdf(mock_bg_task):
     mock_bg_task.assert_called_once()
 
 
-def test_upload_document_unsupported_type():
+def test_upload_document_unsupported_type(client):
     file_content = b"Plain text file content"
     file = ("notes.txt", io.BytesIO(file_content), "text/plain")
 
@@ -94,7 +47,7 @@ def test_upload_document_unsupported_type():
     assert "Unsupported file type" in data["detail"]
 
 
-def test_upload_document_empty_file():
+def test_upload_document_empty_file(client):
     file_content = b""
     file = ("empty.pdf", io.BytesIO(file_content), "application/pdf")
 
@@ -110,10 +63,10 @@ def test_upload_document_empty_file():
 
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
-def test_process_document_background_success(mock_session_class, mock_graph):
-    # Setup database session override for service test
-    db = TestingSessionLocal()
-    mock_session_class.return_value = db
+def test_process_document_background_success(
+    mock_session_class, mock_graph, db_session
+):
+    mock_session_class.return_value = db_session
 
     doc_id = uuid.uuid4()
     doc = Document(
@@ -125,8 +78,8 @@ def test_process_document_background_success(mock_session_class, mock_graph):
         document_type="invoice",
         status="uploaded",
     )
-    db.add(doc)
-    db.commit()
+    db_session.add(doc)
+    db_session.commit()
 
     mock_graph.invoke.return_value = {
         "document_id": str(doc_id),
@@ -166,7 +119,7 @@ def test_process_document_background_success(mock_session_class, mock_graph):
 
     # Verify Extraction record created
     ext = (
-        db.query(DocumentExtraction)
+        db_session.query(DocumentExtraction)
         .filter(DocumentExtraction.document_id == doc_id)
         .first()
     )
@@ -174,21 +127,26 @@ def test_process_document_background_success(mock_session_class, mock_graph):
     assert ext.vendor_name == "Toko Gramedia"
 
     # Verify Journal Entry created
-    je = db.query(JournalEntry).filter(JournalEntry.document_id == doc_id).first()
+    je = (
+        db_session.query(JournalEntry)
+        .filter(JournalEntry.document_id == doc_id)
+        .first()
+    )
     assert je is not None
     assert len(je.lines) == 2
 
     # Verify Audit Event recorded
-    audit = db.query(AuditEvent).filter(AuditEvent.source_id == doc_id).first()
+    audit = db_session.query(AuditEvent).filter(AuditEvent.source_id == doc_id).first()
     assert audit is not None
     assert audit.event_type == "extraction_completed"
 
 
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
-def test_process_document_background_review_required(mock_session_class, mock_graph):
-    db = TestingSessionLocal()
-    mock_session_class.return_value = db
+def test_process_document_background_review_required(
+    mock_session_class, mock_graph, db_session
+):
+    mock_session_class.return_value = db_session
 
     doc_id = uuid.uuid4()
     doc = Document(
@@ -200,8 +158,8 @@ def test_process_document_background_review_required(mock_session_class, mock_gr
         document_type="invoice",
         status="uploaded",
     )
-    db.add(doc)
-    db.commit()
+    db_session.add(doc)
+    db_session.commit()
 
     mock_graph.invoke.return_value = {
         "document_id": str(doc_id),
@@ -220,7 +178,7 @@ def test_process_document_background_review_required(mock_session_class, mock_gr
     )
 
     # Verify ReviewItem created
-    review = db.query(ReviewItem).filter(ReviewItem.source_id == doc_id).first()
+    review = db_session.query(ReviewItem).filter(ReviewItem.source_id == doc_id).first()
     assert review is not None
     assert review.status == "pending"
     assert review.review_type == "extraction"
