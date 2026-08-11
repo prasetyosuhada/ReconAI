@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { MainLayout } from './components/layout/MainLayout'
 import type { NavTab } from './components/layout/Sidebar'
 import { DocumentIntakeView } from './components/documents/DocumentIntakeView'
+import { ReviewQueueView } from './components/review/ReviewQueueView'
 import {
   ArrowLeftRight,
   BookOpen,
@@ -80,13 +81,11 @@ function App() {
       )}
 
       {activeTab === 'review' && (
-        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
-          <UserCheck className="w-12 h-12 text-amber-400 mx-auto" />
-          <h3 className="text-xl font-bold text-white">Human-in-the-Loop Review</h3>
-          <p className="text-slate-400 text-sm max-w-md mx-auto">
-            Approve, edit, or reject journal entries flagged by accounting guardrails.
-          </p>
-        </div>
+        <ReviewQueueView
+          onInspectItem={(item) => {
+            console.log('Inspect review item:', item)
+          }}
+        />
       )}
 
       {activeTab === 'ledger' && (
