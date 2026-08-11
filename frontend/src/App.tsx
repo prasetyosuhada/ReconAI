@@ -1,28 +1,125 @@
+import { useState } from 'react'
+import { MainLayout } from './components/layout/MainLayout'
+import type { NavTab } from './components/layout/Sidebar'
+import {
+  ArrowLeftRight,
+  BookOpen,
+  CheckCircle2,
+  FileText,
+  History,
+  ShieldCheck,
+  Sparkles,
+  UploadCloud,
+  UserCheck,
+} from 'lucide-react'
+
 function App() {
+  const [activeTab, setActiveTab] = useState<NavTab>('dashboard')
+
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-6">
-      <div className="max-w-2xl text-center space-y-6 bg-slate-800/50 p-8 rounded-2xl border border-slate-700/50 shadow-xl backdrop-blur-sm">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold uppercase tracking-wider">
-          ReconAI Platform
+    <MainLayout activeTab={activeTab} onSelectTab={setActiveTab} pendingReviewCount={3}>
+      {activeTab === 'dashboard' && (
+        <div className="space-y-6">
+          <div className="p-6 rounded-2xl bg-gradient-to-r from-indigo-900/40 via-slate-900 to-slate-900 border border-indigo-500/20 shadow-xl backdrop-blur-sm relative overflow-hidden">
+            <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-gradient-to-l from-indigo-500/10 to-transparent pointer-events-none" />
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold uppercase tracking-wider mb-3">
+              <Sparkles className="w-3.5 h-3.5" /> ReconAI Agent Platform
+            </div>
+            <h2 className="text-3xl font-extrabold text-white">
+              AI-Powered Bookkeeping & Reconciliation
+            </h2>
+            <p className="text-slate-400 text-sm max-w-2xl mt-2 leading-relaxed">
+              Multi-agent accounting automation framework. Autonomous OCR intake, LLM journal entry
+              suggestions with deterministic double-entry guardrails, and human-in-the-loop
+              verification.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <div className="p-5 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-2">
+              <div className="flex items-center justify-between text-slate-400">
+                <span className="text-xs font-medium">Processed Documents</span>
+                <FileText className="w-4 h-4 text-indigo-400" />
+              </div>
+              <div className="text-2xl font-bold text-white">128</div>
+              <p className="text-[11px] text-emerald-400 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" /> 100% Validated
+              </p>
+            </div>
+
+            <div className="p-5 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-2">
+              <div className="flex items-center justify-between text-slate-400">
+                <span className="text-xs font-medium">Human Review Queue</span>
+                <UserCheck className="w-4 h-4 text-amber-400" />
+              </div>
+              <div className="text-2xl font-bold text-white">3 Pending</div>
+              <p className="text-[11px] text-amber-400 font-medium">
+                Low confidence / sensitive accounts
+              </p>
+            </div>
+
+            <div className="p-5 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-2">
+              <div className="flex items-center justify-between text-slate-400">
+                <span className="text-xs font-medium">Trial Balance Status</span>
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              </div>
+              <div className="text-2xl font-bold text-emerald-400">BALANCED</div>
+              <p className="text-[11px] text-slate-400">Debits: 45,200,000 | Credits: 45,200,000</p>
+            </div>
+          </div>
         </div>
-        <h1 className="text-4xl font-bold bg-gradient-to-r from-white via-slate-200 to-indigo-300 bg-clip-text text-transparent">
-          Agentic AI Accounting Automation
-        </h1>
-        <p className="text-slate-400 text-base leading-relaxed">
-          Intelligent bookkeeping pipeline powered by LangGraph, deterministic accounting
-          guardrails, and human-in-the-loop review.
-        </p>
-        <div className="pt-4 flex items-center justify-center gap-4">
-          <a
-            href="/api/v1/health"
-            target="_blank"
-            className="px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm transition-all shadow-lg shadow-indigo-600/20"
-          >
-            Backend Health Status
-          </a>
+      )}
+
+      {activeTab === 'documents' && (
+        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
+          <UploadCloud className="w-12 h-12 text-indigo-400 mx-auto" />
+          <h3 className="text-xl font-bold text-white">Document Intake & OCR</h3>
+          <p className="text-slate-400 text-sm max-w-md mx-auto">
+            Upload PDF/PNG invoices to trigger LangGraph document processing pipeline.
+          </p>
         </div>
-      </div>
-    </div>
+      )}
+
+      {activeTab === 'review' && (
+        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
+          <UserCheck className="w-12 h-12 text-amber-400 mx-auto" />
+          <h3 className="text-xl font-bold text-white">Human-in-the-Loop Review</h3>
+          <p className="text-slate-400 text-sm max-w-md mx-auto">
+            Approve, edit, or reject journal entries flagged by accounting guardrails.
+          </p>
+        </div>
+      )}
+
+      {activeTab === 'ledger' && (
+        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
+          <BookOpen className="w-12 h-12 text-indigo-400 mx-auto" />
+          <h3 className="text-xl font-bold text-white">General Ledger & Trial Balance</h3>
+          <p className="text-slate-400 text-sm max-w-md mx-auto">
+            View posted journal entries and real-time trial balance reports.
+          </p>
+        </div>
+      )}
+
+      {activeTab === 'reconciliation' && (
+        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
+          <ArrowLeftRight className="w-12 h-12 text-emerald-400 mx-auto" />
+          <h3 className="text-xl font-bold text-white">Bank Mutation Reconciliation</h3>
+          <p className="text-slate-400 text-sm max-w-md mx-auto">
+            Match bank statement transactions against posted ledger entries.
+          </p>
+        </div>
+      )}
+
+      {activeTab === 'audit' && (
+        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
+          <History className="w-12 h-12 text-indigo-400 mx-auto" />
+          <h3 className="text-xl font-bold text-white">Audit Log & Traceability</h3>
+          <p className="text-slate-400 text-sm max-w-md mx-auto">
+            Trace document extractions, LLM rationale, and human approval audit history.
+          </p>
+        </div>
+      )}
+    </MainLayout>
   )
 }
 
