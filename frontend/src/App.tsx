@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { MainLayout } from './components/layout/MainLayout'
 import type { NavTab } from './components/layout/Sidebar'
+import { DocumentIntakeView } from './components/documents/DocumentIntakeView'
 import {
   ArrowLeftRight,
   BookOpen,
@@ -9,7 +10,6 @@ import {
   History,
   ShieldCheck,
   Sparkles,
-  UploadCloud,
   UserCheck,
 } from 'lucide-react'
 
@@ -71,13 +71,12 @@ function App() {
       )}
 
       {activeTab === 'documents' && (
-        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
-          <UploadCloud className="w-12 h-12 text-indigo-400 mx-auto" />
-          <h3 className="text-xl font-bold text-white">Document Intake & OCR</h3>
-          <p className="text-slate-400 text-sm max-w-md mx-auto">
-            Upload PDF/PNG invoices to trigger LangGraph document processing pipeline.
-          </p>
-        </div>
+        <DocumentIntakeView
+          onSelectDocument={(docId) => {
+            console.log('Selected document:', docId)
+            setActiveTab('audit')
+          }}
+        />
       )}
 
       {activeTab === 'review' && (
