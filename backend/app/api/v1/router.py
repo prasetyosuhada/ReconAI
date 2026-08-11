@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter
 
+from app.api.v1.audit import audit_log_router
+from app.api.v1.audit import router as audit_events_router
 from app.api.v1.bank import bank_router
 from app.api.v1.bank import router as bank_statements_router
 from app.api.v1.documents import router as documents_router
@@ -18,3 +20,5 @@ api_v1_router.include_router(bank_statements_router)
 api_v1_router.include_router(bank_router)
 api_v1_router.include_router(reconciliation_router)
 api_v1_router.include_router(reconcile_router)
+api_v1_router.include_router(audit_events_router)
+api_v1_router.include_router(audit_log_router)
