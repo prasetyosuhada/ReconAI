@@ -117,6 +117,55 @@ export interface TrialBalanceResponse {
   accounts: TrialBalanceAccountBalance[]
 }
 
+// Bank & Reconciliation Interfaces
+export interface BankTransactionResponse {
+  id: string
+  bank_statement_import_id: string
+  transaction_date: string
+  description: string
+  amount: number
+  currency: string
+  reference_number?: string
+  status: string // imported, matched, unmatched
+  created_at: string
+}
+
+export interface BankTransactionListResponse {
+  items: BankTransactionResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface BankStatementImportResponse {
+  id: string
+  original_filename: string
+  status: string
+  row_count: number
+  imported_at: string
+  links?: Record<string, string>
+}
+
+export interface ReconciliationMatchResponse {
+  id: string
+  bank_transaction_id: string
+  journal_entry_id?: string
+  status: string // proposed, accepted, rejected
+  confidence_score?: number
+  match_rule_type?: string
+  match_explanation?: string
+  matched_at?: string
+  bank_transaction?: BankTransactionResponse
+  journal_entry?: JournalEntryResponse
+}
+
+export interface ReconciliationMatchListResponse {
+  items: ReconciliationMatchResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export async function uploadDocument(file: File): Promise<DocumentUploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
@@ -285,6 +334,70 @@ export async function fetchTrialBalance(asOfDate?: string): Promise<TrialBalance
 
   if (!response.ok) {
     throw new Error('Failed to fetch trial balance')
+  }
+
+  return response.json()
+}
+
+// Bank Statement & Reconciliation APIs
+export async function uploadBankStatementCSV(file: File): Promise<BankStatementImportResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const response = await fetch(`${API_BASE_URL}/bank/upload-mock`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.detail || 'Failed to upload bank statement CSV')
+  }
+
+  return response.json()
+}
+
+export async function fetchBankTransactions(
+  importId: string
+): Promise<BankTransactionListResponse> {
+  const response = await fetch(`${API_BASE_URL}/bank-statements/${importId}/transactions`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch transactions for import ${importId}`)
+  }
+  return response.json()
+}
+
+export async function runReconciliationWorkflow(
+  importId: string
+): Promise<{ bank_statement_import_id: string; status: string; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/reconcile/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bank_statement_import_id: importId }),
+  })
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to run reconciliation workflow')
+  }
+
+  return response.json()
+}
+
+export async function fetchReconciliationMatches(params?: {
+  bank_statement_import_id?: string
+  status?: string
+}): Promise<ReconciliationMatchListResponse> {
+  const query = new URLSearchParams()
+  if (params?.bank_statement_import_id)
+    query.append('bank_statement_import_id', params.bank_statement_import_id)
+  if (params?.status) query.append('status', params.status)
+
+  const url = `${API_BASE_URL}/reconciliation/matches${query.toString() ? `?${query.toString()}` : ''}`
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch reconciliation matches')
   }
 
   return response.json()

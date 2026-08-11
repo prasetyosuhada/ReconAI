@@ -4,15 +4,8 @@ import type { NavTab } from './components/layout/Sidebar'
 import { DocumentIntakeView } from './components/documents/DocumentIntakeView'
 import { ReviewQueueView } from './components/review/ReviewQueueView'
 import { GeneralLedgerView } from './components/ledger/GeneralLedgerView'
-import {
-  ArrowLeftRight,
-  CheckCircle2,
-  FileText,
-  History,
-  ShieldCheck,
-  Sparkles,
-  UserCheck,
-} from 'lucide-react'
+import { ReconciliationView } from './components/reconciliation/ReconciliationView'
+import { CheckCircle2, FileText, History, ShieldCheck, Sparkles, UserCheck } from 'lucide-react'
 
 function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard')
@@ -90,15 +83,7 @@ function App() {
 
       {activeTab === 'ledger' && <GeneralLedgerView />}
 
-      {activeTab === 'reconciliation' && (
-        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
-          <ArrowLeftRight className="w-12 h-12 text-emerald-400 mx-auto" />
-          <h3 className="text-xl font-bold text-white">Bank Mutation Reconciliation</h3>
-          <p className="text-slate-400 text-sm max-w-md mx-auto">
-            Match bank statement transactions against posted ledger entries.
-          </p>
-        </div>
-      )}
+      {activeTab === 'reconciliation' && <ReconciliationView />}
 
       {activeTab === 'audit' && (
         <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
