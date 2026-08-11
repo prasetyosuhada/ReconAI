@@ -73,3 +73,63 @@ class ReviewItemDetailResponse(BaseModel):
     updated_at: datetime = Field(..., description="Last update timestamp in UTC")
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ReviewApproveRequest(BaseModel):
+    """Request schema for approving a review item."""
+
+    resolution_note: str | None = Field(
+        None, description="Optional rationale/note for approval"
+    )
+
+
+class ReviewApproveResponse(BaseModel):
+    """Response schema after approving a review item."""
+
+    id: uuid.UUID = Field(..., description="UUID of the review item")
+    status: str = Field(..., description="New status: approved")
+    resolved_at: datetime = Field(..., description="Resolution timestamp")
+    next_workflow_status: str = Field(
+        ..., description="Updated status of underlying source entity"
+    )
+    message: str = Field(..., description="Summary response message")
+
+
+class ReviewEditRequest(BaseModel):
+    """Request schema for editing and approving a review item."""
+
+    edited_payload: dict[str, Any] = Field(
+        ..., description="Edited data parameters overriding original payload"
+    )
+    resolution_note: str | None = Field(
+        None, description="Optional note explaining human edit"
+    )
+
+
+class ReviewEditResponse(BaseModel):
+    """Response schema after editing a review item."""
+
+    id: uuid.UUID = Field(..., description="UUID of the review item")
+    status: str = Field(..., description="New status: edited")
+    resolved_at: datetime = Field(..., description="Resolution timestamp")
+    next_workflow_status: str = Field(
+        ..., description="Updated status of underlying entity"
+    )
+    message: str = Field(..., description="Summary response message")
+
+
+class ReviewRejectRequest(BaseModel):
+    """Request schema for rejecting a review item."""
+
+    resolution_note: str | None = Field(
+        None, description="Rationale/note explaining rejection"
+    )
+
+
+class ReviewRejectResponse(BaseModel):
+    """Response schema after rejecting a review item."""
+
+    id: uuid.UUID = Field(..., description="UUID of the review item")
+    status: str = Field(..., description="New status: rejected")
+    resolved_at: datetime = Field(..., description="Resolution timestamp")
+    message: str = Field(..., description="Summary response message")
