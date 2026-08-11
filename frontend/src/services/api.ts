@@ -166,6 +166,35 @@ export interface ReconciliationMatchListResponse {
   offset: number
 }
 
+// Audit Trail & Traceability Interfaces
+export interface AuditEventResponse {
+  id: string
+  event_type: string
+  source_type: string
+  source_id: string
+  actor_type: string // agent, human, system
+  actor_name: string
+  confidence_score?: number
+  input_snapshot?: Record<string, any>
+  output_snapshot?: Record<string, any>
+  created_at: string
+}
+
+export interface AuditEventListResponse {
+  items: AuditEventResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface DocumentAuditTraceabilityResponse {
+  document_id: string
+  filename: string
+  current_status: string
+  uploaded_at: string
+  timeline: AuditEventResponse[]
+}
+
 export async function uploadDocument(file: File): Promise<DocumentUploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
@@ -400,5 +429,42 @@ export async function fetchReconciliationMatches(params?: {
     throw new Error('Failed to fetch reconciliation matches')
   }
 
+  return response.json()
+}
+
+// Audit Log & Traceability APIs
+export async function fetchAuditEvents(params?: {
+  source_type?: string
+  source_id?: string
+  event_type?: string
+  actor_type?: string
+  limit?: number
+  offset?: number
+}): Promise<AuditEventListResponse> {
+  const query = new URLSearchParams()
+  if (params?.source_type) query.append('source_type', params.source_type)
+  if (params?.source_id) query.append('source_id', params.source_id)
+  if (params?.event_type) query.append('event_type', params.event_type)
+  if (params?.actor_type) query.append('actor_type', params.actor_type)
+  if (params?.limit) query.append('limit', params.limit.toString())
+  if (params?.offset) query.append('offset', params.offset.toString())
+
+  const url = `${API_BASE_URL}/audit-events${query.toString() ? `?${query.toString()}` : ''}`
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch audit events')
+  }
+
+  return response.json()
+}
+
+export async function fetchDocumentAuditTraceability(
+  documentId: string
+): Promise<DocumentAuditTraceabilityResponse> {
+  const response = await fetch(`${API_BASE_URL}/audit-log/${documentId}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch audit log for document ${documentId}`)
+  }
   return response.json()
 }

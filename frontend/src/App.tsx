@@ -5,7 +5,8 @@ import { DocumentIntakeView } from './components/documents/DocumentIntakeView'
 import { ReviewQueueView } from './components/review/ReviewQueueView'
 import { GeneralLedgerView } from './components/ledger/GeneralLedgerView'
 import { ReconciliationView } from './components/reconciliation/ReconciliationView'
-import { CheckCircle2, FileText, History, ShieldCheck, Sparkles, UserCheck } from 'lucide-react'
+import { AuditTraceabilityView } from './components/audit/AuditTraceabilityView'
+import { CheckCircle2, FileText, ShieldCheck, Sparkles, UserCheck } from 'lucide-react'
 
 function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard')
@@ -85,15 +86,7 @@ function App() {
 
       {activeTab === 'reconciliation' && <ReconciliationView />}
 
-      {activeTab === 'audit' && (
-        <div className="p-8 rounded-2xl bg-slate-800/40 border border-slate-700/50 text-center space-y-4">
-          <History className="w-12 h-12 text-indigo-400 mx-auto" />
-          <h3 className="text-xl font-bold text-white">Audit Log & Traceability</h3>
-          <p className="text-slate-400 text-sm max-w-md mx-auto">
-            Trace document extractions, LLM rationale, and human approval audit history.
-          </p>
-        </div>
-      )}
+      {activeTab === 'audit' && <AuditTraceabilityView />}
     </MainLayout>
   )
 }
