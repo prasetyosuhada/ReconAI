@@ -468,3 +468,27 @@ export async function fetchDocumentAuditTraceability(
   }
   return response.json()
 }
+
+// ─── Dashboard Stats ──────────────────────────────────────────────────────────
+
+export interface DashboardStats {
+  totalDocuments: number
+  pendingReviewCount: number
+  trialBalance: TrialBalanceResponse | null
+}
+
+export async function fetchDashboardStats(): Promise<DashboardStats> {
+  const [docsData, reviewData, trialBalance] = await Promise.allSettled([
+    fetchDocuments({ limit: 1 }),
+    fetchReviewItems({ status: 'pending', limit: 1 }),
+    fetchTrialBalance(),
+  ])
+
+  return {
+    totalDocuments: docsData.status === 'fulfilled' ? docsData.value.total : 0,
+    pendingReviewCount:
+      reviewData.status === 'fulfilled' ? reviewData.value.total : 0,
+    trialBalance:
+      trialBalance.status === 'fulfilled' ? trialBalance.value : null,
+  }
+}
