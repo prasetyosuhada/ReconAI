@@ -120,6 +120,7 @@ Detailed specification documents are available in the `docs/` directory:
 - [docs/06-UX-Flow.md](docs/06-UX-Flow.md) — Frontend User Flows & UI Specifications
 - [docs/07-Demo-Plan.md](docs/07-Demo-Plan.md) — 5-Minute Portfolio Demo Guide
 - [docs/08-Test-Plan.md](docs/08-Test-Plan.md) — Testing & AI Agent Evaluation Strategy
+- [docs/09-Setup-Guide.md](docs/09-Setup-Guide.md) — Local Setup & Execution Manual
 
 ---
 
