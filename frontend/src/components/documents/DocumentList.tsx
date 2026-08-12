@@ -50,8 +50,9 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
     switch (status.toLowerCase()) {
       case 'uploaded':
       case 'processing':
+      case 'extracting':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium animate-pulse">
             <Loader2 className="w-3 h-3 animate-spin" />
             {status}
           </span>
@@ -65,10 +66,11 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
           </span>
         )
       case 'review_required':
+      case 'extraction_review_required':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
             <Clock className="w-3 h-3" />
-            {status}
+            Needs Review
           </span>
         )
       case 'rejected':
@@ -102,7 +104,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
   }
 
   return (
-    <div className="p-6 rounded-2xl bg-slate-800/40 border border-slate-700/50 shadow-xl backdrop-blur-sm space-y-4">
+    <div className="p-6 rounded-2xl bg-slate-800/40 border border-slate-700/50 shadow-xl backdrop-blur-sm space-y-4 animate-fade-in">
       {/* Header & Filter Controls */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -155,36 +157,56 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
         </div>
       )}
 
-      {/* Loading state */}
-      {loading && documents.length === 0 ? (
-        <div className="py-12 text-center text-slate-400 space-y-2">
-          <Loader2 className="w-8 h-8 animate-spin text-indigo-400 mx-auto" />
-          <p className="text-xs">Fetching document repository...</p>
-        </div>
-      ) : documents.length === 0 ? (
-        <div className="py-12 text-center text-slate-400 space-y-2 bg-slate-900/30 rounded-xl border border-slate-800/80">
-          <FileText className="w-10 h-10 text-slate-600 mx-auto" />
-          <p className="text-sm font-semibold text-slate-300">No documents found</p>
-          <p className="text-xs text-slate-500">
-            Upload a receipt or invoice above to get started.
-          </p>
-        </div>
-      ) : (
-        /* Document Table */
-        <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/40">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-900/80 text-slate-400 border-b border-slate-800 font-semibold uppercase tracking-wider text-[10px]">
+      {/* Table Container */}
+      <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/40">
+        <table className="w-full text-left text-xs text-slate-300">
+          <thead className="bg-slate-900/80 text-slate-400 border-b border-slate-800 font-semibold uppercase tracking-wider text-[10px]">
+            <tr>
+              <th className="py-3 px-4">Filename</th>
+              <th className="py-3 px-4">Type</th>
+              <th className="py-3 px-4">Status</th>
+              <th className="py-3 px-4">Size</th>
+              <th className="py-3 px-4">Uploaded At</th>
+              <th className="py-3 px-4 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800/60 font-medium">
+            {loading ? (
+              /* Skeleton Loader Rows */
+              [1, 2, 3].map((idx) => (
+                <tr key={idx} className="animate-pulse">
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-48" />
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-16" />
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-20" />
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-12" />
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-28" />
+                  </td>
+                  <td className="py-3.5 px-4 text-right">
+                    <div className="h-6 bg-slate-800/80 rounded w-24 ml-auto" />
+                  </td>
+                </tr>
+              ))
+            ) : documents.length === 0 ? (
               <tr>
-                <th className="py-3 px-4">Filename</th>
-                <th className="py-3 px-4">Type</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4">Size</th>
-                <th className="py-3 px-4">Uploaded At</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                <td colSpan={6} className="py-12 text-center text-slate-400 space-y-2">
+                  <FileText className="w-10 h-10 text-slate-600 mx-auto" />
+                  <p className="text-sm font-semibold text-slate-300">No documents found</p>
+                  <p className="text-xs text-slate-500">
+                    Upload a receipt or invoice above to get started.
+                  </p>
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60 font-medium">
-              {documents.map((doc) => (
+            ) : (
+              documents.map((doc) => (
                 <tr key={doc.id} className="hover:bg-slate-900/60 transition-colors">
                   <td className="py-3.5 px-4">
                     <div className="flex items-center gap-2.5">
@@ -217,18 +239,18 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
                     <button
                       type="button"
                       onClick={() => onSelectDocument?.(doc.id)}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs font-semibold transition-all"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs font-semibold transition-all hover:scale-105 active:scale-95"
                     >
                       <FileCode className="w-3.5 h-3.5" />
                       Trace Audit
                     </button>
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
