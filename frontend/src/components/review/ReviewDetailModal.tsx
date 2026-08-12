@@ -27,10 +27,8 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
   onClose,
   onResolved,
 }) => {
-  if (!item) return null
-
   // Extraction payload states
-  const originalPayload = item.original_payload || {}
+  const originalPayload = item?.original_payload || {}
   const extractedVendor = originalPayload.vendor_name || originalPayload.merchant_name || 'N/A'
   const extractedDate = originalPayload.invoice_date || originalPayload.transaction_date || ''
   const extractedTotal = originalPayload.total_amount || originalPayload.amount || 0
@@ -38,7 +36,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
   const extractedCurrency = originalPayload.currency || 'IDR'
 
   // Editable Journal Entry States
-  const defaultLines: JournalLineEditPayload[] = item.edited_payload?.lines ||
+  const defaultLines: JournalLineEditPayload[] = item?.edited_payload?.lines ||
     originalPayload.lines ||
     originalPayload.journal_lines || [
       {
@@ -58,10 +56,10 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
     ]
 
   const [entryDate, setEntryDate] = useState<string>(
-    item.edited_payload?.entry_date || extractedDate || new Date().toISOString().split('T')[0]
+    item?.edited_payload?.entry_date || extractedDate || new Date().toISOString().split('T')[0]
   )
   const [description, setDescription] = useState<string>(
-    item.edited_payload?.description || item.title || `Journal for ${extractedVendor}`
+    item?.edited_payload?.description || item?.title || `Journal for ${extractedVendor}`
   )
   const [lines, setLines] = useState<JournalLineEditPayload[]>(defaultLines)
   const [rejectionReason, setRejectionReason] = useState<string>('')
@@ -70,15 +68,17 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
+  useEffect(() => {
+    setErrorMsg(null)
+  }, [lines, entryDate, description])
+
+  if (!item) return null
+
   // Balance calculation
   const totalDebits = lines.reduce((acc, l) => acc + (Number(l.debit_amount) || 0), 0)
   const totalCredits = lines.reduce((acc, l) => acc + (Number(l.credit_amount) || 0), 0)
   const balanceDiff = Math.abs(totalDebits - totalCredits)
   const isBalanced = balanceDiff < 0.01
-
-  useEffect(() => {
-    setErrorMsg(null)
-  }, [lines, entryDate, description])
 
   const handleLineChange = (
     index: number,

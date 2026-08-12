@@ -142,13 +142,27 @@ export const JournalEntryListTable: React.FC<JournalEntryListTableProps> = ({
             {loading ? (
               [1, 2, 3].map((idx) => (
                 <tr key={idx} className="animate-pulse">
-                  <td className="py-3.5 px-4"><div className="h-4 bg-slate-800/80 rounded w-20" /></td>
-                  <td className="py-3.5 px-4"><div className="h-4 bg-slate-800/80 rounded w-48" /></td>
-                  <td className="py-3.5 px-4"><div className="h-4 bg-slate-800/80 rounded w-28" /></td>
-                  <td className="py-3.5 px-4"><div className="h-4 bg-slate-800/80 rounded w-16" /></td>
-                  <td className="py-3.5 px-4"><div className="h-4 bg-slate-800/80 rounded w-20 ml-auto" /></td>
-                  <td className="py-3.5 px-4"><div className="h-4 bg-slate-800/80 rounded w-20 ml-auto" /></td>
-                  <td className="py-3.5 px-4 text-right"><div className="h-6 bg-slate-800/80 rounded w-20 ml-auto" /></td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-20" />
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-48" />
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-28" />
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-16" />
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-20 ml-auto" />
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <div className="h-4 bg-slate-800/80 rounded w-20 ml-auto" />
+                  </td>
+                  <td className="py-3.5 px-4 text-right">
+                    <div className="h-6 bg-slate-800/80 rounded w-20 ml-auto" />
+                  </td>
                 </tr>
               ))
             ) : filteredEntries.length === 0 ? (
@@ -156,7 +170,9 @@ export const JournalEntryListTable: React.FC<JournalEntryListTableProps> = ({
                 <td colSpan={7} className="py-16 text-center text-slate-400 space-y-2">
                   <BookOpen className="w-10 h-10 text-slate-600 mx-auto" />
                   <p className="text-sm font-semibold text-slate-300">No Journal Entries Found</p>
-                  <p className="text-xs text-slate-500">No entries match your current filter settings.</p>
+                  <p className="text-xs text-slate-500">
+                    No entries match your current filter settings.
+                  </p>
                 </td>
               </tr>
             ) : (

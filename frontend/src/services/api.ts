@@ -486,9 +486,7 @@ export async function fetchDashboardStats(): Promise<DashboardStats> {
 
   return {
     totalDocuments: docsData.status === 'fulfilled' ? docsData.value.total : 0,
-    pendingReviewCount:
-      reviewData.status === 'fulfilled' ? reviewData.value.total : 0,
-    trialBalance:
-      trialBalance.status === 'fulfilled' ? trialBalance.value : null,
+    pendingReviewCount: reviewData.status === 'fulfilled' ? reviewData.value.total : 0,
+    trialBalance: trialBalance.status === 'fulfilled' ? trialBalance.value : null,
   }
 }

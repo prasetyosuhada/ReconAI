@@ -69,10 +69,7 @@ def list_documents(
 
     total_count = query.with_entities(func.count(Document.id)).scalar() or 0
     records = (
-        query.order_by(Document.uploaded_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
+        query.order_by(Document.uploaded_at.desc()).offset(offset).limit(limit).all()
     )
 
     items = [
@@ -112,11 +109,11 @@ def get_document_detail(
     """Fetch document details by UUID."""
     try:
         doc_uuid = uuid.UUID(document_id)
-    except ValueError:
+    except ValueError as err:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid UUID format for document_id.",
-        )
+        ) from err
 
     doc = db.query(Document).filter(Document.id == doc_uuid).first()
     if not doc:

@@ -14,10 +14,8 @@ from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry, JournalEntryLine
-from app.models.reconciliation import BankStatementImport, BankTransaction
 from app.models.review import ReviewItem
 from app.services.accounting import (
-    find_exact_reconciliation_matches,
     post_journal_entry_to_ledger,
     validate_double_entry,
 )
@@ -67,7 +65,11 @@ def test_e2e_happy_path_workflow(client, db_session):
     else:
         file_content = b"%PDF-1.4 AWS Cloud Services Subscription IDR 1500000"
 
-    file_tuple = ("invoice_01_aws_cloud.pdf", io.BytesIO(file_content), "application/pdf")
+    file_tuple = (
+        "invoice_01_aws_cloud.pdf",
+        io.BytesIO(file_content),
+        "application/pdf",
+    )
 
     with patch("app.api.v1.documents.process_document_background"):
         upload_res = client.post(
@@ -114,7 +116,10 @@ def test_e2e_happy_path_workflow(client, db_session):
         actor_type="agent",
         actor_name="Document Intake Agent",
         confidence_score=0.96,
-        output_snapshot={"vendor_name": "Amazon Web Services Inc.", "total_amount": 1500000.0},
+        output_snapshot={
+            "vendor_name": "Amazon Web Services Inc.",
+            "total_amount": 1500000.0,
+        },
     )
     db_session.add(audit_intake)
 
@@ -128,7 +133,10 @@ def test_e2e_happy_path_workflow(client, db_session):
         source_id=doc_id,
         title="Verify AWS Invoice Extraction",
         summary="Extraction for Amazon Web Services Inc. total IDR 1,500,000",
-        original_payload={"vendor_name": "Amazon Web Services Inc.", "total_amount": 1500000.0},
+        original_payload={
+            "vendor_name": "Amazon Web Services Inc.",
+            "total_amount": 1500000.0,
+        },
     )
     db_session.add(review_item)
     db_session.commit()
@@ -160,8 +168,16 @@ def test_e2e_happy_path_workflow(client, db_session):
     )
     db_session.add(je)
 
-    acc_5100 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "5100").first()
-    acc_2000 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "2000").first()
+    acc_5100 = (
+        db_session.query(ChartOfAccount)
+        .filter(ChartOfAccount.account_code == "5100")
+        .first()
+    )
+    acc_2000 = (
+        db_session.query(ChartOfAccount)
+        .filter(ChartOfAccount.account_code == "2000")
+        .first()
+    )
 
     line_debit = JournalEntryLine(
         id=uuid.uuid4(),
@@ -222,18 +238,26 @@ def test_e2e_happy_path_workflow(client, db_session):
     mock_agent_res.result.matches = []
 
     # Run Reconciliation Engine
-    with patch("app.services.reconciliation.SessionLocal", return_value=db_session), patch(
-        "app.services.reconciliation.run_reconciliation_agent", return_value=mock_agent_res
+    with (
+        patch("app.services.reconciliation.SessionLocal", return_value=db_session),
+        patch(
+            "app.services.reconciliation.run_reconciliation_agent",
+            return_value=mock_agent_res,
+        ),
     ):
         execute_reconciliation_workflow(import_id)
 
     # Query matches via API
-    matches_res = client.get(f"/api/v1/reconciliation/matches?bank_statement_import_id={import_id}")
+    matches_res = client.get(
+        f"/api/v1/reconciliation/matches?bank_statement_import_id={import_id}"
+    )
     assert matches_res.status_code == 200
     match_items = matches_res.json()["items"]
     assert len(match_items) >= 1
 
-    aws_match = next((m for m in match_items if m["bank_transaction"]["amount"] == -1500000.0), None)
+    aws_match = next(
+        (m for m in match_items if m["bank_transaction"]["amount"] == -1500000.0), None
+    )
     assert aws_match is not None
     assert aws_match["status"] in ["proposed", "accepted", "matched"]
     assert aws_match["confidence_score"] == 1.0
@@ -247,6 +271,8 @@ def test_e2e_happy_path_workflow(client, db_session):
 
     assert audit_data["document_id"] == doc_id_str
     assert len(audit_data["timeline"]) >= 1
-    assert any(e["event_type"] == "extraction_completed" for e in audit_data["timeline"])
+    assert any(
+        e["event_type"] == "extraction_completed" for e in audit_data["timeline"]
+    )
 
     print("\n✅ E2E Happy Path Workflow Test Passed Successfully!")

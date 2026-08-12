@@ -56,8 +56,16 @@ def test_unbalanced_journal_entry_rejection(db_session):
     """Verify backend deterministically rejects unbalanced journal entry (Debits != Credits)."""
     seed_coa_accounts(db_session)
 
-    acc_5100 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "5100").first()
-    acc_2000 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "2000").first()
+    acc_5100 = (
+        db_session.query(ChartOfAccount)
+        .filter(ChartOfAccount.account_code == "5100")
+        .first()
+    )
+    acc_2000 = (
+        db_session.query(ChartOfAccount)
+        .filter(ChartOfAccount.account_code == "2000")
+        .first()
+    )
 
     # Create Unbalanced Journal Entry: Debit 1,500,000 vs Credit 1,200,000 (Difference: 300,000)
     unbalanced_je = JournalEntry(
@@ -99,7 +107,12 @@ def test_unbalanced_journal_entry_rejection(db_session):
     assert val_result.total_credit == 1200000.0
     assert val_result.difference == 300000.0
     assert len(val_result.errors) >= 1
-    assert any("equal" in err.lower() or "unbalanced" in err.lower() or "difference" in err.lower() for err in val_result.errors)
+    assert any(
+        "equal" in err.lower()
+        or "unbalanced" in err.lower()
+        or "difference" in err.lower()
+        for err in val_result.errors
+    )
 
     # 2. Test Ledger Posting Guardrail Rejection
     post_res = post_journal_entry_to_ledger(unbalanced_je, db_session)
@@ -113,12 +126,24 @@ def test_unbalanced_journal_entry_rejection(db_session):
 
 def test_sensitive_account_guardrail_check(db_session):
     """Verify sensitive account guardrail flags Cash transaction for human review."""
-    acc_1000 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "1000").first()
+    acc_1000 = (
+        db_session.query(ChartOfAccount)
+        .filter(ChartOfAccount.account_code == "1000")
+        .first()
+    )
     if not acc_1000:
         seed_coa_accounts(db_session)
-        acc_1000 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "1000").first()
+        acc_1000 = (
+            db_session.query(ChartOfAccount)
+            .filter(ChartOfAccount.account_code == "1000")
+            .first()
+        )
 
-    acc_5100 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "5100").first()
+    acc_5100 = (
+        db_session.query(ChartOfAccount)
+        .filter(ChartOfAccount.account_code == "5100")
+        .first()
+    )
 
     sensitive_je = JournalEntry(
         id=uuid.uuid4(),
@@ -146,10 +171,13 @@ def test_sensitive_account_guardrail_check(db_session):
     sensitive_je.lines.extend([line_debit, line_credit])
 
     # Perform sensitive account check
-    check_res = check_sensitive_accounts([
-        {"account_code": "5100", "debit_amount": 250000.0, "credit_amount": 0.0},
-        {"account_code": "1000", "debit_amount": 0.0, "credit_amount": 250000.0},
-    ], db_session)
+    check_res = check_sensitive_accounts(
+        [
+            {"account_code": "5100", "debit_amount": 250000.0, "credit_amount": 0.0},
+            {"account_code": "1000", "debit_amount": 0.0, "credit_amount": 250000.0},
+        ],
+        db_session,
+    )
 
     assert check_res.has_sensitive_account is True
     assert check_res.requires_human_review is True

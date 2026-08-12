@@ -55,7 +55,9 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
     # -------------------------------------------------------------
     # STEP 1: Upload Low Quality / Blurry Document
     # -------------------------------------------------------------
-    pdf_path = Path("/home/pras/recon-ai/demo-data/invoices/invoice_06_blurry_low_confidence.pdf")
+    pdf_path = Path(
+        "/home/pras/recon-ai/demo-data/invoices/invoice_06_blurry_low_confidence.pdf"
+    )
     if pdf_path.exists():
         file_bytes = pdf_path.read_bytes()
     else:
@@ -139,7 +141,9 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
     pending_items = review_res.json()["items"]
     assert len(pending_items) >= 1
 
-    target_review = next((r for r in pending_items if r["id"] == str(review_item.id)), None)
+    target_review = next(
+        (r for r in pending_items if r["id"] == str(review_item.id)), None
+    )
     assert target_review is not None
     assert target_review["status"] == "pending"
     assert target_review["priority"] == "high"
@@ -182,8 +186,16 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
     )
     db_session.add(je)
 
-    acc_5200 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "5200").first()
-    acc_1000 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "1000").first()
+    acc_5200 = (
+        db_session.query(ChartOfAccount)
+        .filter(ChartOfAccount.account_code == "5200")
+        .first()
+    )
+    acc_1000 = (
+        db_session.query(ChartOfAccount)
+        .filter(ChartOfAccount.account_code == "1000")
+        .first()
+    )
 
     line_debit = JournalEntryLine(
         id=uuid.uuid4(),
@@ -221,6 +233,8 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
     assert audit_res.status_code == 200
     audit_timeline = audit_res.json()["timeline"]
 
-    assert any(e["event_type"] == "low_confidence_routed_to_review" for e in audit_timeline)
+    assert any(
+        e["event_type"] == "low_confidence_routed_to_review" for e in audit_timeline
+    )
 
     print("\n✅ E2E Low Confidence Human Review Queue Test Passed Successfully!")

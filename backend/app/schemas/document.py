@@ -1,7 +1,6 @@
 """Pydantic Schemas for Document Endpoints."""
 
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 

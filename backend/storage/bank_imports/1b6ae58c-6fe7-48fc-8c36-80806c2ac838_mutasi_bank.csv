@@ -1,0 +1,3 @@
+transaction_date,description,amount,currency,reference_number
+2026-08-01,Gramedia Book Store,-150000.00,IDR,REF-001
+2026-08-02,Client Payment,5000000.00,IDR,REF-002

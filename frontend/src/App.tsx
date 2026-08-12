@@ -185,12 +185,7 @@ function App() {
             </p>
           </div>
 
-          <DashboardStatsCards
-            stats={stats}
-            loading={loading}
-            error={error}
-            onRefresh={refresh}
-          />
+          <DashboardStatsCards stats={stats} loading={loading} error={error} onRefresh={refresh} />
         </div>
       )}
 
