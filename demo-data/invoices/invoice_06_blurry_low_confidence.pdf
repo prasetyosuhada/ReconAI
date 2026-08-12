@@ -1,0 +1,45 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /MediaBox [0 0 595 842] /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+5 0 obj
+<< /Length 1092 >>
+stream
+BT /F1 11 Tf 40 750 Td (INVOICE / RECEIPT: BLURRY UNREADABLE RECEIPT) Tj ET
+BT /F1 11 Tf 40 732 Td (Vendor Name: Unknown Vendor Street Store) Tj ET
+BT /F1 11 Tf 40 714 Td (Invoice Date: 2026-08-10) Tj ET
+BT /F1 11 Tf 40 696 Td (Payment Status: PAID - OFFICIAL RECEIPT) Tj ET
+BT /F1 11 Tf 40 678 Td (--------------------------------------------------) Tj ET
+BT /F1 11 Tf 40 660 Td (ITEM DESCRIPTION                         AMOUNT \(IDR\)) Tj ET
+BT /F1 11 Tf 40 642 Td (Unreadable blurry item line              IDR 50,000) Tj ET
+BT /F1 11 Tf 40 624 Td (--------------------------------------------------) Tj ET
+BT /F1 11 Tf 40 606 Td (Subtotal:                                IDR 50,000) Tj ET
+BT /F1 11 Tf 40 588 Td (Tax \(PPN 11%\):                          IDR 5,000) Tj ET
+BT /F1 11 Tf 40 570 Td (TOTAL AMOUNT PAID:                       IDR 55,000) Tj ET
+BT /F1 11 Tf 40 552 Td (--------------------------------------------------) Tj ET
+BT /F1 11 Tf 40 534 Td (WARNING: LOW QUALITY / UNREADABLE OCR TEST DOCUMENT) Tj ET
+BT /F1 11 Tf 40 516 Td ([Blurry Noise Data: %&#@$*! 0x99281X]) Tj ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000244 00000 n 
+0000000315 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1472
+%%EOF
