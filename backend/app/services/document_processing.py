@@ -11,6 +11,7 @@ from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentExtraction
 from app.models.review import ReviewItem
 from app.services.accounting import save_journal_entry_safely
+from app.services.document_extraction import extract_document_content
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +62,32 @@ def process_document_background(
         doc.status = "extracting"
         db.commit()
 
+        # Extract text / image content from the uploaded file before LLM
+        raw_text, _image_b64 = extract_document_content(
+            file_path=stored_file_path,
+            mime_type=mime_type,
+        )
+
+        logger.info(
+            "Document %s: extracted %d chars of raw text from %s",
+            document_id,
+            len(raw_text),
+            original_filename,
+        )
+
         initial_state: dict[str, Any] = {
             "document_id": str(doc_uuid),
             "original_filename": original_filename,
             "mime_type": mime_type,
             "stored_file_path": stored_file_path,
+            "raw_text": raw_text or None,
             "status": "extracting",
         }
+        print("INITIAL STATE:\n", initial_state)
 
         # Run compiled LangGraph StateGraph workflow
         final_state = document_processing_graph.invoke(initial_state)
+        print("HASIL INVOKE:\n", final_state)
 
         final_status = final_state.get("status", "extracted")
         confidence_score = final_state.get("confidence_score", 0.0)

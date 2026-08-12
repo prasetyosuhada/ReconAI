@@ -114,9 +114,27 @@ def run_bookkeeping_agent(
             HumanMessage(content=user_content),
         ]
 
+        logger.info(
+            "Sending extracted data to Bookkeeping LLM Agent (%s)...",
+            provider or "default",
+        )
+
         response: BookkeepingResponse = structured_llm.invoke(messages)
 
-        # Deterministic verification of accounting math & sensitive accounts
+        logger.info(
+            "🤖 [LLM Bookkeeping] Proposed %d Journal Lines | Conf: %.2f | Rationale: %s",
+            len(response.result.journal_lines),
+            response.confidence_score,
+            response.rationale,
+        )
+        for line in response.result.journal_lines:
+            logger.info(
+                "   -> [%s] %s | Dr: %.2f | Cr: %.2f",
+                line.account_code,
+                line.account_name,
+                line.debit_amount,
+                line.credit_amount,
+            )
         result = response.result
         warnings = list(response.warnings or [])
         risk_flags = list(result.risk_flags or [])

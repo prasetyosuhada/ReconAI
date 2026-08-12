@@ -21,9 +21,14 @@ export interface DocumentListResponse {
 }
 
 export interface DocumentUploadResponse {
-  document: DocumentResponse
-  message: string
+  id: string
+  original_filename: string
+  document_type: string
   status: string
+  uploaded_at: string
+  links?: Record<string, string>
+  document?: DocumentResponse
+  message?: string
 }
 
 // Review Item Interfaces

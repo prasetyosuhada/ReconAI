@@ -75,9 +75,23 @@ def run_document_intake_agent(
             HumanMessage(content=user_content),
         ]
 
+        logger.info(
+            "Sending document text (%d chars) to LLM (%s)...",
+            len(raw_text),
+            provider or "default",
+        )
+
         response: DocumentIntakeResponse = structured_llm.invoke(messages)
 
-        # Post-process & enforce deterministic confidence heuristics
+        logger.info(
+            "🤖 [LLM DocumentIntake] Extracted Vendor: '%s' | Date: '%s' | Total: %s %s | Conf: %.2f | Rationale: %s",
+            response.result.vendor_name,
+            response.result.transaction_date,
+            response.result.total_amount,
+            response.result.currency,
+            response.confidence_score,
+            response.rationale,
+        )
         result = response.result
         warnings = list(response.warnings or [])
 

@@ -73,8 +73,9 @@ export const DropzoneUpload: React.FC<DropzoneUploadProps> = ({ onUploadSuccess 
 
     try {
       const res = await uploadDocument(selectedFile)
+      const filename = res.original_filename || res.document?.original_filename || selectedFile.name
       setSuccessMsg(
-        `Document "${res.document.original_filename}" uploaded successfully! AI extraction pipeline triggered.`
+        `Document "${filename}" uploaded successfully! AI extraction pipeline triggered.`
       )
       setSelectedFile(null)
       onUploadSuccess()
