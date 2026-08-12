@@ -21,9 +21,10 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.audit import AuditEvent
-from app.models.document import Document
+from app.models.document import Document, DocumentExtraction
 from app.schemas.document import (
     DocumentDetailResponse,
+    DocumentExtractionResponse,
     DocumentListResponse,
     DocumentResponse,
 )
@@ -133,6 +134,66 @@ def get_document_detail(
         uploaded_at=doc.uploaded_at,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
+    )
+
+
+@router.get(
+    "/{document_id}/extractions/latest",
+    response_model=DocumentExtractionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get latest structured extraction for a document",
+)
+def get_latest_document_extraction(
+    document_id: str,
+    db: Session = Depends(get_db),
+) -> DocumentExtractionResponse:
+    """Fetch the newest persisted extraction row for a document UUID."""
+    try:
+        doc_uuid = uuid.UUID(document_id)
+    except ValueError as err:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid UUID format for document_id.",
+        ) from err
+
+    extraction = (
+        db.query(DocumentExtraction)
+        .filter(DocumentExtraction.document_id == doc_uuid)
+        .order_by(DocumentExtraction.created_at.desc())
+        .first()
+    )
+    if not extraction:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No extraction found for document [{document_id}].",
+        )
+
+    return DocumentExtractionResponse(
+        id=str(extraction.id),
+        document_id=str(extraction.document_id),
+        vendor_name=extraction.vendor_name,
+        transaction_date=extraction.transaction_date,
+        subtotal_amount=(
+            float(extraction.subtotal_amount)
+            if extraction.subtotal_amount is not None
+            else None
+        ),
+        tax_amount=(
+            float(extraction.tax_amount) if extraction.tax_amount is not None else None
+        ),
+        total_amount=(
+            float(extraction.total_amount)
+            if extraction.total_amount is not None
+            else None
+        ),
+        currency=extraction.currency,
+        line_items=extraction.line_items,
+        provider_metadata=extraction.provider_metadata,
+        confidence_score=float(extraction.confidence_score),
+        rationale=extraction.rationale,
+        status=extraction.status,
+        created_at=extraction.created_at,
+        updated_at=extraction.updated_at,
     )
 
 

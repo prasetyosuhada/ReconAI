@@ -78,8 +78,8 @@ def extract_document_content(
 
     Strategy:
     1. PDF with text → extract text via pypdf.
-    2. PDF with no text (scanned) → build descriptive fallback string with image hint.
-    3. Image (JPEG/PNG/WEBP) → build descriptive string and return base64 for LLM vision.
+    2. PDF with no text (scanned) → build fallback string.
+    3. Image (JPEG/PNG/WEBP) → build descriptive string and return base64.
 
     Args:
         file_path: Absolute path to the stored file.

@@ -122,7 +122,7 @@ def run_bookkeeping_agent(
         response: BookkeepingResponse = structured_llm.invoke(messages)
 
         logger.info(
-            "🤖 [LLM Bookkeeping] Proposed %d Journal Lines | Conf: %.2f | Rationale: %s",
+            "🤖 [LLM Bookkeeping] Lines: %d | Conf: %.2f | Rationale: %s",
             len(response.result.journal_lines),
             response.confidence_score,
             response.rationale,

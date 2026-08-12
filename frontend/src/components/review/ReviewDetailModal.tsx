@@ -2,8 +2,11 @@ import React, { useEffect, useState } from 'react'
 import {
   AlertCircle,
   AlertTriangle,
-  Check,
+  ArrowLeft,
   CheckCircle2,
+  CircleDollarSign,
+  ClipboardCheck,
+  ExternalLink,
   FileText,
   Info,
   Loader2,
@@ -11,10 +14,18 @@ import {
   ShieldAlert,
   Sparkles,
   Trash2,
-  X,
 } from 'lucide-react'
-import type { JournalLineEditPayload, ReviewItemResponse } from '../../services/api'
-import { approveReviewItem, editReviewItem, rejectReviewItem } from '../../services/api'
+import type {
+  DocumentExtractionResponse,
+  JournalLineEditPayload,
+  ReviewItemResponse,
+} from '../../services/api'
+import {
+  approveReviewItem,
+  editReviewItem,
+  fetchLatestDocumentExtraction,
+  rejectReviewItem,
+} from '../../services/api'
 
 interface ReviewDetailModalProps {
   item: ReviewItemResponse | null
@@ -27,13 +38,58 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
   onClose,
   onResolved,
 }) => {
+  const [latestExtraction, setLatestExtraction] = useState<DocumentExtractionResponse | null>(null)
+  const [extractionLoading, setExtractionLoading] = useState<boolean>(false)
+
   // Extraction payload states
   const originalPayload = item?.original_payload || {}
-  const extractedVendor = originalPayload.vendor_name || originalPayload.merchant_name || 'N/A'
-  const extractedDate = originalPayload.invoice_date || originalPayload.transaction_date || ''
-  const extractedTotal = originalPayload.total_amount || originalPayload.amount || 0
-  const extractedTax = originalPayload.tax_amount || 0
-  const extractedCurrency = originalPayload.currency || 'IDR'
+  const dbExtractionPayload: Record<string, any> = latestExtraction
+    ? {
+        ...latestExtraction,
+        invoice_date: latestExtraction.transaction_date,
+      }
+    : {}
+  const extractionPayload: Record<string, any> = {
+    ...originalPayload,
+    ...dbExtractionPayload,
+  }
+  const extractedVendor = extractionPayload.vendor_name || extractionPayload.merchant_name || 'N/A'
+  const extractedDate = extractionPayload.invoice_date || extractionPayload.transaction_date || ''
+  const extractedTotal = extractionPayload.total_amount || extractionPayload.amount || 0
+  const extractedTax = extractionPayload.tax_amount || 0
+  const extractedSubtotal =
+    extractionPayload.subtotal_amount ||
+    Math.max(Number(extractedTotal || 0) - Number(extractedTax || 0), 0)
+  const extractedCurrency = extractionPayload.currency || 'IDR'
+  const documentType = 'Invoice / Receipt'
+  const sourceFilename =
+    extractionPayload.original_filename ||
+    extractionPayload.filename ||
+    extractionPayload.document_filename ||
+    item?.title?.replace(/^Review Needed:\s*/i, '') ||
+    'Source document'
+  const sourcePath =
+    extractionPayload.document_url ||
+    extractionPayload.source_url ||
+    extractionPayload.file_url ||
+    extractionPayload.stored_file_path ||
+    ''
+  const paymentStatus =
+    originalPayload.payment_status ||
+    originalPayload.payment_status_label ||
+    (Number(extractedTotal) > 0 ? 'paid' : 'unknown')
+  const rawLineItems = extractionPayload.line_items || extractionPayload.items
+  const lineItems = Array.isArray(rawLineItems)
+    ? rawLineItems
+    : Array.isArray(rawLineItems?.items)
+      ? rawLineItems.items
+      : Array.isArray(rawLineItems?.line_items)
+        ? rawLineItems.line_items
+        : []
+  const warnings =
+    (Array.isArray(extractionPayload.warnings) && extractionPayload.warnings) ||
+    (Array.isArray(item?.risk_flags) && item?.risk_flags) ||
+    []
 
   // Editable Journal Entry States
   const defaultLines: JournalLineEditPayload[] = item?.edited_payload?.lines ||
@@ -64,13 +120,81 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
   const [lines, setLines] = useState<JournalLineEditPayload[]>(defaultLines)
   const [rejectionReason, setRejectionReason] = useState<string>('')
   const [showRejectInput, setShowRejectInput] = useState<boolean>(false)
+  const [isEditing, setIsEditing] = useState<boolean>(false)
 
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   useEffect(() => {
+    let ignore = false
+    const documentId =
+      originalPayload.document_id ||
+      originalPayload.source_document_id ||
+      (item?.source_type === 'document' ? item.source_id : undefined)
+
+    setLatestExtraction(null)
+    if (!documentId) {
+      setExtractionLoading(false)
+      return
+    }
+
+    setExtractionLoading(true)
+    fetchLatestDocumentExtraction(String(documentId))
+      .then((extraction) => {
+        if (!ignore) {
+          setLatestExtraction(extraction)
+        }
+      })
+      .catch((err: unknown) => {
+        if (!ignore) {
+          console.warn('Failed to load latest document extraction:', err)
+        }
+      })
+      .finally(() => {
+        if (!ignore) {
+          setExtractionLoading(false)
+        }
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [item])
+
+  useEffect(() => {
     setErrorMsg(null)
   }, [lines, entryDate, description])
+
+  useEffect(() => {
+    if (!item) return
+
+    const payloadLines =
+      item.edited_payload?.lines || originalPayload.lines || originalPayload.journal_lines
+    setEntryDate(
+      item.edited_payload?.entry_date || extractedDate || new Date().toISOString().split('T')[0]
+    )
+    setDescription(
+      item.edited_payload?.description || item.title || `Journal for ${extractedVendor}`
+    )
+    setLines(
+      payloadLines || [
+        {
+          account_code: '5100',
+          account_name: 'Office Supplies Expense',
+          debit_amount: Number(extractedTotal) || 0,
+          credit_amount: 0,
+          description: `Expense: ${extractedVendor}`,
+        },
+        {
+          account_code: '1010',
+          account_name: 'Bank Account',
+          debit_amount: 0,
+          credit_amount: Number(extractedTotal) || 0,
+          description: `Payment to ${extractedVendor}`,
+        },
+      ]
+    )
+  }, [item, latestExtraction])
 
   if (!item) return null
 
@@ -175,271 +299,537 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
     }
   }
 
-  const confPercent = Math.round((item.confidence_score || 0) * 100)
+  const confPercent = Math.round(
+    Number(latestExtraction?.confidence_score ?? item.confidence_score ?? 0) * 100
+  )
+  const arithmeticOk =
+    Number(extractedSubtotal) > 0 && Number(extractedTotal) > 0
+      ? Math.abs(Number(extractedSubtotal) + Number(extractedTax || 0) - Number(extractedTotal)) <
+        0.05
+      : isBalanced
+  const taxOk = Number(extractedTax || 0) >= 0
+  const paymentOk = String(paymentStatus).toLowerCase() === 'paid'
+  const statusText = item.status === 'pending' ? 'Needs Review' : item.status.replace('_', ' ')
+  const statusTone =
+    item.status === 'pending'
+      ? 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+      : item.status === 'posted'
+        ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+        : 'bg-slate-800 text-slate-300 border-slate-700'
+
+  const formatMoney = (value: unknown) =>
+    `${Number(value || 0).toLocaleString('id-ID')} ${extractedCurrency}`
+
+  const labelize = (value: string) =>
+    value
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase())
+      .trim()
+
+  const getLineDescription = (line: Record<string, any>, index: number) =>
+    line.description || line.name || line.item || line.account_name || `Line item ${index + 1}`
+
+  const getLineAmount = (line: Record<string, any>) =>
+    line.amount ?? line.total ?? line.line_total ?? line.debit_amount ?? line.credit_amount ?? 0
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-      <div className="relative max-w-6xl w-full max-h-[92vh] bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col my-auto">
+    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+      <div className="relative max-w-7xl w-full max-h-[94vh] bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col my-auto">
         {/* Header */}
-        <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-lg font-bold text-white">{item.title}</h3>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 uppercase tracking-wider">
-                  {item.priority} Priority
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Review ID: <span className="font-mono text-slate-300">{item.id}</span>
+        <div className="px-4 sm:px-6 py-4 bg-slate-950/90 border-b border-slate-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all shrink-0"
+              title="Back to documents"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-wider text-slate-500 font-bold">
+                Documents
               </p>
+              <h3 className="text-base sm:text-lg font-bold text-white truncate">
+                {sourceFilename}
+              </h3>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-all"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+            <span
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold capitalize ${statusTone}`}
+            >
+              <span className="w-2 h-2 rounded-full bg-current" />
+              {statusText}
+            </span>
+            <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-800/80 text-slate-300 border border-slate-700 uppercase tracking-wider">
+              {item.priority} Priority
+            </span>
+          </div>
         </div>
 
         {/* Modal Scrollable Body */}
-        <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column: Extraction & Rationale (5 cols) */}
-          <div className="lg:col-span-5 space-y-4">
-            {/* Extracted Metadata Card */}
-            <div className="p-5 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
-              <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
-                <FileText className="w-4 h-4 text-indigo-400" />
-                AI Extraction Summary
-              </h4>
-
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div>
-                  <span className="text-slate-500 block text-[11px]">Vendor Name</span>
-                  <span className="font-semibold text-slate-200">{extractedVendor}</span>
+        <div className="flex-1 overflow-y-auto">
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(220px,0.9fr)_minmax(420px,1.55fr)_minmax(260px,0.95fr)]">
+            {/* Left Column: Source Document */}
+            <section className="min-h-[280px] xl:min-h-[620px] border-b xl:border-b-0 xl:border-r border-slate-800 bg-slate-950/40 p-4 sm:p-5">
+              <div className="h-full rounded-xl border border-slate-800 bg-slate-950/70 overflow-hidden flex flex-col">
+                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
+                      Source Document
+                    </p>
+                    <p className="text-xs font-semibold text-slate-200 truncate">
+                      {sourceFilename}
+                    </p>
+                  </div>
+                  <FileText className="w-4 h-4 text-indigo-300 shrink-0" />
                 </div>
-                <div>
-                  <span className="text-slate-500 block text-[11px]">Invoice Date</span>
-                  <span className="font-semibold text-slate-200">{extractedDate || 'N/A'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block text-[11px]">Total Amount</span>
-                  <span className="font-bold text-emerald-400">
-                    {Number(extractedTotal).toLocaleString()} {extractedCurrency}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block text-[11px]">Tax Amount</span>
-                  <span className="font-semibold text-slate-300">
-                    {Number(extractedTax).toLocaleString()} {extractedCurrency}
-                  </span>
-                </div>
-              </div>
-            </div>
+                <div className="flex-1 p-4 flex flex-col items-center justify-center text-center">
+                  <div className="w-full max-w-[210px] aspect-[3/4] rounded-lg bg-slate-100 text-slate-900 shadow-xl shadow-black/30 border border-slate-700 overflow-hidden flex flex-col">
+                    <div className="h-8 bg-slate-200 border-b border-slate-300 flex items-center px-3 gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-rose-400" />
+                      <span className="w-2 h-2 rounded-full bg-amber-400" />
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    </div>
+                    <div className="flex-1 p-4 text-left space-y-3">
+                      <div className="h-3 w-2/3 bg-slate-800 rounded" />
+                      <div className="space-y-1.5">
+                        <div className="h-2 w-full bg-slate-300 rounded" />
+                        <div className="h-2 w-5/6 bg-slate-300 rounded" />
+                        <div className="h-2 w-4/6 bg-slate-300 rounded" />
+                      </div>
+                      <div className="mt-5 space-y-2">
+                        <div className="flex justify-between gap-3">
+                          <div className="h-2 w-20 bg-slate-300 rounded" />
+                          <div className="h-2 w-12 bg-slate-400 rounded" />
+                        </div>
+                        <div className="flex justify-between gap-3">
+                          <div className="h-2 w-16 bg-slate-300 rounded" />
+                          <div className="h-2 w-14 bg-slate-400 rounded" />
+                        </div>
+                      </div>
+                      <div className="pt-4 mt-4 border-t border-slate-300 flex justify-between">
+                        <div className="h-2.5 w-12 bg-slate-700 rounded" />
+                        <div className="h-2.5 w-16 bg-slate-700 rounded" />
+                      </div>
+                    </div>
+                  </div>
 
-            {/* Confidence Score & AI Rationale Card */}
-            <div className="p-5 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <Info className="w-4 h-4 text-indigo-400" />
-                  Agent Confidence & Rationale
-                </h4>
-                <span className="font-bold text-xs text-amber-400">{confPercent}% Match</span>
-              </div>
+                  <p className="text-xs text-slate-400 mt-4 max-w-[260px]">
+                    Preview dokumen asli ditampilkan sebagai referensi saat reviewer mencocokkan
+                    field hasil ekstraksi.
+                  </p>
 
-              {/* Progress bar */}
-              <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                <div
-                  className={`h-full rounded-full ${
-                    confPercent >= 85
-                      ? 'bg-emerald-400'
-                      : confPercent >= 70
-                        ? 'bg-amber-400'
-                        : 'bg-rose-400'
-                  }`}
-                  style={{ width: `${confPercent}%` }}
-                />
-              </div>
-
-              <p className="text-xs text-slate-300 bg-slate-900/90 p-3 rounded-lg border border-slate-800/80 leading-relaxed italic">
-                "{item.summary}"
-              </p>
-
-              {item.suggested_action && (
-                <div className="text-xs text-indigo-300 bg-indigo-500/10 p-2.5 rounded-lg border border-indigo-500/20 flex items-start gap-2">
-                  <Sparkles className="w-4 h-4 shrink-0 text-indigo-400 mt-0.5" />
-                  <span>
-                    <strong>Suggested Action:</strong> {item.suggested_action}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {/* Risk Flags Notice */}
-            {item.risk_flags && item.risk_flags.length > 0 && (
-              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 space-y-2">
-                <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <ShieldAlert className="w-4 h-4 text-amber-400" />
-                  Triggered Guardrail Flags
-                </h4>
-                <div className="flex flex-wrap gap-1.5">
-                  {item.risk_flags.map((flag) => (
-                    <span
-                      key={flag}
-                      className="px-2.5 py-1 rounded bg-amber-500/20 text-amber-200 text-xs font-medium border border-amber-500/30"
+                  {sourcePath && (
+                    <a
+                      href={sourcePath}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-indigo-300 transition-all"
                     >
-                      ⚠️ {flag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Right Column: Editable Journal Entry Form (7 cols) */}
-          <div className="lg:col-span-7 space-y-4">
-            <div className="p-5 rounded-xl bg-slate-950/60 border border-slate-800 space-y-4">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-indigo-400" />
-                  Editable Journal Entry Payload
-                </h4>
-                <span className="text-[11px] text-slate-400">Deterministic Double-Entry</span>
-              </div>
-
-              {/* Form Controls: Date & Description */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Entry Date
-                  </label>
-                  <input
-                    type="date"
-                    value={entryDate}
-                    onChange={(e) => setEntryDate(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Journal Description / Memo
-                  </label>
-                  <input
-                    type="text"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-              </div>
-
-              {/* Lines Table */}
-              <div className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-900/60">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 font-semibold uppercase text-[10px]">
-                    <tr>
-                      <th className="py-2.5 px-3">Account Code</th>
-                      <th className="py-2.5 px-3">Account Name</th>
-                      <th className="py-2.5 px-3 text-right">Debit (IDR)</th>
-                      <th className="py-2.5 px-3 text-right">Credit (IDR)</th>
-                      <th className="py-2.5 px-3 text-center">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/80">
-                    {lines.map((line, idx) => (
-                      <tr key={idx} className="hover:bg-slate-900">
-                        <td className="py-2 px-3 w-28">
-                          <input
-                            type="text"
-                            value={line.account_code}
-                            onChange={(e) => handleLineChange(idx, 'account_code', e.target.value)}
-                            className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-slate-100 font-mono focus:border-indigo-500"
-                          />
-                        </td>
-                        <td className="py-2 px-3">
-                          <input
-                            type="text"
-                            value={line.account_name || ''}
-                            onChange={(e) => handleLineChange(idx, 'account_name', e.target.value)}
-                            className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-slate-100 focus:border-indigo-500"
-                          />
-                        </td>
-                        <td className="py-2 px-3 w-32">
-                          <input
-                            type="number"
-                            step="any"
-                            value={line.debit_amount || ''}
-                            onChange={(e) => handleLineChange(idx, 'debit_amount', e.target.value)}
-                            className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-emerald-400 font-bold text-right focus:border-indigo-500"
-                          />
-                        </td>
-                        <td className="py-2 px-3 w-32">
-                          <input
-                            type="number"
-                            step="any"
-                            value={line.credit_amount || ''}
-                            onChange={(e) => handleLineChange(idx, 'credit_amount', e.target.value)}
-                            className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-indigo-400 font-bold text-right focus:border-indigo-500"
-                          />
-                        </td>
-                        <td className="py-2 px-3 text-center w-12">
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveLine(idx)}
-                            className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                            title="Delete line"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Add Line & Balance Summary */}
-              <div className="flex items-center justify-between pt-1">
-                <button
-                  type="button"
-                  onClick={handleAddLine}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1 transition-all"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Add Line Item
-                </button>
-
-                <div className="flex items-center gap-4 text-xs font-mono">
-                  <div>
-                    <span className="text-slate-500">Debits: </span>
-                    <span className="font-bold text-emerald-400">
-                      {totalDebits.toLocaleString()}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500">Credits: </span>
-                    <span className="font-bold text-indigo-400">
-                      {totalCredits.toLocaleString()}
-                    </span>
-                  </div>
-
-                  {isBalanced ? (
-                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[11px] font-sans font-bold flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" /> BALANCED
-                    </span>
-                  ) : (
-                    <span className="px-2.5 py-0.5 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[11px] font-sans font-bold flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3" /> Δ {balanceDiff.toLocaleString()}
-                    </span>
+                      Open Source
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
                   )}
                 </div>
               </div>
-            </div>
+            </section>
+
+            {/* Middle Column: Extracted Information */}
+            <section className="border-b xl:border-b-0 xl:border-r border-slate-800 bg-slate-900 p-4 sm:p-6">
+              <div className="flex items-center justify-between gap-4 mb-6">
+                <div>
+                  <p className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-2">
+                    <ClipboardCheck className="w-4 h-4 text-indigo-400" />
+                    Extracted Information
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Hasil ekstraksi AI yang perlu diverifikasi sebelum posting.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsEditing((value) => !value)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-semibold transition-all"
+                >
+                  {isEditing ? 'Hide Editor' : 'Edit Fields'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
+                <div className="space-y-1">
+                  <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
+                    Document Type
+                  </span>
+                  <p className="text-sm font-semibold text-slate-100 capitalize">
+                    {labelize(String(documentType))}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
+                    Invoice Date
+                  </span>
+                  <p className="text-sm font-semibold text-slate-100">{extractedDate || 'N/A'}</p>
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
+                    Vendor
+                  </span>
+                  <p className="text-base font-bold text-white">{extractedVendor}</p>
+                </div>
+                 <div>
+                  <span className="block text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
+                    Payment Status
+                  </span>
+                  <p
+                    className={`mt-1.5 flex items-center gap-2 text-sm font-bold capitalize ${
+                      paymentOk ? 'text-emerald-300' : 'text-amber-300'
+                    }`}
+                  >
+                    <span
+                       className={`w-3 h-3 rounded-full ${paymentOk ? 'bg-emerald-400' : 'bg-amber-400'}`}
+                    />
+                    {labelize(String(paymentStatus))}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
+                    Currency
+                  </span>
+                  <p className="text-sm font-semibold text-slate-100">{extractedCurrency}</p>
+                </div>
+              </div>
+
+              <div className="mt-8 space-y-3">
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                  Line Items
+                </h4>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
+                  {lineItems.length > 0 ? (
+                    <div className="divide-y divide-slate-800/80">
+                      {lineItems.map((line: Record<string, any>, index: number) => (
+                        <div
+                          key={`${getLineDescription(line, index)}-${index}`}
+                          className="px-4 py-3 flex items-start justify-between gap-4 text-sm"
+                        >
+                          <div className="min-w-0">
+                            <p className="font-medium text-slate-100 truncate">
+                              {getLineDescription(line, index)}
+                            </p>
+                            {(line.quantity || line.unit_price) && (
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                Qty {line.quantity || '-'} x {formatMoney(line.unit_price || 0)}
+                              </p>
+                            )}
+                          </div>
+                          <span className="font-mono text-slate-200 shrink-0">
+                            {formatMoney(getLineAmount(line))}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="px-4 py-5 text-xs text-slate-500">
+                      Tidak ada line item terstruktur di payload. Reviewer masih bisa memvalidasi
+                      jurnal di editor.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6 ml-auto w-full sm:max-w-sm space-y-2 text-sm">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Subtotal</span>
+                  <span className="font-mono text-slate-200">{formatMoney(extractedSubtotal)}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>PPN / Tax</span>
+                  <span className="font-mono text-slate-200">{formatMoney(extractedTax)}</span>
+                </div>
+                <div className="border-t border-slate-700 pt-3 flex items-center justify-between">
+                  <span className="font-bold text-white uppercase tracking-wide">Total</span>
+                  <span className="font-mono text-lg font-bold text-emerald-300">
+                    {formatMoney(extractedTotal)}
+                  </span>
+                </div>
+              </div>
+
+              {isEditing && (
+                <div className="mt-6 p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <FileText className="w-4 h-4 text-indigo-400" />
+                      Editable Journal Entry Payload
+                    </h4>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full border text-[11px] font-bold flex items-center gap-1 ${
+                        isBalanced
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                      }`}
+                    >
+                      {isBalanced ? (
+                        <CheckCircle2 className="w-3 h-3" />
+                      ) : (
+                        <AlertTriangle className="w-3 h-3" />
+                      )}
+                      {isBalanced ? 'Balanced' : `Delta ${balanceDiff.toLocaleString()}`}
+                    </span>
+                  </div>
+
+                  {/* Form Controls: Date & Description */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                        Entry Date
+                      </label>
+                      <input
+                        type="date"
+                        value={entryDate}
+                        onChange={(e) => setEntryDate(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                        Journal Description / Memo
+                      </label>
+                      <input
+                        type="text"
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Lines Table */}
+                  <div className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-900/60">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 font-semibold uppercase text-[10px]">
+                        <tr>
+                          <th className="py-2.5 px-3">Account Code</th>
+                          <th className="py-2.5 px-3">Account Name</th>
+                          <th className="py-2.5 px-3 text-right">Debit (IDR)</th>
+                          <th className="py-2.5 px-3 text-right">Credit (IDR)</th>
+                          <th className="py-2.5 px-3 text-center">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/80">
+                        {lines.map((line, idx) => (
+                          <tr key={idx} className="hover:bg-slate-900">
+                            <td className="py-2 px-3 w-28">
+                              <input
+                                type="text"
+                                value={line.account_code}
+                                onChange={(e) =>
+                                  handleLineChange(idx, 'account_code', e.target.value)
+                                }
+                                className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-slate-100 font-mono focus:border-indigo-500"
+                              />
+                            </td>
+                            <td className="py-2 px-3">
+                              <input
+                                type="text"
+                                value={line.account_name || ''}
+                                onChange={(e) =>
+                                  handleLineChange(idx, 'account_name', e.target.value)
+                                }
+                                className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-slate-100 focus:border-indigo-500"
+                              />
+                            </td>
+                            <td className="py-2 px-3 w-32">
+                              <input
+                                type="number"
+                                step="any"
+                                value={line.debit_amount || ''}
+                                onChange={(e) =>
+                                  handleLineChange(idx, 'debit_amount', e.target.value)
+                                }
+                                className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-emerald-400 font-bold text-right focus:border-indigo-500"
+                              />
+                            </td>
+                            <td className="py-2 px-3 w-32">
+                              <input
+                                type="number"
+                                step="any"
+                                value={line.credit_amount || ''}
+                                onChange={(e) =>
+                                  handleLineChange(idx, 'credit_amount', e.target.value)
+                                }
+                                className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-indigo-400 font-bold text-right focus:border-indigo-500"
+                              />
+                            </td>
+                            <td className="py-2 px-3 text-center w-12">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveLine(idx)}
+                                className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                                title="Delete line"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Add Line & Balance Summary */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleAddLine}
+                      className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1 transition-all w-fit"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add Line Item
+                    </button>
+
+                    <div className="flex flex-wrap items-center gap-4 text-xs font-mono">
+                      <div>
+                        <span className="text-slate-500">Debits: </span>
+                        <span className="font-bold text-emerald-400">
+                          {totalDebits.toLocaleString()}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Credits: </span>
+                        <span className="font-bold text-indigo-400">
+                          {totalCredits.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            {/* Right Column: AI Insights */}
+            <section className="bg-slate-950/55 p-4 sm:p-5">
+              <div className="space-y-6">
+                <div>
+                  <p className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-400" />
+                    AI Insights
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Sinyal validasi otomatis dan hal yang perlu diperhatikan.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-end justify-between gap-3">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                      AI Confidence
+                    </span>
+                    <span className="text-lg font-bold text-white">{confPercent}%</span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${
+                        confPercent >= 85
+                          ? 'bg-emerald-400'
+                          : confPercent >= 70
+                            ? 'bg-amber-400'
+                            : 'bg-rose-400'
+                      }`}
+                      style={{ width: `${confPercent}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-start gap-3 text-sm">
+                    <CheckCircle2
+                      className={`w-4 h-4 mt-0.5 shrink-0 ${
+                        arithmeticOk ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    />
+                    <div>
+                      <p className="font-semibold text-slate-100">Arithmetic Check</p>
+                      <p className="text-xs text-slate-500">
+                        {arithmeticOk
+                          ? 'Subtotal + tax matches total.'
+                          : 'Total needs manual check.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 text-sm">
+                    <CheckCircle2
+                      className={`w-4 h-4 mt-0.5 shrink-0 ${
+                        taxOk ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    />
+                    <div>
+                      <p className="font-semibold text-slate-100">Tax Check</p>
+                      <p className="text-xs text-slate-500">
+                        {taxOk ? 'Tax amount is readable.' : 'Tax field needs review.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 text-sm">
+                    <CircleDollarSign
+                      className={`w-4 h-4 mt-0.5 shrink-0 ${
+                        paymentOk ? 'text-emerald-400' : 'text-amber-400'
+                      }`}
+                    />
+                    <div>
+                      <p className="font-semibold text-slate-100">Payment Status</p>
+                      <p className="text-xs text-slate-500">
+                        {paymentOk
+                          ? 'Marked as paid from extracted data.'
+                          : 'Payment status is uncertain.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 text-sm">
+                    <ShieldAlert
+                      className={`w-4 h-4 mt-0.5 shrink-0 ${
+                        warnings.length > 0 ? 'text-amber-400' : 'text-emerald-400'
+                      }`}
+                    />
+                    <div>
+                      <p className="font-semibold text-slate-100">Guardrail Flags</p>
+                      <p className="text-xs text-slate-500">
+                        {warnings.length > 0
+                          ? `${warnings.length} item needs attention.`
+                          : 'No guardrail flags detected.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {warnings.length > 0 && (
+                  <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3 space-y-2">
+                    {warnings.map((flag: string) => (
+                      <div key={flag} className="flex items-start gap-2 text-xs text-amber-200">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" />
+                        <span>{labelize(String(flag))}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="rounded-xl bg-slate-900/80 border border-slate-800 p-3 text-xs text-slate-300 leading-relaxed">
+                  <div className="flex items-start gap-2">
+                    <Info className="w-4 h-4 text-indigo-400 mt-0.5 shrink-0" />
+                    <span>
+                      {item.summary || originalPayload.rationale || 'No AI rationale provided.'}
+                    </span>
+                  </div>
+                </div>
+
+                {item.suggested_action && (
+                  <div className="text-xs text-indigo-300 bg-indigo-500/10 p-3 rounded-xl border border-indigo-500/20 flex items-start gap-2">
+                    <Sparkles className="w-4 h-4 shrink-0 text-indigo-400 mt-0.5" />
+                    <span>{item.suggested_action}</span>
+                  </div>
+                )}
+              </div>
+            </section>
           </div>
         </div>
 
@@ -452,71 +842,70 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
         )}
 
         {/* Footer Action Bar */}
-        <div className="px-6 py-4 bg-slate-950/90 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
-          {showRejectInput ? (
-            <div className="flex items-center gap-2 w-full sm:w-auto flex-1">
-              <input
-                type="text"
-                placeholder="Reason for rejection..."
-                value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
-                className="flex-1 px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-rose-500"
-              />
-              <button
-                type="button"
-                onClick={handleReject}
-                disabled={submitting}
-                className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs transition-all flex items-center gap-1"
-              >
-                {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Confirm Reject
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowRejectInput(false)}
-                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setShowRejectInput(true)}
-              className="px-4 py-2 rounded-xl bg-rose-600/10 hover:bg-rose-600/20 border border-rose-500/20 text-rose-300 font-semibold text-xs transition-all"
-            >
-              Reject Item
-            </button>
-          )}
+        <div className="px-4 sm:px-6 py-4 bg-slate-950/90 border-t border-slate-800 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
+          <p className="text-xs text-slate-400 max-w-xl">
+            AI extracted this document. Review highlighted fields, then confirm or edit before
+            posting to the ledger.
+          </p>
 
-          <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-            <button
-              type="button"
-              onClick={handleApproveAsIs}
-              disabled={submitting}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs transition-all flex items-center gap-1.5 disabled:opacity-50"
-            >
-              {submitting ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-              )}
-              Approve As-Is (AI Suggestion)
-            </button>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            {showRejectInput ? (
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <input
+                  type="text"
+                  placeholder="Reason for rejection..."
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  className="min-w-0 flex-1 sm:w-64 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-rose-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleReject}
+                  disabled={submitting}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs transition-all flex items-center gap-1 whitespace-nowrap"
+                >
+                  {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  Reject
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowRejectInput(false)}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowRejectInput(true)}
+                className="px-4 py-2 rounded-xl bg-rose-600/10 hover:bg-rose-600/20 border border-rose-500/20 text-rose-300 font-semibold text-xs transition-all"
+              >
+                Reject Item
+              </button>
+            )}
 
             <button
               type="button"
-              onClick={handleSaveAndApprove}
-              disabled={submitting || !isBalanced}
-              className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-semibold text-xs transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => setIsEditing((value) => !value)}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs transition-all"
+            >
+              {isEditing ? 'Review Summary' : 'Edit Fields'}
+            </button>
+
+            <button
+              type="button"
+              onClick={isEditing ? handleSaveAndApprove : handleApproveAsIs}
+              disabled={submitting || (isEditing && !isBalanced)}
+              className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <CheckCircle2 className="w-3.5 h-3.5" />
               )}
-              Save Edits & Post to Ledger
-            </button>
+              {isEditing ? 'Save Edits & Post' : 'Confirm Extraction'}
+              </button>
           </div>
         </div>
       </div>

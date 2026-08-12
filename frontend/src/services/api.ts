@@ -31,6 +31,24 @@ export interface DocumentUploadResponse {
   message?: string
 }
 
+export interface DocumentExtractionResponse {
+  id: string
+  document_id: string
+  vendor_name?: string | null
+  transaction_date?: string | null
+  subtotal_amount?: number | null
+  tax_amount?: number | null
+  total_amount?: number | null
+  currency: string
+  line_items?: Record<string, any> | any[] | null
+  provider_metadata?: Record<string, any> | null
+  confidence_score: number
+  rationale?: string | null
+  status: string
+  created_at: string
+  updated_at: string
+}
+
 // Review Item Interfaces
 export interface JournalLineEditPayload {
   account_code: string
@@ -234,6 +252,16 @@ export async function fetchDocuments(params?: {
     throw new Error('Failed to fetch document list')
   }
 
+  return response.json()
+}
+
+export async function fetchLatestDocumentExtraction(
+  documentId: string
+): Promise<DocumentExtractionResponse> {
+  const response = await fetch(`${API_BASE_URL}/documents/${documentId}/extractions/latest`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch latest extraction for document ${documentId}`)
+  }
   return response.json()
 }
 
