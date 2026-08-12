@@ -12,7 +12,7 @@ concurrency:
 
 env:
   # Backend test environment (uses in-memory SQLite, no external DB needed)
-  DATABASE_URL: sqlite:///:memory:
+  DATABASE_URL: "sqlite:///:memory:"
   ENVIRONMENT: test
   LOG_LEVEL: WARNING
   SECRET_KEY: ci_test_secret_key_not_for_production
