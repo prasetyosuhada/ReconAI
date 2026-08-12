@@ -15,13 +15,18 @@ from fastapi import (
     UploadFile,
     status,
 )
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.audit import AuditEvent
 from app.models.document import Document
-from app.schemas.document import DocumentResponse
+from app.schemas.document import (
+    DocumentDetailResponse,
+    DocumentListResponse,
+    DocumentResponse,
+)
 from app.services.document_processing import process_document_background
 
 logger = logging.getLogger(__name__)
@@ -43,6 +48,95 @@ def _get_upload_dir() -> Path:
     """Ensure upload storage directory exists."""
     UPLOAD_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     return UPLOAD_STORAGE_DIR
+
+
+@router.get(
+    "",
+    response_model=DocumentListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List uploaded documents with optional status filter and pagination",
+)
+def list_documents(
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+) -> DocumentListResponse:
+    """List uploaded documents in repository."""
+    query = db.query(Document)
+    if status:
+        query = query.filter(Document.status == status)
+
+    total_count = query.with_entities(func.count(Document.id)).scalar() or 0
+    records = (
+        query.order_by(Document.uploaded_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    items = [
+        DocumentDetailResponse(
+            id=str(d.id),
+            original_filename=d.original_filename,
+            stored_file_path=d.stored_file_path,
+            mime_type=d.mime_type,
+            file_size_bytes=d.file_size_bytes,
+            document_type=d.document_type,
+            status=d.status,
+            uploaded_at=d.uploaded_at,
+            created_at=d.created_at,
+            updated_at=d.updated_at,
+        )
+        for d in records
+    ]
+
+    return DocumentListResponse(
+        items=items,
+        total=total_count,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/{document_id}",
+    response_model=DocumentDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get single document details",
+)
+def get_document_detail(
+    document_id: str,
+    db: Session = Depends(get_db),
+) -> DocumentDetailResponse:
+    """Fetch document details by UUID."""
+    try:
+        doc_uuid = uuid.UUID(document_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid UUID format for document_id.",
+        )
+
+    doc = db.query(Document).filter(Document.id == doc_uuid).first()
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document [{document_id}] not found.",
+        )
+
+    return DocumentDetailResponse(
+        id=str(doc.id),
+        original_filename=doc.original_filename,
+        stored_file_path=doc.stored_file_path,
+        mime_type=doc.mime_type,
+        file_size_bytes=doc.file_size_bytes,
+        document_type=doc.document_type,
+        status=doc.status,
+        uploaded_at=doc.uploaded_at,
+        created_at=doc.created_at,
+        updated_at=doc.updated_at,
+    )
 
 
 @router.post(
