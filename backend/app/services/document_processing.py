@@ -115,9 +115,12 @@ def process_document_background(
         db.refresh(extraction)
 
         # 2. Save Proposed Journal Entry using deterministic guardrails
-        proposed_journal = final_state.get("journal_entry") or final_state.get(
-            "proposed_journal"
+        proposed_journal = (
+            final_state.get("journal_entry")
+            or final_state.get("proposed_journal")
+            or final_state.get("journal_lines")
         )
+        print("PROPOSED JOURNAL:\n", proposed_journal)
         saved_journal_id = None
 
         if proposed_journal:

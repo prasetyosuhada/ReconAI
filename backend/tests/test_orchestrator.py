@@ -207,6 +207,7 @@ def test_document_processing_graph_end_to_end_success(
     assert final_state["total_amount"] == 555000.0
     assert final_state["status"] == "ready_to_post"
     assert final_state["needs_review"] is False
+    assert final_state["proposed_journal"] == final_state["journal_lines"]
 
 
 def test_reconciliation_graph_end_to_end_unmatched():

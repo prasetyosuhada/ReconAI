@@ -93,7 +93,7 @@ def test_process_document_background_success(
         "rationale": "High confidence extraction",
         "status": "extracted",
         "needs_review": False,
-        "journal_entry": [
+        "journal_lines": [
             {
                 "account_code": "5100",
                 "account_name": "Supplies",

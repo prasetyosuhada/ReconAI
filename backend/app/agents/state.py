@@ -97,6 +97,7 @@ class BookkeepingState(TypedDict, total=False):
     entry_date: str | None
     entry_description: str | None
     journal_lines: list[dict[str, Any]]
+    proposed_journal: list[dict[str, Any]]
 
     # Validation & Risk
     is_balanced: bool

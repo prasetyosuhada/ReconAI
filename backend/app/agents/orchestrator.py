@@ -234,11 +234,14 @@ def bookkeeping_node(state: BookkeepingState) -> BookkeepingState:
         else ("ready_to_post" if next_step == "ready_to_post" else "failed")
     )
 
+    journal_lines = [jl.model_dump() for jl in result.journal_lines]
+
     return {
         **state,
         "entry_date": result.entry_date,
         "entry_description": result.description,
-        "journal_lines": [jl.model_dump() for jl in result.journal_lines],
+        "journal_lines": journal_lines,
+        "proposed_journal": journal_lines,
         "is_balanced": result.is_balanced,
         "uses_sensitive_account": result.uses_sensitive_account,
         "risk_flags": result.risk_flags,
