@@ -8,6 +8,7 @@ from typing import Any
 from app.agents.orchestrator import document_processing_graph
 from app.db.session import SessionLocal
 from app.models.audit import AuditEvent
+from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.review import ReviewItem
 from app.services.accounting import save_journal_entry_safely
@@ -75,6 +76,30 @@ def process_document_background(
             original_filename,
         )
 
+        # Load active Chart of Accounts from DB to provide context to Bookkeeping Agent
+        coa_rows = (
+            db.query(ChartOfAccount)
+            .filter(ChartOfAccount.is_active == True)  # noqa: E712
+            .order_by(ChartOfAccount.account_code)
+            .all()
+        )
+        coa_list = [
+            {
+                "account_code": coa.account_code,
+                "account_name": coa.account_name,
+                "account_type": coa.account_type,
+                "normal_balance": coa.normal_balance,
+                "is_sensitive": coa.is_sensitive,
+                "description": coa.description,
+            }
+            for coa in coa_rows
+        ]
+        logger.info(
+            "Document %s: loaded %d active COA entries from DB.",
+            document_id,
+            len(coa_list),
+        )
+
         initial_state: dict[str, Any] = {
             "document_id": str(doc_uuid),
             "original_filename": original_filename,
@@ -82,6 +107,7 @@ def process_document_background(
             "stored_file_path": stored_file_path,
             "raw_text": raw_text or None,
             "status": "extracting",
+            "chart_of_accounts": coa_list,
         }
         print("INITIAL STATE:\n", initial_state)
 
