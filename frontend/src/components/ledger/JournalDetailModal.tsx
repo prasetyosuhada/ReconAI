@@ -1,17 +1,43 @@
 import React, { useEffect, useState } from 'react'
-import { BookOpen, Info, Loader2, ShieldAlert, Sparkles, X } from 'lucide-react'
-import type { JournalEntryResponse } from '../../services/api'
-import { fetchJournalEntryDetail } from '../../services/api'
+import { ArrowLeft, BookOpen, CheckCircle2, Loader2, Send, Sparkles } from 'lucide-react'
+import type { DocumentExtractionResponse, JournalEntryResponse } from '../../services/api'
+import {
+  fetchJournalEntryDetail,
+  fetchLatestDocumentExtraction,
+  postJournalEntry,
+} from '../../services/api'
+import { BookkeepingJournalPanel } from '../shared/BookkeepingJournalPanel'
 
 interface JournalDetailModalProps {
   entryId: string | null
   onClose: () => void
+  onPosted?: () => void
 }
 
-export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({ entryId, onClose }) => {
+const statusTone = (status: string) => {
+  switch (status) {
+    case 'posted':
+      return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+    case 'review_required':
+    case 'bookkeeping_review_required':
+      return 'bg-rose-500/10 text-rose-300 border-rose-500/20'
+    default:
+      return 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+  }
+}
+
+export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
+  entryId,
+  onClose,
+  onPosted,
+}) => {
   const [detail, setDetail] = useState<JournalEntryResponse | null>(null)
+  const [extraction, setExtraction] = useState<DocumentExtractionResponse | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+  const [posting, setPosting] = useState<boolean>(false)
+  const [postError, setPostError] = useState<string | null>(null)
+  const [postSuccess, setPostSuccess] = useState<boolean>(false)
 
   useEffect(() => {
     if (!entryId) return
@@ -19,9 +45,19 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({ entryId,
     const loadDetail = async () => {
       setLoading(true)
       setError(null)
+      setPostError(null)
+      setPostSuccess(false)
       try {
         const res = await fetchJournalEntryDetail(entryId)
         setDetail(res)
+        if (res.document_id) {
+          const latestExtraction = await fetchLatestDocumentExtraction(res.document_id).catch(
+            () => null
+          )
+          setExtraction(latestExtraction)
+        } else {
+          setExtraction(null)
+        }
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : 'Failed to load journal detail')
       } finally {
@@ -34,143 +70,152 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({ entryId,
 
   if (!entryId) return null
 
+  const lines =
+    detail?.lines?.map((line) => ({
+      id: line.id,
+      line_number: line.line_number,
+      account_code: line.account_code,
+      account_name: line.account_name,
+      debit_amount: line.debit_amount,
+      credit_amount: line.credit_amount,
+      description: line.description,
+    })) ?? []
+  const computedTotalDebit = lines.reduce((sum, line) => sum + (line.debit_amount ?? 0), 0)
+  const computedTotalCredit = lines.reduce((sum, line) => sum + (line.credit_amount ?? 0), 0)
+  const isBalanced = Math.abs(computedTotalDebit - computedTotalCredit) < 0.01
+  const canPost = detail?.status === 'draft' || detail?.status === 'ready_to_post'
+  const rawLineItems = Array.isArray(extraction?.line_items)
+    ? extraction.line_items
+    : Array.isArray((extraction?.line_items as Record<string, any> | undefined)?.items)
+      ? (extraction?.line_items as Record<string, any>).items
+      : []
+
+  const handlePost = async () => {
+    if (!entryId) return
+    setPosting(true)
+    setPostError(null)
+    try {
+      await postJournalEntry(entryId)
+      setPostSuccess(true)
+      const updated = await fetchJournalEntryDetail(entryId)
+      setDetail(updated)
+      onPosted?.()
+    } catch (err: unknown) {
+      setPostError(err instanceof Error ? err.message : 'Failed to post journal entry')
+    } finally {
+      setPosting(false)
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-      <div className="relative max-w-4xl w-full bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col my-auto">
-        {/* Header */}
-        <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
-              <BookOpen className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-white">Journal Entry Details</h3>
-              <p className="text-xs text-slate-400 font-mono">ID: {entryId}</p>
+    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-start justify-center p-3 sm:p-4 overflow-y-auto">
+      <div className="relative w-full max-w-7xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden flex flex-col my-4 sm:my-6">
+        <div className="px-4 sm:px-6 py-4 bg-slate-950 border-b border-slate-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all shrink-0"
+              title="Back to general ledger"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">
+                General Ledger
+              </p>
+              <h2 className="text-base sm:text-lg font-bold text-white truncate">
+                Journal Entry Details
+              </h2>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-all"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold bg-indigo-500/10 text-indigo-300 border-indigo-500/20">
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              Ready Workflow
+            </span>
+            {detail && (
+              <span
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold capitalize ${statusTone(
+                  detail.status
+                )}`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                {detail.status.replace(/_/g, ' ')}
+              </span>
+            )}
+          </div>
         </div>
 
-        {/* Modal Content */}
-        <div className="p-6 space-y-5 max-h-[80vh] overflow-y-auto">
+        <div className="max-h-[80vh] overflow-y-auto">
           {loading ? (
-            <div className="py-12 text-center text-slate-400 space-y-2">
+            <div className="py-16 text-center text-slate-400 space-y-2">
               <Loader2 className="w-8 h-8 animate-spin text-indigo-400 mx-auto" />
               <p className="text-xs">Fetching journal entry lines...</p>
             </div>
           ) : error ? (
-            <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
+            <div className="m-6 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
               {error}
             </div>
           ) : detail ? (
-            <>
-              {/* Entry Meta Card */}
-              <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-                <div>
-                  <span className="text-slate-500 block text-[11px]">Entry Date</span>
-                  <span className="font-bold text-slate-200 font-mono">{detail.entry_date}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block text-[11px]">Status</span>
-                  <span className="font-semibold text-emerald-400 capitalize">{detail.status}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block text-[11px]">Agent Origin</span>
-                  <span className="font-semibold text-indigo-300 flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-indigo-400" />
-                    {detail.agent_name || 'Bookkeeping Agent'}
-                  </span>
-                </div>
-                <div className="sm:col-span-3 border-t border-slate-800/80 pt-3">
-                  <span className="text-slate-500 block text-[11px]">Description / Memo</span>
-                  <p className="font-semibold text-slate-100 text-sm mt-0.5 font-sans">
-                    {detail.description}
-                  </p>
-                </div>
-              </div>
-
-              {/* Rationale & Risk Flags */}
-              {detail.rationale && (
-                <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs text-indigo-200 space-y-1">
-                  <div className="flex items-center gap-1.5 font-bold text-indigo-300">
-                    <Info className="w-4 h-4 text-indigo-400" /> AI Bookkeeping Rationale:
-                  </div>
-                  <p className="italic text-slate-300">"{detail.rationale}"</p>
-                </div>
+            <BookkeepingJournalPanel
+              vendorName={extraction?.vendor_name || detail.description || 'Journal Entry'}
+              transactionDate={extraction?.transaction_date || detail.entry_date}
+              totalAmount={
+                extraction?.total_amount || Math.max(computedTotalDebit, computedTotalCredit)
+              }
+              currency={extraction?.currency || 'IDR'}
+              sourceLineItems={rawLineItems}
+              lines={lines}
+              confidenceScore={Math.round(
+                Number(detail.confidence_score ?? 0) * 100
               )}
-
-              {detail.risk_flags && detail.risk_flags.length > 0 && (
-                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
-                  <div className="flex flex-wrap gap-1">
-                    {detail.risk_flags.map((flag) => (
-                      <span
-                        key={flag}
-                        className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-[10px]"
-                      >
-                        {flag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Journal Lines Table */}
-              <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950">
-                <table className="w-full text-left text-xs font-mono">
-                  <thead className="bg-slate-900 text-slate-400 border-b border-slate-800 font-semibold uppercase text-[10px] font-sans">
-                    <tr>
-                      <th className="py-2.5 px-3">#</th>
-                      <th className="py-2.5 px-3">Account Code</th>
-                      <th className="py-2.5 px-3">Account Name</th>
-                      <th className="py-2.5 px-3 text-right">Debit (IDR)</th>
-                      <th className="py-2.5 px-3 text-right">Credit (IDR)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/80">
-                    {detail.lines?.map((line) => (
-                      <tr key={line.id} className="hover:bg-slate-900/60">
-                        <td className="py-2.5 px-3 text-slate-500">{line.line_number}</td>
-                        <td className="py-2.5 px-3 font-bold text-slate-200">
-                          {line.account_code}
-                        </td>
-                        <td className="py-2.5 px-3 font-sans text-slate-300">
-                          {line.account_name}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-bold text-emerald-400">
-                          {line.debit_amount > 0 ? line.debit_amount.toLocaleString() : '-'}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-bold text-indigo-400">
-                          {line.credit_amount > 0 ? line.credit_amount.toLocaleString() : '-'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot className="bg-slate-900/90 font-bold border-t border-slate-800">
-                    <tr>
-                      <td colSpan={3} className="py-3 px-3 font-sans text-slate-300">
-                        Total Balance Verification
-                      </td>
-                      <td className="py-3 px-3 text-right text-emerald-400 font-mono">
-                        IDR {detail.total_debit.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-3 text-right text-indigo-400 font-mono">
-                        IDR {detail.total_credit.toLocaleString()}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </>
+              rationale={detail.rationale || undefined}
+              riskFlags={detail.risk_flags || []}
+            />
           ) : null}
         </div>
+
+        {postError && (
+          <div className="px-6 py-2.5 bg-rose-500/10 border-t border-rose-500/20 text-rose-300 text-xs">
+            {postError}
+          </div>
+        )}
+
+        {postSuccess && (
+          <div className="px-6 py-2.5 bg-emerald-500/10 border-t border-emerald-500/20 text-emerald-300 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            Journal entry successfully posted to the general ledger.
+          </div>
+        )}
+
+        {detail && (
+          <div className="px-4 sm:px-6 py-4 bg-slate-950 border-t border-slate-800 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
+            <p className="text-xs text-slate-400 max-w-xl">
+              High-confidence bookkeeping uses the same review surface as manual review, with
+              posting as the final action.
+            </p>
+
+            {canPost && !postSuccess && (
+              <button
+                type="button"
+                id="journal-post-btn"
+                onClick={handlePost}
+                disabled={posting || !isBalanced}
+                title={!isBalanced ? 'Cannot post: journal entry is unbalanced' : undefined}
+                className="shrink-0 px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {posting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+                {posting ? 'Posting...' : 'Post to Ledger'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
