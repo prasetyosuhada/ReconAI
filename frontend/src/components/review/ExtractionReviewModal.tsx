@@ -27,7 +27,7 @@ import {
   rejectReviewItem,
 } from '../../services/api'
 
-interface ReviewDetailModalProps {
+interface ExtractionReviewModalProps {
   item: ReviewItemResponse | null
   onClose: () => void
   onResolved: () => void
@@ -45,7 +45,7 @@ interface ExtractionDraftPayload {
   line_items: Record<string, any>[]
 }
 
-export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
+export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
   item,
   onClose,
   onResolved,
@@ -73,6 +73,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
     extractionPayload.subtotal_amount ||
     Math.max(Number(extractedTotal || 0) - Number(extractedTax || 0), 0)
   const extractedCurrency = extractionPayload.currency || 'IDR'
+  const extractedRationale = extractionPayload.rationale || ''
   const documentType = extractionPayload.document_type || 'Invoice / Receipt'
   const sourceFilename =
     extractionPayload.original_filename ||
@@ -444,7 +445,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
         : 'bg-slate-800 text-slate-300 border-slate-700'
 
   const formatMoney = (value: unknown) =>
-    `${Number(value || 0).toLocaleString('id-ID')} ${extractedCurrency}`
+    `${extractedCurrency} ${Number(value || 0).toLocaleString('id-ID')}`
 
   const labelize = (value: string) =>
     value
@@ -544,8 +545,8 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                   </div>
 
                   <p className="text-xs text-slate-400 mt-4 max-w-[260px]">
-                    Preview dokumen asli ditampilkan sebagai referensi saat reviewer mencocokkan
-                    field hasil ekstraksi.
+                    Original document preview is displayed as a reference while the reviewer verifies
+                    extracted fields.
                   </p>
 
                   {sourcePath && (
@@ -573,8 +574,8 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                   </p>
                   <p className="text-xs text-slate-500 mt-1">
                     {extractionLoading
-                      ? 'Memuat hasil ekstraksi terbaru...'
-                      : 'Hasil ekstraksi AI yang perlu diverifikasi sebelum posting.'}
+                      ? 'Loading latest extraction results...'
+                      : 'AI extraction results requiring verification before proceeding.'}
                   </p>
                 </div>
                 <button
@@ -787,8 +788,8 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                     </div>
                   ) : (
                     <div className="px-4 py-5 text-xs text-slate-500">
-                      Tidak ada line item terstruktur di payload. Reviewer masih bisa memvalidasi
-                      jurnal di editor.
+                      No structured line items in payload. Reviewer can still validate or add items
+                      in the editor.
                     </div>
                   )}
                 </div>
@@ -814,7 +815,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                   )}
                 </div>
                 <div className="flex items-center justify-between text-slate-400">
-                  <span>PPN / Tax</span>
+                  <span>Tax</span>
                   {isEditing && isExtractionReview ? (
                     <input
                       type="number"
@@ -901,8 +902,8 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                         <tr>
                           <th className="py-2.5 px-3">Account Code</th>
                           <th className="py-2.5 px-3">Account Name</th>
-                          <th className="py-2.5 px-3 text-right">Debit (IDR)</th>
-                          <th className="py-2.5 px-3 text-right">Credit (IDR)</th>
+                          <th className="py-2.5 px-3 text-right">Debit ({extractedCurrency})</th>
+                          <th className="py-2.5 px-3 text-right">Credit ({extractedCurrency})</th>
                           <th className="py-2.5 px-3 text-center">Action</th>
                         </tr>
                       </thead>
@@ -1005,7 +1006,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                     AI Insights
                   </p>
                   <p className="text-xs text-slate-500 mt-1">
-                    Sinyal validasi otomatis dan hal yang perlu diperhatikan.
+                    Automated validation signals and items requiring attention.
                   </p>
                 </div>
 
@@ -1102,21 +1103,19 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                   </div>
                 )}
 
+                {extractedRationale && (
+                  <div className="text-xs text-indigo-300 bg-indigo-500/10 p-3 rounded-xl border border-indigo-500/20 flex items-start gap-2">
+                    <Sparkles className="w-4 h-4 shrink-0 text-indigo-400 mt-0.5" />
+                    <span>{extractedRationale}</span>
+                  </div>
+                )}
+
                 <div className="rounded-xl bg-slate-900/80 border border-slate-800 p-3 text-xs text-slate-300 leading-relaxed">
                   <div className="flex items-start gap-2">
                     <Info className="w-4 h-4 text-indigo-400 mt-0.5 shrink-0" />
-                    <span>
-                      {item.summary || originalPayload.rationale || 'No AI rationale provided.'}
-                    </span>
+                    <span>{item.suggested_action || 'No AI suggested action.'}</span>
                   </div>
                 </div>
-
-                {item.suggested_action && (
-                  <div className="text-xs text-indigo-300 bg-indigo-500/10 p-3 rounded-xl border border-indigo-500/20 flex items-start gap-2">
-                    <Sparkles className="w-4 h-4 shrink-0 text-indigo-400 mt-0.5" />
-                    <span>{item.suggested_action}</span>
-                  </div>
-                )}
               </div>
             </section>
           </div>
@@ -1134,7 +1133,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
         <div className="px-4 sm:px-6 py-4 bg-slate-950/90 border-t border-slate-800 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
           <p className="text-xs text-slate-400 max-w-xl">
             AI extracted this document. Review highlighted fields, then confirm or edit before
-            posting to the ledger.
+            proceeding to the next workflow stage.
           </p>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
@@ -1142,7 +1141,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 <input
                   type="text"
-                  placeholder="Reason for rejection..."
+                  placeholder="e.g. Blurry scan, illegible amounts..."
                   value={rejectionReason}
                   onChange={(e) => setRejectionReason(e.target.value)}
                   className="min-w-0 flex-1 sm:w-64 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-rose-500"

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { ReviewQueueHeader } from './ReviewQueueHeader'
 import { ReviewQueueList } from './ReviewQueueList'
-import { ReviewDetailModal } from './ReviewDetailModal'
+import { ExtractionReviewModal } from './ExtractionReviewModal'
 import { BookkeepingReviewModal } from './BookkeepingReviewModal'
 import type { ReviewItemResponse } from '../../services/api'
 import { fetchReviewItems } from '../../services/api'
@@ -82,9 +82,9 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
         />
       )}
 
-      {/* General Review Detail Modal — for extraction / reconciliation / other types */}
+      {/* Extraction Review Modal — for extraction / other types */}
       {selectedItem && !isBookkeepingItem && (
-        <ReviewDetailModal
+        <ExtractionReviewModal
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
           onResolved={() => loadReviewItems()}
