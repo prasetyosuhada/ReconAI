@@ -1,4 +1,4 @@
-.PHONY: help setup db-up db-down migrate seed demo-data dev-backend dev-frontend test lint format build ci clean
+.PHONY: help setup db-up db-down db-clean db-reset migrate seed demo-data dev-backend dev-frontend test lint format build ci clean
 
 # Default target
 .DEFAULT_GOAL := help
@@ -29,6 +29,17 @@ db-down: ## Stop PostgreSQL database container
 	@echo "--> Stopping PostgreSQL database..."
 	docker compose down
 
+db-clean: ## Stop PostgreSQL container and wipe all database data (volumes)
+	@echo "--> Removing PostgreSQL database and volume data..."
+	docker compose down -v
+
+db-reset: ## Reset database completely (wipe, recreate, migrate, seed)
+	@$(MAKE) db-clean
+	@$(MAKE) db-up
+	@$(MAKE) migrate
+	@$(MAKE) seed
+	@echo "--> Database reset complete!"
+
 migrate: ## Run Alembic database migrations
 	@echo "--> Running Alembic migrations..."
 	cd backend && uv run alembic upgrade head
@@ -43,7 +54,7 @@ demo-data: ## Generate sample mock invoices & bank statements
 
 dev-backend: ## Run FastAPI backend server locally (port 8000)
 	@echo "--> Starting FastAPI backend server..."
-	cd backend && uv run uvicorn app.main:app --reload --port 8000
+	cd backend && uv run uvicorn app.main:app --reload --port 8100
 
 dev-frontend: ## Run Vite frontend development server
 	@echo "--> Starting Vite frontend dev server..."
@@ -82,5 +93,5 @@ clean: ## Clean cache files, pycache, dist, and temporary test databases
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +
 	find . -type d -name ".ruff_cache" -exec rm -rf {} +
 	rm -rf frontend/dist
-	rm -rf backend/storage/uploads/*
+	rm -rf backend/storage/*
 	@echo "--> Clean complete!"
