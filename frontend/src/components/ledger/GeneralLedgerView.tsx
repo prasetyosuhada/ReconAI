@@ -5,7 +5,11 @@ import { JournalDetailModal } from './JournalDetailModal'
 import type { JournalEntryResponse, TrialBalanceResponse } from '../../services/api'
 import { fetchJournalEntries, fetchTrialBalance } from '../../services/api'
 
-export const GeneralLedgerView: React.FC = () => {
+interface GeneralLedgerViewProps {
+  onNavigateToReview?: () => void
+}
+
+export const GeneralLedgerView: React.FC<GeneralLedgerViewProps> = ({ onNavigateToReview }) => {
   const [entries, setEntries] = useState<JournalEntryResponse[]>([])
   const [trialBalance, setTrialBalance] = useState<TrialBalanceResponse | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
@@ -49,7 +53,12 @@ export const GeneralLedgerView: React.FC = () => {
 
       {/* Journal Detail Modal */}
       {selectedEntryId && (
-        <JournalDetailModal entryId={selectedEntryId} onClose={() => setSelectedEntryId(null)} />
+        <JournalDetailModal
+          entryId={selectedEntryId}
+          onClose={() => setSelectedEntryId(null)}
+          onPosted={loadData}
+          onNavigateToReview={onNavigateToReview}
+        />
       )}
     </div>
   )

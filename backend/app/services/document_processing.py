@@ -146,23 +146,28 @@ def process_document_background(
             or final_state.get("proposed_journal")
             or final_state.get("journal_lines")
         )
-        print("PROPOSED JOURNAL:\n", proposed_journal)
         saved_journal_id = None
+
+        # Pin AI output fields once — both JournalEntry and ReviewItem MUST use the exact
+        # same values to guarantee data consistency across the two modals.
+        final_rationale: str | None = final_state.get("rationale")
+        final_risk_flags: list[str] = final_state.get("risk_flags", []) or []
+        final_confidence: float = float(final_state.get("confidence_score", 0.0))
 
         if proposed_journal:
             vendor = final_state.get("vendor_name", "Vendor")
             journal_desc = f"Journal for {original_filename} ({vendor})"
+            journal_entry_date = _parse_date(final_state.get("transaction_date")) or date.today()
             journal_data = {
                 "document_id": doc.id,
                 "extraction_id": extraction.id,
-                "entry_date": _parse_date(final_state.get("transaction_date"))
-                or date.today(),
+                "entry_date": journal_entry_date,
                 "description": journal_desc,
                 "status": "review_required" if needs_review else "draft",
                 "agent_name": "BookkeepingAgent",
-                "confidence_score": confidence_score,
-                "rationale": final_state.get("rationale"),
-                "risk_flags": risk_flags,
+                "confidence_score": final_confidence,
+                "rationale": final_rationale,
+                "risk_flags": final_risk_flags,
                 "lines": proposed_journal,
             }
             save_res = save_journal_entry_safely(journal_data, db_session=db)
@@ -176,7 +181,7 @@ def process_document_background(
             needs_review
             or final_status
             in ("extraction_review_required", "bookkeeping_review_required")
-            or risk_flags
+            or final_risk_flags
         ):
             review_type = (
                 "extraction"
@@ -184,26 +189,79 @@ def process_document_background(
                 else "bookkeeping"
             )
             is_balanced = final_state.get("is_balanced", True)
-            is_sensitive = "uses_sensitive_account" in risk_flags
+            is_sensitive = "uses_sensitive_account" in final_risk_flags
             priority = "high" if is_sensitive or not is_balanced else "normal"
 
-            flags_str = ", ".join(risk_flags) if risk_flags else "None"
+            flags_str = ", ".join(final_risk_flags) if final_risk_flags else "None"
             review_summary = (
-                f"Agent flagged document. Conf: {confidence_score:.2f}, "
+                f"Agent flagged document. Conf: {final_confidence:.2f}, "
                 f"Flags: {flags_str}"
             )
+
+            # For bookkeeping reviews: link directly to the JournalEntry (single source of truth).
+            # For extraction reviews: link to the Document (no JournalEntry yet).
+            if review_type == "bookkeeping" and saved_journal_id:
+                # Lean, explicit payload — consistent with what's stored in JournalEntry.
+                review_payload: dict = {
+                    "journal_entry_id": str(saved_journal_id),
+                    "vendor_name": final_state.get("vendor_name"),
+                    "transaction_date": str(final_state.get("transaction_date") or ""),
+                    "total_amount": final_state.get("total_amount"),
+                    "subtotal_amount": final_state.get("subtotal_amount"),
+                    "tax_amount": final_state.get("tax_amount"),
+                    "currency": final_state.get("currency", "IDR"),
+                    "line_items": final_state.get("line_items", []),
+                    "lines": proposed_journal,
+                    "entry_date": str(journal_entry_date),
+                    "description": journal_desc,
+                    # AI fields pinned from the same single agent run:
+                    "rationale": final_rationale,
+                    "risk_flags": final_risk_flags,
+                    "confidence_score": final_confidence,
+                    "is_balanced": final_state.get("is_balanced", True),
+                    "uses_sensitive_account": final_state.get("uses_sensitive_account", False),
+                }
+                review_source_type = "journal_entry"
+                review_source_id = (
+                    uuid.UUID(saved_journal_id)
+                    if isinstance(saved_journal_id, str)
+                    else saved_journal_id
+                )
+            else:
+                # Extraction review: we don't have a JournalEntry yet, link to Document.
+                # Keep the full extraction state for the reviewer to correct.
+                review_payload = {
+                    "vendor_name": final_state.get("vendor_name"),
+                    "transaction_date": str(final_state.get("transaction_date") or ""),
+                    "total_amount": final_state.get("total_amount"),
+                    "subtotal_amount": final_state.get("subtotal_amount"),
+                    "tax_amount": final_state.get("tax_amount"),
+                    "currency": final_state.get("currency", "IDR"),
+                    "line_items": final_state.get("line_items", []),
+                    "raw_text": final_state.get("raw_text"),
+                    "extraction_notes": final_state.get("extraction_notes"),
+                    "rationale": final_rationale,
+                    "risk_flags": final_risk_flags,
+                    "confidence_score": final_confidence,
+                }
+                review_source_type = "document"
+                review_source_id = doc.id
 
             review_item = ReviewItem(
                 id=uuid.uuid4(),
                 review_type=review_type,
                 status="pending",
                 priority=priority,
-                source_type="document",
-                source_id=doc.id,
+                source_type=review_source_type,
+                source_id=review_source_id,
                 title=f"Review Needed: {original_filename}",
                 summary=review_summary,
-                suggested_action="Review extracted data and journal lines.",
-                original_payload=dict(final_state),
+                suggested_action=(
+                    "Review and correct the extracted data before bookkeeping."
+                    if review_type == "extraction"
+                    else "Review the AI-generated journal entry account classification."
+                ),
+                original_payload=review_payload,
             )
             db.add(review_item)
             review_item_created = True
@@ -224,14 +282,14 @@ def process_document_background(
             },
             output_snapshot={
                 "status": final_status,
-                "confidence_score": confidence_score,
+                "confidence_score": final_confidence,
                 "needs_review": needs_review,
                 "extraction_id": str(extraction.id),
-                "journal_entry_id": saved_journal_id,
+                "journal_entry_id": str(saved_journal_id) if saved_journal_id else None,
                 "review_item_created": review_item_created,
             },
-            confidence_score=confidence_score,
-            rationale=final_state.get("rationale"),
+            confidence_score=final_confidence,
+            rationale=final_rationale,
         )
         db.add(audit)
         db.commit()

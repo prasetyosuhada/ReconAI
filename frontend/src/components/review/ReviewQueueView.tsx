@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { ReviewQueueHeader } from './ReviewQueueHeader'
 import { ReviewQueueList } from './ReviewQueueList'
 import { ReviewDetailModal } from './ReviewDetailModal'
+import { BookkeepingReviewModal } from './BookkeepingReviewModal'
 import type { ReviewItemResponse } from '../../services/api'
 import { fetchReviewItems } from '../../services/api'
 
@@ -49,6 +50,8 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
   ).length
   const approvedCount = items.filter((i) => i.status === 'posted').length
 
+  const isBookkeepingItem = selectedItem?.review_type === 'bookkeeping'
+
   return (
     <div className="space-y-6">
       {/* Header Statistics */}
@@ -70,8 +73,17 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
         onTypeFilterChange={setTypeFilter}
       />
 
-      {/* Review Detail Modal */}
-      {selectedItem && (
+      {/* Bookkeeping Review Modal — for bookkeeping type items */}
+      {selectedItem && isBookkeepingItem && (
+        <BookkeepingReviewModal
+          item={selectedItem}
+          onClose={() => setSelectedItem(null)}
+          onResolved={() => loadReviewItems()}
+        />
+      )}
+
+      {/* General Review Detail Modal — for extraction / reconciliation / other types */}
+      {selectedItem && !isBookkeepingItem && (
         <ReviewDetailModal
           item={selectedItem}
           onClose={() => setSelectedItem(null)}

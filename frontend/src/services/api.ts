@@ -303,7 +303,7 @@ export async function approveReviewItem(
   const response = await fetch(`${API_BASE_URL}/review-items/${reviewItemId}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reviewer_notes: notes || 'Approved via Review Queue UI' }),
+    body: JSON.stringify({ resolution_note: notes || 'Approved via Review Queue UI' }),
   })
 
   if (!response.ok) {
@@ -324,7 +324,7 @@ export async function editReviewItem(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       edited_payload: editedPayload,
-      reviewer_notes: notes || 'Edited via Review Detail Modal',
+      resolution_note: notes || 'Edited via Review Detail Modal',
     }),
   })
 
@@ -383,6 +383,27 @@ export async function fetchJournalEntryDetail(
   const response = await fetch(`${API_BASE_URL}/ledger/journal-entries/${journalEntryId}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch journal entry ${journalEntryId}`)
+  }
+  return response.json()
+}
+
+export interface PostJournalEntryResponse {
+  id: string
+  status: string
+  posted_at: string
+  trial_balance_status: string
+}
+
+export async function postJournalEntry(
+  journalEntryId: string
+): Promise<PostJournalEntryResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/ledger/journal-entries/${journalEntryId}/post`,
+    { method: 'POST' }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to post journal entry')
   }
   return response.json()
 }

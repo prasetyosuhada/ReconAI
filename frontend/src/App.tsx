@@ -206,7 +206,9 @@ function App() {
         />
       )}
 
-      {activeTab === 'ledger' && <GeneralLedgerView />}
+      {activeTab === 'ledger' && (
+        <GeneralLedgerView onNavigateToReview={() => setActiveTab('review')} />
+      )}
 
       {activeTab === 'reconciliation' && <ReconciliationView />}
 

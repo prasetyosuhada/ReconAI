@@ -1,5 +1,15 @@
 import React, { useEffect, useState } from 'react'
-import { ArrowLeft, BookOpen, CheckCircle2, Loader2, Send, Sparkles } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  BookOpen,
+  CheckCircle2,
+  ExternalLink,
+  Lock,
+  Loader2,
+  Send,
+  Sparkles,
+} from 'lucide-react'
 import type { DocumentExtractionResponse, JournalEntryResponse } from '../../services/api'
 import {
   fetchJournalEntryDetail,
@@ -12,6 +22,7 @@ interface JournalDetailModalProps {
   entryId: string | null
   onClose: () => void
   onPosted?: () => void
+  onNavigateToReview?: () => void
 }
 
 const statusTone = (status: string) => {
@@ -30,6 +41,7 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
   entryId,
   onClose,
   onPosted,
+  onNavigateToReview,
 }) => {
   const [detail, setDetail] = useState<JournalEntryResponse | null>(null)
   const [extraction, setExtraction] = useState<DocumentExtractionResponse | null>(null)
@@ -133,7 +145,7 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
           <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold bg-indigo-500/10 text-indigo-300 border-indigo-500/20">
               <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              Ready Workflow
+              {detail?.agent_name || 'AI Generated'}
             </span>
             {detail && (
               <span
@@ -159,21 +171,49 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
               {error}
             </div>
           ) : detail ? (
-            <BookkeepingJournalPanel
-              vendorName={extraction?.vendor_name || detail.description || 'Journal Entry'}
-              transactionDate={extraction?.transaction_date || detail.entry_date}
-              totalAmount={
-                extraction?.total_amount || Math.max(computedTotalDebit, computedTotalCredit)
-              }
-              currency={extraction?.currency || 'IDR'}
-              sourceLineItems={rawLineItems}
-              lines={lines}
-              confidenceScore={Math.round(
-                Number(detail.confidence_score ?? 0) * 100
+            <>
+              {(detail.status === 'review_required' || detail.status === 'bookkeeping_review_required') && (
+                <div className="mx-4 sm:mx-6 mt-4 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-start gap-3">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-amber-300 mb-0.5">Review Required</p>
+                    <p className="text-xs text-amber-200/80">
+                      This entry requires human verification due to low confidence or a sensitive
+                      account. Open the{' '}
+                      {onNavigateToReview ? (
+                        <button
+                          type="button"
+                          onClick={() => { onClose(); onNavigateToReview(); }}
+                          className="font-semibold text-amber-300 underline underline-offset-2 hover:text-amber-200 inline-flex items-center gap-0.5 cursor-pointer transition-colors"
+                        >
+                          Review Queue <ExternalLink className="w-3 h-3" />
+                        </button>
+                      ) : (
+                        <span className="font-semibold text-amber-300 inline-flex items-center gap-0.5">
+                          Review Queue <ExternalLink className="w-3 h-3" />
+                        </span>
+                      )}{' '}
+                      to verify, edit, or reject the AI classification.
+                    </p>
+                  </div>
+                </div>
               )}
-              rationale={detail.rationale || undefined}
-              riskFlags={detail.risk_flags || []}
-            />
+              <BookkeepingJournalPanel
+                vendorName={extraction?.vendor_name || detail.description || 'Journal Entry'}
+                transactionDate={extraction?.transaction_date || detail.entry_date}
+                totalAmount={
+                  extraction?.total_amount || Math.max(computedTotalDebit, computedTotalCredit)
+                }
+                currency={extraction?.currency || 'IDR'}
+                sourceLineItems={rawLineItems}
+                lines={lines}
+                confidenceScore={Math.round(
+                  Number(detail.confidence_score ?? 0) * 100
+                )}
+                rationale={detail.rationale || undefined}
+                riskFlags={detail.risk_flags || []}
+              />
+            </>
           ) : null}
         </div>
 
@@ -192,10 +232,40 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
 
         {detail && (
           <div className="px-4 sm:px-6 py-4 bg-slate-950 border-t border-slate-800 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
-            <p className="text-xs text-slate-400 max-w-xl">
-              High-confidence bookkeeping uses the same review surface as manual review, with
-              posting as the final action.
-            </p>
+
+            {/* Posted: immutable audit trail notice */}
+            {detail.status === 'posted' ? (
+              <div className="flex items-center gap-2 text-xs text-emerald-400">
+                <Lock className="w-4 h-4 shrink-0" />
+                <span>
+                  This entry has been permanently recorded in the General Ledger
+                  {detail.posted_at
+                    ? ` on ${new Date(detail.posted_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })} at ${new Date(detail.posted_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+                    : ''}.
+                  {' '}Status <span className="font-bold">Posted</span> is locked and immutable.
+                </span>
+              </div>
+            ) : detail.status === 'review_required' || detail.status === 'bookkeeping_review_required' ? (
+              <p className="text-xs text-slate-500 max-w-xl">
+                Complete the review in the{' '}
+                {onNavigateToReview ? (
+                  <button
+                    type="button"
+                    onClick={() => { onClose(); onNavigateToReview(); }}
+                    className="font-semibold text-amber-400 underline underline-offset-2 hover:text-amber-300 cursor-pointer transition-colors"
+                  >
+                    Review Queue
+                  </button>
+                ) : (
+                  <span className="font-semibold text-amber-400">Review Queue</span>
+                )}{' '}
+                before this entry can be posted to the ledger.
+              </p>
+            ) : (
+              <p className="text-xs text-slate-400 max-w-xl">
+                Posting will permanently record this entry in the General Ledger and affect Trial Balance balances.
+              </p>
+            )}
 
             {canPost && !postSuccess && (
               <button

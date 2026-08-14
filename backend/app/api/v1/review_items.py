@@ -2,16 +2,18 @@
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.agents.orchestrator import bookkeeping_node
 from app.db.session import get_db
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
-from app.models.document import Document
+from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry, JournalEntryLine
 from app.models.review import ReviewItem
 from app.schemas.review import (
@@ -24,7 +26,10 @@ from app.schemas.review import (
     ReviewRejectRequest,
     ReviewRejectResponse,
 )
-from app.services.accounting import post_journal_entry_to_ledger
+from app.services.accounting import (
+    post_journal_entry_to_ledger,
+    save_journal_entry_safely,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,237 @@ def _get_review_item_or_404(review_item_id: str, db: Session) -> ReviewItem:
             detail=f"Review item [{review_item_id}] not found.",
         )
     return item
+
+
+def _parse_date_value(value: Any) -> date | None:
+    """Parse dates from review payloads without trusting client formatting."""
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str) and len(value) >= 10:
+        try:
+            return datetime.strptime(value[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+    return None
+
+
+def _merge_review_payload(
+    original_payload: dict[str, Any] | list[Any] | None,
+    edited_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Combine agent payload and human corrections for downstream workflow."""
+    payload = dict(original_payload) if isinstance(original_payload, dict) else {}
+    payload.update(edited_payload or {})
+    return payload
+
+
+def _chart_of_accounts_payload(db: Session) -> list[dict[str, Any]]:
+    coa_records = (
+        db.query(ChartOfAccount).filter(ChartOfAccount.is_active.is_(True)).all()
+    )
+    return [
+        {
+            "account_code": coa.account_code,
+            "account_name": coa.account_name,
+            "account_type": coa.account_type,
+            "normal_balance": coa.normal_balance,
+            "is_sensitive": coa.is_sensitive,
+            "description": coa.description,
+        }
+        for coa in coa_records
+    ]
+
+
+def _upsert_reviewed_extraction(
+    doc: Document,
+    payload: dict[str, Any],
+    resolution_note: str | None,
+    db: Session,
+) -> DocumentExtraction:
+    extraction = (
+        db.query(DocumentExtraction)
+        .filter(DocumentExtraction.document_id == doc.id)
+        .order_by(DocumentExtraction.created_at.desc())
+        .first()
+    )
+
+    if not extraction:
+        extraction = DocumentExtraction(id=uuid.uuid4(), document_id=doc.id)
+        db.add(extraction)
+
+    if payload.get("document_type"):
+        doc.document_type = payload["document_type"]
+
+    extraction.vendor_name = payload.get("vendor_name")
+    extraction.transaction_date = _parse_date_value(payload.get("transaction_date"))
+    extraction.subtotal_amount = payload.get("subtotal_amount")
+    extraction.tax_amount = payload.get("tax_amount")
+    extraction.total_amount = payload.get("total_amount")
+    extraction.currency = payload.get("currency", "IDR")
+    extraction.line_items = payload.get("line_items", [])
+    extraction.raw_text = payload.get("raw_text")
+    extraction.confidence_score = payload.get("confidence_score", 1.0)
+    extraction.rationale = resolution_note or payload.get("rationale")
+    extraction.status = "extracted"
+    db.flush()
+    return extraction
+
+
+def _continue_document_to_bookkeeping(
+    item: ReviewItem,
+    payload: dict[str, Any],
+    resolution_note: str | None,
+    db: Session,
+) -> str:
+    """Continue a human-reviewed extraction directly into bookkeeping."""
+    doc = db.query(Document).filter(Document.id == item.source_id).first()
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document [{item.source_id}] not found.",
+        )
+
+    extraction = _upsert_reviewed_extraction(doc, payload, resolution_note, db)
+    state = {
+        "document_id": str(doc.id),
+        "original_filename": doc.original_filename,
+        "mime_type": doc.mime_type,
+        "stored_file_path": doc.stored_file_path,
+        "raw_text": extraction.raw_text,
+        "extraction_id": str(extraction.id),
+        "vendor_name": extraction.vendor_name,
+        "transaction_date": extraction.transaction_date.isoformat()
+        if extraction.transaction_date
+        else None,
+        "subtotal_amount": float(extraction.subtotal_amount)
+        if extraction.subtotal_amount is not None
+        else None,
+        "tax_amount": float(extraction.tax_amount)
+        if extraction.tax_amount is not None
+        else None,
+        "total_amount": float(extraction.total_amount)
+        if extraction.total_amount is not None
+        else None,
+        "currency": extraction.currency,
+        "document_type": doc.document_type,
+        "line_items": extraction.line_items or [],
+        "chart_of_accounts": _chart_of_accounts_payload(db),
+        "status": "extracted",
+        "needs_review": False,
+        "risk_flags": [],
+    }
+
+    final_state = bookkeeping_node(state)
+    proposed_journal = (
+        final_state.get("journal_entry")
+        or final_state.get("proposed_journal")
+        or final_state.get("journal_lines")
+    )
+
+    # Pin AI output fields once — both JournalEntry and ReviewItem MUST reference
+    # the exact same values to guarantee consistency across the GL and Review Queue modals.
+    final_rationale: str | None = final_state.get("rationale")
+    final_risk_flags: list[str] = final_state.get("risk_flags", []) or []
+    final_confidence: float = float(final_state.get("confidence_score", 0.0))
+
+    saved_journal_id = None
+    journal_entry_date = _parse_date_value(final_state.get("entry_date")) or extraction.transaction_date or date.today()
+    journal_desc = final_state.get("entry_description") or f"Journal for {doc.original_filename}"
+
+    if proposed_journal:
+        journal_data = {
+            "document_id": doc.id,
+            "extraction_id": extraction.id,
+            "entry_date": journal_entry_date,
+            "description": journal_desc,
+            "status": "review_required" if final_state.get("needs_review") else "draft",
+            "agent_name": "BookkeepingAgent",
+            "confidence_score": final_confidence,
+            "rationale": final_rationale,
+            "risk_flags": final_risk_flags,
+            "lines": proposed_journal,
+        }
+        save_res = save_journal_entry_safely(journal_data, db_session=db)
+        if not save_res.success:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Journal save failed: {'; '.join(save_res.errors)}",
+            )
+        saved_journal_id = save_res.journal_entry_id
+
+    needs_review = final_state.get("needs_review", False)
+    next_status = final_state.get("status", "ready_to_post")
+
+    if needs_review or next_status == "bookkeeping_review_required" or final_risk_flags:
+        is_balanced = final_state.get("is_balanced", True)
+        is_sensitive = "uses_sensitive_account" in final_risk_flags
+        priority = "high" if is_sensitive or not is_balanced else "normal"
+
+        # Lean, pinned payload — mirrors what is stored in the JournalEntry.
+        review_payload: dict = {
+            "journal_entry_id": str(saved_journal_id) if saved_journal_id else None,
+            "vendor_name": extraction.vendor_name,
+            "transaction_date": str(extraction.transaction_date or ""),
+            "total_amount": float(extraction.total_amount) if extraction.total_amount is not None else None,
+            "subtotal_amount": float(extraction.subtotal_amount) if extraction.subtotal_amount is not None else None,
+            "tax_amount": float(extraction.tax_amount) if extraction.tax_amount is not None else None,
+            "currency": extraction.currency,
+            "line_items": extraction.line_items or [],
+            "lines": proposed_journal,
+            "entry_date": str(journal_entry_date),
+            "description": journal_desc,
+            # AI fields pinned from the same single agent run:
+            "rationale": final_rationale,
+            "risk_flags": final_risk_flags,
+            "confidence_score": final_confidence,
+            "is_balanced": is_balanced,
+            "uses_sensitive_account": final_state.get("uses_sensitive_account", False),
+        }
+
+        source_id_val = (
+            uuid.UUID(saved_journal_id)
+            if isinstance(saved_journal_id, str)
+            else (saved_journal_id if saved_journal_id else doc.id)
+        )
+        review_item = ReviewItem(
+            id=uuid.uuid4(),
+            review_type="bookkeeping",
+            status="pending",
+            priority=priority,
+            source_type="journal_entry" if saved_journal_id else "document",
+            source_id=source_id_val,
+            title=f"Review Needed: {doc.original_filename}",
+            summary=(
+                "Bookkeeping agent flagged reviewed extraction. "
+                f"Conf: {final_confidence:.2f}"
+            ),
+            suggested_action="Review the AI-generated journal entry account classification.",
+            original_payload=review_payload,
+        )
+        db.add(review_item)
+
+    doc.status = next_status
+
+    audit = AuditEvent(
+        event_type="bookkeeping_continued_after_extraction_review",
+        source_type="document",
+        source_id=doc.id,
+        actor_type="agent",
+        actor_name="BookkeepingAgent",
+        input_snapshot={"review_item_id": str(item.id)},
+        output_snapshot={
+            "status": next_status,
+            "journal_entry_id": str(saved_journal_id) if saved_journal_id else None,
+            "needs_review": needs_review,
+        },
+        confidence_score=final_confidence,
+        rationale=final_rationale,
+    )
+    db.add(audit)
+    return next_status
+
 
 
 @router.get(
@@ -104,7 +340,37 @@ def get_review_item_detail(
     db: Session = Depends(get_db),
 ) -> ReviewItemDetailResponse:
     """Fetch review item details by UUID."""
-    return _get_review_item_or_404(review_item_id, db)
+    item = _get_review_item_or_404(review_item_id, db)
+
+    payload: dict = {}
+    if isinstance(item.original_payload, dict):
+        payload = item.original_payload
+
+    return ReviewItemDetailResponse(
+        id=item.id,
+        review_type=item.review_type,
+        status=item.status,
+        priority=item.priority,
+        source_type=item.source_type,
+        source_id=item.source_id,
+        title=item.title,
+        summary=item.summary,
+        suggested_action=item.suggested_action,
+        original_payload=item.original_payload,
+        edited_payload=item.edited_payload,
+        resolution_note=item.resolution_note,
+        resolved_by=item.resolved_by,
+        resolved_at=item.resolved_at,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+        # Convenience fields: populated from pinned payload for guaranteed consistency
+        confidence_score=float(payload["confidence_score"])
+        if "confidence_score" in payload
+        else None,
+        risk_flags=list(payload.get("risk_flags") or []),
+        journal_entry_id=payload.get("journal_entry_id"),
+    )
+
 
 
 @router.post(
@@ -139,28 +405,37 @@ def approve_review_item(
 
     # Advance workflow based on source entity
     if item.source_type == "document":
-        doc = db.query(Document).filter(Document.id == item.source_id).first()
-        je = (
-            db.query(JournalEntry)
-            .filter(JournalEntry.document_id == item.source_id)
-            .first()
-        )
-
-        if je:
-            post_res = post_journal_entry_to_ledger(
-                journal_entry=je, db_session=db, posted_by="human_user"
+        if item.review_type == "extraction":
+            payload = _merge_review_payload(item.original_payload)
+            next_workflow_status = _continue_document_to_bookkeeping(
+                item=item,
+                payload=payload,
+                resolution_note=resolution_note,
+                db=db,
             )
-            if not post_res.success:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Posting failed: {'; '.join(post_res.errors)}",
+        else:
+            doc = db.query(Document).filter(Document.id == item.source_id).first()
+            je = (
+                db.query(JournalEntry)
+                .filter(JournalEntry.document_id == item.source_id)
+                .first()
+            )
+
+            if je:
+                post_res = post_journal_entry_to_ledger(
+                    journal_entry=je, db_session=db, posted_by="human_user"
                 )
-            next_workflow_status = "posted"
-            if doc:
-                doc.status = "posted"
-        elif doc:
-            doc.status = "approved"
-            next_workflow_status = "approved"
+                if not post_res.success:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Posting failed: {'; '.join(post_res.errors)}",
+                    )
+                next_workflow_status = "posted"
+                if doc:
+                    doc.status = "posted"
+            elif doc:
+                doc.status = "approved"
+                next_workflow_status = "approved"
 
     elif item.source_type == "journal_entry":
         je = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
@@ -228,6 +503,15 @@ def edit_review_item(
     item.resolved_at = now_utc
 
     next_workflow_status = "edited"
+
+    if item.source_type == "document" and item.review_type == "extraction":
+        payload = _merge_review_payload(item.original_payload, req.edited_payload)
+        next_workflow_status = _continue_document_to_bookkeeping(
+            item=item,
+            payload=payload,
+            resolution_note=req.resolution_note,
+            db=db,
+        )
 
     # If editing journal lines in payload, update JournalEntry model
     je = None

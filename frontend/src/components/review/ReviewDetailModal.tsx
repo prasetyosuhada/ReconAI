@@ -33,6 +33,18 @@ interface ReviewDetailModalProps {
   onResolved: () => void
 }
 
+interface ExtractionDraftPayload {
+  document_type: string
+  transaction_date: string
+  vendor_name: string
+  payment_status: string
+  currency: string
+  subtotal_amount: string
+  tax_amount: string
+  total_amount: string
+  line_items: Record<string, any>[]
+}
+
 export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
   item,
   onClose,
@@ -61,7 +73,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
     extractionPayload.subtotal_amount ||
     Math.max(Number(extractedTotal || 0) - Number(extractedTax || 0), 0)
   const extractedCurrency = extractionPayload.currency || 'IDR'
-  const documentType = 'Invoice / Receipt'
+  const documentType = extractionPayload.document_type || 'Invoice / Receipt'
   const sourceFilename =
     extractionPayload.original_filename ||
     extractionPayload.filename ||
@@ -90,6 +102,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
     (Array.isArray(extractionPayload.warnings) && extractionPayload.warnings) ||
     (Array.isArray(item?.risk_flags) && item?.risk_flags) ||
     []
+  const isExtractionReview = item?.review_type === 'extraction'
 
   // Editable Journal Entry States
   const defaultLines: JournalLineEditPayload[] = item?.edited_payload?.lines ||
@@ -121,6 +134,17 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
   const [rejectionReason, setRejectionReason] = useState<string>('')
   const [showRejectInput, setShowRejectInput] = useState<boolean>(false)
   const [isEditing, setIsEditing] = useState<boolean>(false)
+  const [extractionDraft, setExtractionDraft] = useState<ExtractionDraftPayload>({
+    document_type: 'invoice',
+    transaction_date: '',
+    vendor_name: '',
+    payment_status: 'unknown',
+    currency: 'IDR',
+    subtotal_amount: '',
+    tax_amount: '',
+    total_amount: '',
+    line_items: [],
+  })
 
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -194,6 +218,33 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
         },
       ]
     )
+    setExtractionDraft({
+      document_type:
+        item.edited_payload?.document_type ||
+        extractionPayload.document_type ||
+        originalPayload.document_type ||
+        'invoice',
+      transaction_date:
+        item.edited_payload?.transaction_date ||
+        item.edited_payload?.invoice_date ||
+        extractedDate ||
+        '',
+      vendor_name:
+        item.edited_payload?.vendor_name ||
+        extractionPayload.vendor_name ||
+        extractionPayload.merchant_name ||
+        '',
+      payment_status:
+        item.edited_payload?.payment_status ||
+        extractionPayload.payment_status ||
+        originalPayload.payment_status ||
+        'unknown',
+      currency: item.edited_payload?.currency || extractedCurrency || 'IDR',
+      subtotal_amount: String(item.edited_payload?.subtotal_amount ?? extractedSubtotal ?? ''),
+      tax_amount: String(item.edited_payload?.tax_amount ?? extractedTax ?? ''),
+      total_amount: String(item.edited_payload?.total_amount ?? extractedTotal ?? ''),
+      line_items: item.edited_payload?.line_items || lineItems,
+    })
   }, [item, latestExtraction])
 
   if (!item) return null
@@ -238,6 +289,48 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
     setLines(lines.filter((_, i) => i !== index))
   }
 
+  const handleExtractionFieldChange = (field: keyof ExtractionDraftPayload, value: string) => {
+    setExtractionDraft((draft) => ({ ...draft, [field]: value }))
+  }
+
+  const handleExtractionLineChange = (index: number, field: string, value: string) => {
+    setExtractionDraft((draft) => {
+      const updatedLines = [...draft.line_items]
+      updatedLines[index] = {
+        ...updatedLines[index],
+        [field]:
+          field === 'quantity' || field === 'unit_price' || field === 'amount'
+            ? value === ''
+              ? null
+              : Number(value)
+            : value,
+      }
+      return { ...draft, line_items: updatedLines }
+    })
+  }
+
+  const handleAddExtractionLine = () => {
+    setExtractionDraft((draft) => ({
+      ...draft,
+      line_items: [
+        ...draft.line_items,
+        {
+          description: '',
+          quantity: 1,
+          unit_price: 0,
+          amount: 0,
+        },
+      ],
+    }))
+  }
+
+  const handleRemoveExtractionLine = (index: number) => {
+    setExtractionDraft((draft) => ({
+      ...draft,
+      line_items: draft.line_items.filter((_, i) => i !== index),
+    }))
+  }
+
   const handleApproveAsIs = async () => {
     setSubmitting(true)
     setErrorMsg(null)
@@ -253,6 +346,39 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
   }
 
   const handleSaveAndApprove = async () => {
+    if (isExtractionReview) {
+      const toNumberOrNull = (value: string) => (value === '' ? null : Number(value))
+      const editedPayload = {
+        document_type: extractionDraft.document_type,
+        vendor_name: extractionDraft.vendor_name || null,
+        transaction_date: extractionDraft.transaction_date || null,
+        invoice_date: extractionDraft.transaction_date || null,
+        subtotal_amount: toNumberOrNull(extractionDraft.subtotal_amount),
+        tax_amount: toNumberOrNull(extractionDraft.tax_amount),
+        total_amount: toNumberOrNull(extractionDraft.total_amount),
+        currency: extractionDraft.currency || 'IDR',
+        payment_status: extractionDraft.payment_status || 'unknown',
+        line_items: extractionDraft.line_items,
+      }
+
+      setSubmitting(true)
+      setErrorMsg(null)
+      try {
+        await editReviewItem(
+          item.id,
+          editedPayload,
+          'Corrected extracted fields via Review Detail Modal'
+        )
+        onResolved()
+        onClose()
+      } catch (err: unknown) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to save extracted fields')
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
     if (!isBalanced) {
       setErrorMsg(
         `Double-entry unbalanced! Debits (${totalDebits.toLocaleString()}) must equal Credits (${totalCredits.toLocaleString()}).`
@@ -446,7 +572,9 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                     Extracted Information
                   </p>
                   <p className="text-xs text-slate-500 mt-1">
-                    Hasil ekstraksi AI yang perlu diverifikasi sebelum posting.
+                    {extractionLoading
+                      ? 'Memuat hasil ekstraksi terbaru...'
+                      : 'Hasil ekstraksi AI yang perlu diverifikasi sebelum posting.'}
                   </p>
                 </div>
                 <button
@@ -463,42 +591,102 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                   <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
                     Document Type
                   </span>
-                  <p className="text-sm font-semibold text-slate-100 capitalize">
-                    {labelize(String(documentType))}
-                  </p>
+                  {isEditing && isExtractionReview ? (
+                    <select
+                      value={extractionDraft.document_type}
+                      onChange={(e) => handleExtractionFieldChange('document_type', e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm font-semibold text-slate-100 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="invoice">Invoice</option>
+                      <option value="receipt">Receipt</option>
+                      <option value="unknown">Unknown</option>
+                    </select>
+                  ) : (
+                    <p className="text-sm font-semibold text-slate-100 capitalize">
+                      {labelize(String(documentType))}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
                     Invoice Date
                   </span>
-                  <p className="text-sm font-semibold text-slate-100">{extractedDate || 'N/A'}</p>
+                  {isEditing && isExtractionReview ? (
+                    <input
+                      type="date"
+                      value={extractionDraft.transaction_date}
+                      onChange={(e) =>
+                        handleExtractionFieldChange('transaction_date', e.target.value)
+                      }
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm font-semibold text-slate-100 focus:outline-none focus:border-indigo-500"
+                    />
+                  ) : (
+                    <p className="text-sm font-semibold text-slate-100">{extractedDate || 'N/A'}</p>
+                  )}
                 </div>
                 <div className="space-y-1 sm:col-span-2">
                   <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
                     Vendor
                   </span>
-                  <p className="text-base font-bold text-white">{extractedVendor}</p>
+                  {isEditing && isExtractionReview ? (
+                    <input
+                      type="text"
+                      value={extractionDraft.vendor_name}
+                      onChange={(e) => handleExtractionFieldChange('vendor_name', e.target.value)}
+                      placeholder="Vendor name"
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-base font-bold text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  ) : (
+                    <p className="text-base font-bold text-white">{extractedVendor}</p>
+                  )}
                 </div>
-                 <div>
+                <div>
                   <span className="block text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
                     Payment Status
                   </span>
-                  <p
-                    className={`mt-1.5 flex items-center gap-2 text-sm font-bold capitalize ${
-                      paymentOk ? 'text-emerald-300' : 'text-amber-300'
-                    }`}
-                  >
-                    <span
-                       className={`w-3 h-3 rounded-full ${paymentOk ? 'bg-emerald-400' : 'bg-amber-400'}`}
-                    />
-                    {labelize(String(paymentStatus))}
-                  </p>
+                  {isEditing && isExtractionReview ? (
+                    <select
+                      value={extractionDraft.payment_status}
+                      onChange={(e) =>
+                        handleExtractionFieldChange('payment_status', e.target.value)
+                      }
+                      className="mt-1 w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm font-bold text-slate-100 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="unknown">Unknown</option>
+                      <option value="paid">Paid</option>
+                      <option value="unpaid">Unpaid</option>
+                    </select>
+                  ) : (
+                    <p
+                      className={`mt-1.5 flex items-center gap-2 text-sm font-bold capitalize ${
+                        paymentOk ? 'text-emerald-300' : 'text-amber-300'
+                      }`}
+                    >
+                      <span
+                        className={`w-3 h-3 rounded-full ${
+                          paymentOk ? 'bg-emerald-400' : 'bg-amber-400'
+                        }`}
+                      />
+                      {labelize(String(paymentStatus))}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
                     Currency
                   </span>
-                  <p className="text-sm font-semibold text-slate-100">{extractedCurrency}</p>
+                  {isEditing && isExtractionReview ? (
+                    <input
+                      type="text"
+                      value={extractionDraft.currency}
+                      onChange={(e) =>
+                        handleExtractionFieldChange('currency', e.target.value.toUpperCase())
+                      }
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm font-semibold text-slate-100 focus:outline-none focus:border-indigo-500"
+                    />
+                  ) : (
+                    <p className="text-sm font-semibold text-slate-100">{extractedCurrency}</p>
+                  )}
                 </div>
               </div>
 
@@ -507,7 +695,74 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
                   Line Items
                 </h4>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
-                  {lineItems.length > 0 ? (
+                  {isEditing && isExtractionReview ? (
+                    <div className="divide-y divide-slate-800/80">
+                      {extractionDraft.line_items.map((line, index) => (
+                        <div
+                          key={`editable-line-${index}`}
+                          className="px-4 py-3 grid grid-cols-1 sm:grid-cols-[minmax(0,1.5fr)_70px_110px_110px_36px] gap-2"
+                        >
+                          <input
+                            type="text"
+                            value={line.description || line.name || line.item || ''}
+                            onChange={(e) =>
+                              handleExtractionLineChange(index, 'description', e.target.value)
+                            }
+                            placeholder="Description"
+                            className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                          />
+                          <input
+                            type="number"
+                            step="any"
+                            value={line.quantity ?? ''}
+                            onChange={(e) =>
+                              handleExtractionLineChange(index, 'quantity', e.target.value)
+                            }
+                            placeholder="Qty"
+                            className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                          />
+                          <input
+                            type="number"
+                            step="any"
+                            value={line.unit_price ?? ''}
+                            onChange={(e) =>
+                              handleExtractionLineChange(index, 'unit_price', e.target.value)
+                            }
+                            placeholder="Unit price"
+                            className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                          />
+                          <input
+                            type="number"
+                            step="any"
+                            value={line.amount ?? ''}
+                            onChange={(e) =>
+                              handleExtractionLineChange(index, 'amount', e.target.value)
+                            }
+                            placeholder="Amount"
+                            className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveExtractionLine(index)}
+                            className="p-2 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                            title="Delete line item"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                      <div className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={handleAddExtractionLine}
+                          className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold inline-flex items-center gap-1 transition-all"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add Line Item
+                        </button>
+                      </div>
+                    </div>
+                  ) : lineItems.length > 0 ? (
                     <div className="divide-y divide-slate-800/80">
                       {lineItems.map((line: Record<string, any>, index: number) => (
                         <div
@@ -542,21 +797,55 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
               <div className="mt-6 ml-auto w-full sm:max-w-sm space-y-2 text-sm">
                 <div className="flex items-center justify-between text-slate-400">
                   <span>Subtotal</span>
-                  <span className="font-mono text-slate-200">{formatMoney(extractedSubtotal)}</span>
+                  {isEditing && isExtractionReview ? (
+                    <input
+                      type="number"
+                      step="any"
+                      value={extractionDraft.subtotal_amount}
+                      onChange={(e) =>
+                        handleExtractionFieldChange('subtotal_amount', e.target.value)
+                      }
+                      className="w-40 px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-right font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
+                    />
+                  ) : (
+                    <span className="font-mono text-slate-200">
+                      {formatMoney(extractedSubtotal)}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center justify-between text-slate-400">
                   <span>PPN / Tax</span>
-                  <span className="font-mono text-slate-200">{formatMoney(extractedTax)}</span>
+                  {isEditing && isExtractionReview ? (
+                    <input
+                      type="number"
+                      step="any"
+                      value={extractionDraft.tax_amount}
+                      onChange={(e) => handleExtractionFieldChange('tax_amount', e.target.value)}
+                      className="w-40 px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-right font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
+                    />
+                  ) : (
+                    <span className="font-mono text-slate-200">{formatMoney(extractedTax)}</span>
+                  )}
                 </div>
                 <div className="border-t border-slate-700 pt-3 flex items-center justify-between">
                   <span className="font-bold text-white uppercase tracking-wide">Total</span>
-                  <span className="font-mono text-lg font-bold text-emerald-300">
-                    {formatMoney(extractedTotal)}
-                  </span>
+                  {isEditing && isExtractionReview ? (
+                    <input
+                      type="number"
+                      step="any"
+                      value={extractionDraft.total_amount}
+                      onChange={(e) => handleExtractionFieldChange('total_amount', e.target.value)}
+                      className="w-40 px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-right font-mono text-lg font-bold text-emerald-300 focus:outline-none focus:border-indigo-500"
+                    />
+                  ) : (
+                    <span className="font-mono text-lg font-bold text-emerald-300">
+                      {formatMoney(extractedTotal)}
+                    </span>
+                  )}
                 </div>
               </div>
 
-              {isEditing && (
+              {isEditing && !isExtractionReview && (
                 <div className="mt-6 p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -896,7 +1185,7 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
             <button
               type="button"
               onClick={isEditing ? handleSaveAndApprove : handleApproveAsIs}
-              disabled={submitting || (isEditing && !isBalanced)}
+              disabled={submitting || (isEditing && !isExtractionReview && !isBalanced)}
               className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? (
@@ -904,8 +1193,12 @@ export const ReviewDetailModal: React.FC<ReviewDetailModalProps> = ({
               ) : (
                 <CheckCircle2 className="w-3.5 h-3.5" />
               )}
-              {isEditing ? 'Save Edits & Post' : 'Confirm Extraction'}
-              </button>
+              {isEditing
+                ? isExtractionReview
+                  ? 'Save Fields & Continue'
+                  : 'Save Edits & Post'
+                : 'Confirm Extraction'}
+            </button>
           </div>
         </div>
       </div>

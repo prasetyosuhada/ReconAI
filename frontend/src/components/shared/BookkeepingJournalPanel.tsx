@@ -138,7 +138,7 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
               </p>
               <p className="text-sm font-semibold text-slate-200">
                 {transactionDate
-                  ? new Date(transactionDate).toLocaleDateString('id-ID', {
+                  ? new Date(transactionDate).toLocaleDateString('en-GB', {
                       day: '2-digit',
                       month: 'short',
                       year: 'numeric',

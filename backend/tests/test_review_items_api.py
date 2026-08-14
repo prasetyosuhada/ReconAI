@@ -1,8 +1,9 @@
 import uuid
 from datetime import date
+from unittest.mock import patch
 
 from app.models.audit import AuditEvent
-from app.models.document import Document
+from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry, JournalEntryLine
 from app.models.review import ReviewItem
 
@@ -249,6 +250,107 @@ def test_edit_review_item_success(client, db_session):
     db_session.refresh(je)
     assert je.status == "posted"
     assert len(je.lines) == 2
+
+
+@patch("app.api.v1.review_items.bookkeeping_node")
+def test_edit_extraction_review_continues_to_bookkeeping(
+    mock_bookkeeping_node, client, db_session
+):
+    doc_id = uuid.uuid4()
+    doc = Document(
+        id=doc_id,
+        original_filename="blurred_tax_invoice.pdf",
+        stored_file_path="/tmp/blurred_tax_invoice.pdf",
+        mime_type="application/pdf",
+        file_size_bytes=100,
+        document_type="invoice",
+        status="extraction_review_required",
+    )
+    item_id = uuid.uuid4()
+    item = ReviewItem(
+        id=item_id,
+        review_type="extraction",
+        status="pending",
+        priority="normal",
+        source_type="document",
+        source_id=doc_id,
+        title="Review Extracted Tax",
+        original_payload={
+            "vendor_name": "PT Blur",
+            "transaction_date": "2026-08-01",
+            "subtotal_amount": 100000.0,
+            "tax_amount": None,
+            "total_amount": 111000.0,
+            "currency": "IDR",
+            "line_items": [],
+            "raw_text": "tax value is blurry",
+        },
+    )
+    db_session.add_all([doc, item])
+    db_session.commit()
+
+    mock_bookkeeping_node.return_value = {
+        "document_id": str(doc_id),
+        "vendor_name": "PT Blur",
+        "transaction_date": "2026-08-01",
+        "entry_date": "2026-08-01",
+        "entry_description": "Purchase from PT Blur",
+        "journal_lines": [
+            {
+                "account_code": "5100",
+                "account_name": "Supplies Expense",
+                "debit_amount": 111000.0,
+                "credit_amount": 0.0,
+            },
+            {
+                "account_code": "2000",
+                "account_name": "Accounts Payable",
+                "debit_amount": 0.0,
+                "credit_amount": 111000.0,
+            },
+        ],
+        "is_balanced": True,
+        "risk_flags": [],
+        "confidence_score": 0.91,
+        "rationale": "Human-reviewed extraction is bookkept.",
+        "status": "ready_to_post",
+        "needs_review": False,
+    }
+
+    response = client.post(
+        f"/api/v1/review-items/{item_id}/edit",
+        json={
+            "edited_payload": {"tax_amount": 11000.0},
+            "resolution_note": "Filled tax from manual review.",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "edited"
+    assert data["next_workflow_status"] == "ready_to_post"
+
+    extraction = (
+        db_session.query(DocumentExtraction)
+        .filter(DocumentExtraction.document_id == doc_id)
+        .first()
+    )
+    assert extraction is not None
+    assert float(extraction.tax_amount) == 11000.0
+    assert extraction.status == "extracted"
+
+    journal = (
+        db_session.query(JournalEntry)
+        .filter(JournalEntry.document_id == doc_id)
+        .first()
+    )
+    assert journal is not None
+    assert len(journal.lines) == 2
+
+    db_session.refresh(doc)
+    assert doc.status == "ready_to_post"
+    called_state = mock_bookkeeping_node.call_args.args[0]
+    assert called_state["tax_amount"] == 11000.0
 
 
 def test_reject_review_item_success(client, db_session):

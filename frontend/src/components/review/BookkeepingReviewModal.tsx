@@ -167,7 +167,7 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
   const handleSaveEdit = async () => {
     if (!isBalanced) {
       setErrorMsg(
-        `Jurnal tidak seimbang! Debit (${totalDebits.toLocaleString()}) != Credit (${totalCredits.toLocaleString()}).`
+        `Journal is unbalanced! Debit (${totalDebits.toLocaleString('en-US')}) ≠ Credit (${totalCredits.toLocaleString('en-US')}).`
       )
       return
     }
@@ -301,8 +301,8 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
           <div className="flex items-start gap-2 text-xs text-amber-300 max-w-xl">
             <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
             <span>
-              AI generated this draft below the confidence threshold. Review account classification
-              before posting.
+            AI generated this draft below the confidence threshold. Review the account
+              classification before posting.
             </span>
           </div>
 
@@ -312,7 +312,7 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
                 <input
                   type="text"
                   id="bookkeeping-rejection-reason-input"
-                  placeholder="Reason for rejection..."
+                  placeholder="e.g. Wrong expense account, should be 5200 Advertising Expense..."
                   value={rejectionReason}
                   onChange={(event) => setRejectionReason(event.target.value)}
                   className="flex-1 sm:w-60 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-rose-500"
