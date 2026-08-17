@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { ReconciliationHeader } from './ReconciliationHeader'
 import { ReconciliationBalanceSummary } from './ReconciliationBalanceSummary'
+import { ReconciliationCompletionBanner } from './ReconciliationCompletionBanner'
+import { ReconciliationAuditTimeline } from './ReconciliationAuditTimeline'
 import {
   ReconciliationFiltersToolbar,
   type ReconFilterType,
@@ -36,6 +38,7 @@ export const ReconciliationView: React.FC = () => {
   const [selectedGLEntryId, setSelectedGLEntryId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<ReconFilterType>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
+  const [showAuditTimeline, setShowAuditTimeline] = useState<boolean>(false)
 
   // Load bank transactions, matches, posted GL entries, and COA
   const loadData = useCallback(async (importId: string) => {
@@ -125,6 +128,37 @@ export const ReconciliationView: React.FC = () => {
     return true
   })
 
+  // Determine Statement Period from transactions
+  const statementPeriod = (() => {
+    if (transactions.length === 0) return 'Aug 01 – Aug 31, 2026'
+    const sortedDates = [...transactions]
+      .map((t) => t.transaction_date)
+      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+    const formatDate = (iso: string) => {
+      try {
+        const d = new Date(iso)
+        return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
+      } catch {
+        return iso
+      }
+    }
+    return `${formatDate(sortedDates[0])} – ${formatDate(sortedDates[sortedDates.length - 1])}`
+  })()
+
+  // Calculate Bank Balance vs GL Balance Difference
+  const bankBalance = transactions.reduce((acc, t) => acc + t.amount, 0)
+  const glBalance = matches
+    .filter((m) => m.journal_entry_id && (m.status === 'accepted' || m.status === 'matched'))
+    .reduce((acc, m) => acc + (m.journal_entry?.total_debit || 0), 0)
+  const difference = Math.abs(bankBalance - glBalance)
+
+  // Reconciliation Completion state: transactions exist, difference is Rp0, and all matched
+  const isComplete =
+    transactions.length > 0 &&
+    (difference < 0.01 || matchedCount === transactions.length) &&
+    proposedCount === 0 &&
+    unmatchedCount === 0
+
   // Filter transactions based on active tab and search query
   const filteredTransactions = transactions.filter((tx) => {
     const match = matches.find((m) => m.bank_transaction_id === tx.id)
@@ -204,6 +238,8 @@ export const ReconciliationView: React.FC = () => {
     }
   }
 
+  const activeImport = imports.find((i) => i.id === activeImportId)
+
   return (
     <div className="space-y-6">
       {/* Header Statistics & Control Actions */}
@@ -231,6 +267,16 @@ export const ReconciliationView: React.FC = () => {
         proposedCount={proposedCount}
         unmatchedCount={unmatchedCount}
         loading={loading}
+      />
+
+      {/* Celebratory Completion State Banner (Section 7) */}
+      <ReconciliationCompletionBanner
+        isComplete={isComplete}
+        statementPeriod={statementPeriod}
+        activeImport={activeImport}
+        transactions={transactions}
+        matches={matches}
+        onOpenAuditTrail={() => setShowAuditTimeline(true)}
       />
 
       {/* Filters Toolbar & Search */}
@@ -268,6 +314,13 @@ export const ReconciliationView: React.FC = () => {
         onRefresh={() => {
           if (activeImportId) loadData(activeImportId)
         }}
+      />
+
+      {/* Activity Timeline & Audit Trail Modal (Section 15) */}
+      <ReconciliationAuditTimeline
+        activeImport={activeImport}
+        isOpen={showAuditTimeline}
+        onClose={() => setShowAuditTimeline(false)}
       />
     </div>
   )
