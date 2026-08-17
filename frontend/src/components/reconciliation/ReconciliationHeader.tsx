@@ -26,6 +26,8 @@ interface ReconciliationHeaderProps {
   onSelectImport: (importId: string) => void
   onImportSuccess: (importId: string, importData: BankStatementImportResponse) => void
   onRunSuccess: () => void
+  onTriggerStreamRun?: (importId: string) => void
+  isStreaming?: boolean
 }
 
 export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
@@ -39,6 +41,8 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
   onSelectImport,
   onImportSuccess,
   onRunSuccess,
+  onTriggerStreamRun,
+  isStreaming = false,
 }) => {
   const [uploading, setUploading] = useState(false)
   const [runningEngine, setRunningEngine] = useState(false)
@@ -69,6 +73,11 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
   const handleRunReconciliation = async () => {
     if (!activeImportId) {
       alert('Please upload or select a Bank Statement CSV first.')
+      return
+    }
+
+    if (onTriggerStreamRun) {
+      onTriggerStreamRun(activeImportId)
       return
     }
 
@@ -204,15 +213,15 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
           <button
             type="button"
             onClick={handleRunReconciliation}
-            disabled={runningEngine || !activeImportId}
+            disabled={runningEngine || isStreaming || !activeImportId}
             className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-semibold text-xs transition-all shadow-lg shadow-emerald-600/30 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
-            {runningEngine ? (
+            {runningEngine || isStreaming ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <Sparkles className="w-4 h-4" />
             )}
-            Run Recon Engine
+            {isStreaming ? 'Streaming Recon...' : 'Run Recon Engine'}
           </button>
         </div>
       </div>

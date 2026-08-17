@@ -3,6 +3,7 @@ import { ReconciliationHeader } from './ReconciliationHeader'
 import { ReconciliationBalanceSummary } from './ReconciliationBalanceSummary'
 import { ReconciliationCompletionBanner } from './ReconciliationCompletionBanner'
 import { ReconciliationAuditTimeline } from './ReconciliationAuditTimeline'
+import { ReconciliationLiveStreamCard } from './ReconciliationLiveStreamCard'
 import {
   ReconciliationFiltersToolbar,
   type ReconFilterType,
@@ -39,6 +40,8 @@ export const ReconciliationView: React.FC = () => {
   const [activeFilter, setActiveFilter] = useState<ReconFilterType>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [showAuditTimeline, setShowAuditTimeline] = useState<boolean>(false)
+  const [isStreamingRecon, setIsStreamingRecon] = useState<boolean>(false)
+  const [streamImportId, setStreamImportId] = useState<string | null>(null)
 
   // Load bank transactions, matches, posted GL entries, and COA
   const loadData = useCallback(async (importId: string) => {
@@ -240,6 +243,17 @@ export const ReconciliationView: React.FC = () => {
 
   const activeImport = imports.find((i) => i.id === activeImportId)
 
+  const handleTriggerStreamRun = (importId: string) => {
+    setStreamImportId(importId)
+    setIsStreamingRecon(true)
+  }
+
+  const handleStreamCompleted = () => {
+    if (activeImportId) {
+      loadData(activeImportId)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header Statistics & Control Actions */}
@@ -253,6 +267,8 @@ export const ReconciliationView: React.FC = () => {
         transactions={transactions}
         onSelectImport={(id) => setActiveImportId(id)}
         onImportSuccess={handleImportSuccess}
+        onTriggerStreamRun={handleTriggerStreamRun}
+        isStreaming={isStreamingRecon}
         onRunSuccess={() => {
           if (activeImportId) loadData(activeImportId)
         }}
@@ -321,6 +337,15 @@ export const ReconciliationView: React.FC = () => {
         activeImport={activeImport}
         isOpen={showAuditTimeline}
         onClose={() => setShowAuditTimeline(false)}
+      />
+
+      {/* Real-time SSE Reconciliation Engine Execution Stream Card */}
+      <ReconciliationLiveStreamCard
+        importId={streamImportId || activeImportId || ''}
+        statementFilename={activeImport?.original_filename}
+        isOpen={isStreamingRecon}
+        onClose={() => setIsStreamingRecon(false)}
+        onCompleted={handleStreamCompleted}
       />
     </div>
   )

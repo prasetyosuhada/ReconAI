@@ -12,6 +12,7 @@ from fastapi import (
     Query,
     status,
 )
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -33,12 +34,38 @@ from app.schemas.reconciliation import (
     ReconciliationMatchResponse,
     ReconciliationSummaryResponse,
 )
-from app.services.reconciliation import execute_reconciliation_workflow
+from app.services.reconciliation import (
+    execute_reconciliation_workflow,
+    stream_reconciliation_workflow,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/reconciliation", tags=["Reconciliation"])
 reconcile_router = APIRouter(prefix="/reconcile", tags=["Reconciliation"])
+
+
+@router.get(
+    "/stream/{bank_statement_import_id}",
+    summary="Stream live reconciliation engine events via Server-Sent Events (SSE)",
+)
+@reconcile_router.get(
+    "/stream/{bank_statement_import_id}",
+    summary="Stream live reconciliation engine events via Server-Sent Events (SSE)",
+)
+def stream_reconciliation_engine(
+    bank_statement_import_id: str,
+) -> StreamingResponse:
+    """Run reconciliation and stream real-time progress events via SSE."""
+    return StreamingResponse(
+        stream_reconciliation_workflow(bank_statement_import_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

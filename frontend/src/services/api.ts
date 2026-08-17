@@ -1,4 +1,33 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+
+export interface ReconciliationStreamEvent {
+  stage:
+    | 'init'
+    | 'candidates_loaded'
+    | 'evaluating'
+    | 'already_matched'
+    | 'exact_match_found'
+    | 'agent_invoked'
+    | 'agent_match_accepted'
+    | 'review_queued'
+    | 'unmatched_queued'
+    | 'agent_error'
+    | 'completed'
+    | 'error'
+  message: string
+  percentage?: number
+  current?: number
+  total?: number
+  matched_count?: number
+  proposed_count?: number
+  unmatched_count?: number
+  tx_id?: string
+  description?: string
+  amount?: number
+  matched_je_id?: string
+  confidence?: number
+  rationale?: string
+}
 
 export interface DocumentResponse {
   id: string

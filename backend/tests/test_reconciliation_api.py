@@ -232,3 +232,33 @@ def test_manual_match_transaction(client, db_session):
     db_session.refresh(tx)
     assert tx.status == "matched"
 
+
+def test_stream_reconciliation_workflow_sse(client, db_session):
+    imp_id = uuid.uuid4()
+    imp = BankStatementImport(
+        id=imp_id, original_filename="stream_test.csv", status="imported", row_count=1
+    )
+    tx = BankTransaction(
+        id=uuid.uuid4(),
+        bank_statement_import_id=imp_id,
+        transaction_date=date(2026, 8, 1),
+        description="Office Equipment",
+        amount=-500000.0,
+        currency="IDR",
+        status="imported",
+    )
+    je = JournalEntry(
+        id=uuid.uuid4(),
+        entry_date=date(2026, 8, 1),
+        description="Office Equipment",
+        status="posted",
+    )
+    db_session.add_all([imp, tx, je])
+    db_session.commit()
+
+    response = client.get(f"/api/v1/reconciliation/stream/{imp_id}")
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers.get("content-type", "")
+    assert "data:" in response.text
+
+

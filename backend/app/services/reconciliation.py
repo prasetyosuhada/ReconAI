@@ -1,7 +1,7 @@
-"""Background reconciliation service for matching bank transactions."""
-
+import json
 import logging
 import uuid
+from collections.abc import Generator
 from typing import Any
 
 from app.agents.reconciliation import run_reconciliation_agent
@@ -19,17 +19,11 @@ from app.services.accounting import find_exact_reconciliation_matches
 logger = logging.getLogger(__name__)
 
 
-def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
-    """Execute bank statement reconciliation workflow asynchronously.
-
-    Steps:
-    1. Fetch bank statement import and its unreconciled transactions.
-    2. Fetch posted candidate journal entries from database.
-    3. Run deterministic exact matching (tolerance, date window, vendor).
-    4. Fall back to LLM Reconciliation Agent for fuzzy candidates.
-    5. Save ReconciliationMatch records, create ReviewItems & AuditEvents.
-    """
-    logger.info("Starting reconciliation workflow for import ID: %s", import_id)
+def stream_reconciliation_workflow(
+    import_id: str | uuid.UUID,
+) -> Generator[str, None, None]:
+    """Execute bank statement reconciliation workflow and yield real-time SSE events."""
+    logger.info("Starting streaming reconciliation workflow for import ID: %s", import_id)
     import_uuid = uuid.UUID(import_id) if isinstance(import_id, str) else import_id
 
     db = SessionLocal()
@@ -41,10 +35,13 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
         )
         if not imp_record:
             logger.error("BankStatementImport %s not found in DB.", import_id)
+            yield f"data: {json.dumps({'stage': 'error', 'message': f'Bank statement import [{import_id}] not found.'})}\n\n"
             return
 
         imp_record.status = "matching_in_progress"
         db.commit()
+
+        yield f"data: {json.dumps({'stage': 'init', 'message': 'Reconciliation Engine initialized. Fetching statement records...', 'percentage': 5})}\n\n"
 
         transactions = (
             db.query(BankTransaction)
@@ -55,6 +52,9 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
         posted_entries = (
             db.query(JournalEntry).filter(JournalEntry.status == "posted").all()
         )
+
+        total_tx = len(transactions)
+        yield f"data: {json.dumps({'stage': 'candidates_loaded', 'message': f'Loaded {len(posted_entries)} posted GL entries and {total_tx} bank transactions.', 'total': total_tx, 'percentage': 10})}\n\n"
 
         # Prepare candidate dictionary list for matching
         candidate_dicts: list[dict[str, Any]] = []
@@ -77,13 +77,16 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                 }
             )
 
-        print("CANDIDATE JOURNAL ENTRIES:\n", candidate_dicts)
-
         matched_count = 0
+        proposed_count = 0
+        unmatched_count = 0
 
-        for tx in transactions:
+        for idx, tx in enumerate(transactions, start=1):
+            pct = 10 + int((idx / total_tx) * 85) if total_tx > 0 else 95
+
             if tx.status == "matched":
                 matched_count += 1
+                yield f"data: {json.dumps({'stage': 'already_matched', 'tx_id': str(tx.id), 'description': tx.description, 'amount': float(tx.amount), 'current': idx, 'total': total_tx, 'matched_count': matched_count, 'percentage': pct, 'message': f'#{idx}: {tx.description} is already reconciled.'})}\n\n"
                 continue
 
             tx_dict = {
@@ -98,7 +101,7 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                 "currency": tx.currency,
             }
 
-            print("CURRENT TRANSACTION:\n", tx_dict)
+            yield f"data: {json.dumps({'stage': 'evaluating', 'tx_id': str(tx.id), 'description': tx.description, 'amount': float(tx.amount), 'current': idx, 'total': total_tx, 'matched_count': matched_count, 'percentage': pct, 'message': f'Evaluating #{idx}/{total_tx}: {tx.description} (Rp{abs(tx.amount):,.0f}) via Exact Matching...' })}\n\n"
 
             # Step 1: Deterministic Exact Match
             exact_res = find_exact_reconciliation_matches(tx_dict, candidate_dicts)
@@ -137,12 +140,16 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                     },
                 )
                 db.add(audit)
+                db.commit()
+
+                yield f"data: {json.dumps({'stage': 'exact_match_found', 'tx_id': str(tx.id), 'matched_je_id': str(matched_je_id), 'confidence': 1.0, 'matched_count': matched_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'✓ Exact Match (100%) for {tx.description} with #JE-{str(matched_je_id)[:8]}'})}\n\n"
 
             else:
                 # Step 2: Agent Fuzzy Matching
+                yield f"data: {json.dumps({'stage': 'agent_invoked', 'tx_id': str(tx.id), 'description': tx.description, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'No exact match. Invoking AI Reconciliation Agent for {tx.description}...' })}\n\n"
+
                 try:
                     agent_res = run_reconciliation_agent(tx_dict, candidate_dicts)
-                    print("AGENT RESPONSE:\n", agent_res)
                     top_matches = agent_res.result.matches or []
 
                     if top_matches:
@@ -172,6 +179,7 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                             tx.status = "matched"
                             matched_count += 1
                         else:
+                            proposed_count += 1
                             # Create ReviewItem for human verification
                             review = ReviewItem(
                                 id=uuid.uuid4(),
@@ -208,7 +216,15 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                             },
                         )
                         db.add(audit)
+                        db.commit()
+
+                        if is_high_conf:
+                            yield f"data: {json.dumps({'stage': 'agent_match_accepted', 'tx_id': str(tx.id), 'matched_je_id': str(matched_je_id), 'confidence': conf, 'matched_count': matched_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'✨ AI Agent matched {tx.description} with #JE-{str(matched_je_id)[:8]} ({int(conf*100)}% conf)'})}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'stage': 'review_queued', 'tx_id': str(tx.id), 'matched_je_id': str(matched_je_id), 'confidence': conf, 'proposed_count': proposed_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'⚠️ AI Agent proposed match for {tx.description} ({int(conf*100)}% conf). Queued for Human Review.'})}\n\n"
+
                     else:
+                        unmatched_count += 1
                         # No matches found by agent
                         review = ReviewItem(
                             id=uuid.uuid4(),
@@ -223,6 +239,9 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                             original_payload=tx_dict,
                         )
                         db.add(review)
+                        db.commit()
+
+                        yield f"data: {json.dumps({'stage': 'unmatched_queued', 'tx_id': str(tx.id), 'unmatched_count': unmatched_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'✕ No matching GL entry for {tx.description}. Marked as Bank Only.'})}\n\n"
 
                 except Exception as ex:
                     logger.error(
@@ -230,6 +249,7 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                         tx.id,
                         str(ex),
                     )
+                    yield f"data: {json.dumps({'stage': 'agent_error', 'tx_id': str(tx.id), 'message': f'Agent error for {tx.description}: {str(ex)}'})}\n\n"
 
         # Final import status
         if matched_count == len(transactions) and len(transactions) > 0:
@@ -240,12 +260,7 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
             imp_record.status = "imported"
 
         db.commit()
-        logger.info(
-            "Completed reconciliation for import %s: %d/%d matched.",
-            import_id,
-            matched_count,
-            len(transactions),
-        )
+        yield f"data: {json.dumps({'stage': 'completed', 'matched_count': matched_count, 'proposed_count': proposed_count, 'unmatched_count': unmatched_count, 'total_count': total_tx, 'percentage': 100, 'message': f'🎉 Reconciliation Run Complete! {matched_count}/{total_tx} matched, {proposed_count} review required.'})}\n\n"
 
     except Exception as e:
         logger.error(
@@ -255,16 +270,13 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
             exc_info=True,
         )
         db.rollback()
-        try:
-            imp_record = (
-                db.query(BankStatementImport)
-                .filter(BankStatementImport.id == import_uuid)
-                .first()
-            )
-            if imp_record:
-                imp_record.status = "failed"
-                db.commit()
-        except Exception:
-            pass
+        yield f"data: {json.dumps({'stage': 'error', 'message': f'Execution failed: {str(e)}'})}\n\n"
     finally:
         db.close()
+
+
+def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
+    """Execute background reconciliation by consuming the stream generator."""
+    for _ in stream_reconciliation_workflow(import_id):
+        pass
+
