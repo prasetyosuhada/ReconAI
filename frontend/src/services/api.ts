@@ -169,6 +169,13 @@ export interface BankStatementImportResponse {
   links?: Record<string, string>
 }
 
+export interface BankStatementImportListResponse {
+  items: BankStatementImportResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface ReconciliationMatchResponse {
   id: string
   bank_transaction_id: string
@@ -423,6 +430,24 @@ export async function fetchTrialBalance(asOfDate?: string): Promise<TrialBalance
 }
 
 // Bank Statement & Reconciliation APIs
+export async function fetchBankStatementImports(params?: {
+  limit?: number
+  offset?: number
+}): Promise<BankStatementImportListResponse> {
+  const query = new URLSearchParams()
+  if (params?.limit) query.append('limit', params.limit.toString())
+  if (params?.offset) query.append('offset', params.offset.toString())
+
+  const url = `${API_BASE_URL}/bank-statements${query.toString() ? `?${query.toString()}` : ''}`
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch bank statement imports')
+  }
+
+  return response.json()
+}
+
 export async function uploadBankStatementCSV(file: File): Promise<BankStatementImportResponse> {
   const formData = new FormData()
   formData.append('file', file)

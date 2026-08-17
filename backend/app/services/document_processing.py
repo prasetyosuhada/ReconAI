@@ -109,11 +109,11 @@ def process_document_background(
             "status": "extracting",
             "chart_of_accounts": coa_list,
         }
-        print("INITIAL STATE:\n", initial_state)
+        print("===== DOCUMENT PROCESSING STARTED =====")
 
         # Run compiled LangGraph StateGraph workflow
         final_state = document_processing_graph.invoke(initial_state)
-        print("HASIL INVOKE:\n", final_state)
+        print("===== DOCUMENT PROCESSING COMPLETED =====")
 
         final_status = final_state.get("status", "extracted")
         confidence_score = final_state.get("confidence_score", 0.0)

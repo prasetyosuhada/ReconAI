@@ -73,6 +73,8 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                 }
             )
 
+        print("CANDIDATE JOURNAL ENTRIES:\n", candidate_dicts)
+
         matched_count = 0
 
         for tx in transactions:
@@ -87,6 +89,8 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                 "amount": float(tx.amount),
                 "currency": tx.currency,
             }
+
+            print("CURRENT TRANSACTION:\n", tx_dict)
 
             # Step 1: Deterministic Exact Match
             exact_res = find_exact_reconciliation_matches(tx_dict, candidate_dicts)
@@ -130,6 +134,7 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
                 # Step 2: Agent Fuzzy Matching
                 try:
                     agent_res = run_reconciliation_agent(tx_dict, candidate_dicts)
+                    print("AGENT RESPONSE:\n", agent_res)
                     top_matches = agent_res.result.matches or []
 
                     if top_matches:

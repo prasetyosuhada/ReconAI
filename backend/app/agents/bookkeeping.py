@@ -84,7 +84,6 @@ def run_bookkeeping_agent(
             for coa in chart_of_accounts
         ]
     )
-    print("List of COA:\n", coa_formatted)
 
     # Create sensitive accounts set for deterministic post-verification
     sensitive_codes = {
