@@ -201,6 +201,23 @@ export interface ReconciliationMatchListResponse {
   offset: number
 }
 
+export interface ReconciliationSummaryResponse {
+  bank_statement_import_id: string
+  statement_period_start?: string
+  statement_period_end?: string
+  bank_statement_balance: number
+  gl_balance: number
+  difference: number
+  is_balanced: boolean
+  status: string
+  total_transactions: number
+  matched_count: number
+  proposed_count: number
+  unmatched_count: number
+  gl_only_count: number
+  progress_percentage: number
+}
+
 // Audit Trail & Traceability Interfaces
 export interface AuditEventResponse {
   id: string
@@ -571,6 +588,38 @@ export async function rejectReconciliationMatch(
   }
   return response.json()
 }
+
+export async function fetchReconciliationSummary(
+  importId: string
+): Promise<ReconciliationSummaryResponse> {
+  const response = await fetch(`${API_BASE_URL}/reconciliation/summary/${importId}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch reconciliation summary for import ${importId}`)
+  }
+  return response.json()
+}
+
+export async function manualMatchReconciliation(
+  bankTransactionId: string,
+  journalEntryId: string,
+  note?: string
+): Promise<{ id: string; status: string; resolved_at: string; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/reconciliation/manual-match`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      bank_transaction_id: bankTransactionId,
+      journal_entry_id: journalEntryId,
+      resolution_note: note || 'Manually matched in Reconciliation UI',
+    }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to manually link match')
+  }
+  return response.json()
+}
+
 
 // Audit Log & Traceability APIs
 export async function fetchAuditEvents(params?: {

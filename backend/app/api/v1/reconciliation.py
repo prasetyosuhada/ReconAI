@@ -17,18 +17,21 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.db.session import get_db
 from app.models.audit import AuditEvent
+from app.models.journal import JournalEntry
 from app.models.reconciliation import (
     BankStatementImport,
     BankTransaction,
     ReconciliationMatch,
 )
 from app.schemas.reconciliation import (
+    ManualMatchRequest,
     MatchActionRequest,
     MatchActionResponse,
     ReconcileRunRequest,
     ReconcileRunResponse,
     ReconciliationMatchListResponse,
     ReconciliationMatchResponse,
+    ReconciliationSummaryResponse,
 )
 from app.services.reconciliation import execute_reconciliation_workflow
 
@@ -296,3 +299,202 @@ def reject_reconciliation_match(
         resolved_at=match.updated_at,
         message="Reconciliation match rejected.",
     )
+
+
+@router.get(
+    "/summary/{bank_statement_import_id}",
+    response_model=ReconciliationSummaryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get reconciliation summary metrics for a bank statement import",
+)
+def get_reconciliation_summary(
+    bank_statement_import_id: str,
+    db: Session = Depends(get_db),
+) -> ReconciliationSummaryResponse:
+    """Compute and return balanced summary metrics deterministically."""
+    try:
+        imp_uuid = uuid.UUID(bank_statement_import_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid bank_statement_import_id UUID format.",
+        ) from None
+
+    import_record = (
+        db.query(BankStatementImport)
+        .filter(BankStatementImport.id == imp_uuid)
+        .first()
+    )
+    if not import_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Bank statement import [{bank_statement_import_id}] not found.",
+        )
+
+    transactions = (
+        db.query(BankTransaction)
+        .filter(BankTransaction.bank_statement_import_id == imp_uuid)
+        .all()
+    )
+
+    matches = (
+        db.query(ReconciliationMatch)
+        .join(ReconciliationMatch.bank_transaction)
+        .filter(BankTransaction.bank_statement_import_id == imp_uuid)
+        .all()
+    )
+
+    posted_entries = (
+        db.query(JournalEntry).filter(JournalEntry.status == "posted").all()
+    )
+
+    matched_je_ids = {
+        m.journal_entry_id
+        for m in matches
+        if m.journal_entry_id and m.status in ("accepted", "matched")
+    }
+
+    # Deterministic Balances
+    bank_balance = sum(float(t.amount) for t in transactions)
+
+    # Calculate GL balance from posted entries matched to this statement
+    gl_balance = 0.0
+    for je in posted_entries:
+        if je.id in matched_je_ids:
+            tot_deb = sum(float(line.debit_amount) for line in je.lines)
+            gl_balance += tot_deb
+
+    diff = abs(bank_balance - gl_balance)
+    is_balanced = diff < 0.01
+
+    matched_count = sum(1 for m in matches if m.status in ("accepted", "matched"))
+    proposed_count = sum(1 for m in matches if m.status == "proposed")
+    unmatched_count = max(0, len(transactions) - (matched_count + proposed_count))
+    gl_only_count = sum(1 for je in posted_entries if je.id not in matched_je_ids)
+
+    # Calculate status & progress percentage
+    total_tx = len(transactions)
+    prog_pct = int((matched_count / total_tx * 100)) if total_tx > 0 else 0
+
+    if is_balanced and matched_count == total_tx and total_tx > 0:
+        recon_status = "reconciled"
+    elif matched_count > 0:
+        recon_status = "partially_reconciled"
+    elif proposed_count > 0:
+        recon_status = "review_required"
+    else:
+        recon_status = "unreconciled"
+
+    sorted_dates = sorted(t.transaction_date for t in transactions)
+    start_date = sorted_dates[0] if sorted_dates else None
+    end_date = sorted_dates[-1] if sorted_dates else None
+
+    return ReconciliationSummaryResponse(
+        bank_statement_import_id=imp_uuid,
+        statement_period_start=start_date,
+        statement_period_end=end_date,
+        bank_statement_balance=round(bank_balance, 2),
+        gl_balance=round(gl_balance, 2),
+        difference=round(diff, 2),
+        is_balanced=is_balanced,
+        status=recon_status,
+        total_transactions=total_tx,
+        matched_count=matched_count,
+        proposed_count=proposed_count,
+        unmatched_count=unmatched_count,
+        gl_only_count=gl_only_count,
+        progress_percentage=prog_pct,
+    )
+
+
+@router.post(
+    "/manual-match",
+    response_model=MatchActionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Manually match a bank transaction with a general ledger journal entry",
+)
+def manual_match_transaction(
+    req: ManualMatchRequest,
+    db: Session = Depends(get_db),
+) -> MatchActionResponse:
+    """Manually link a bank transaction to a posted journal entry."""
+    tx = (
+        db.query(BankTransaction)
+        .filter(BankTransaction.id == req.bank_transaction_id)
+        .first()
+    )
+    if not tx:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Bank transaction [{req.bank_transaction_id}] not found.",
+        )
+
+    je = (
+        db.query(JournalEntry)
+        .filter(JournalEntry.id == req.journal_entry_id)
+        .first()
+    )
+    if not je:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Journal entry [{req.journal_entry_id}] not found.",
+        )
+
+    # Check if a match already exists for this transaction
+    existing_match = (
+        db.query(ReconciliationMatch)
+        .filter(ReconciliationMatch.bank_transaction_id == tx.id)
+        .first()
+    )
+
+    if existing_match:
+        existing_match.journal_entry_id = je.id
+        existing_match.match_type = "manual"
+        existing_match.status = "accepted"
+        existing_match.confidence_score = 1.00
+        existing_match.amount_score = 1.00
+        existing_match.date_score = 1.00
+        existing_match.vendor_score = 1.00
+        existing_match.rationale = req.resolution_note or "Manually matched by user."
+        existing_match.updated_at = datetime.now(UTC)
+        match_record = existing_match
+    else:
+        match_record = ReconciliationMatch(
+            id=uuid.uuid4(),
+            bank_transaction_id=tx.id,
+            journal_entry_id=je.id,
+            match_type="manual",
+            status="accepted",
+            confidence_score=1.00,
+            amount_score=1.00,
+            date_score=1.00,
+            vendor_score=1.00,
+            rationale=req.resolution_note or "Manually matched by user.",
+        )
+        db.add(match_record)
+
+    tx.status = "matched"
+
+    audit = AuditEvent(
+        event_type="reconciliation_match_manual",
+        source_type="reconciliation_match",
+        source_id=match_record.id,
+        actor_type="human",
+        actor_name="api_user",
+        input_snapshot={
+            "bank_transaction_id": str(tx.id),
+            "journal_entry_id": str(je.id),
+            "note": req.resolution_note,
+        },
+        output_snapshot={"status": "accepted", "match_type": "manual"},
+    )
+    db.add(audit)
+    db.commit()
+
+    return MatchActionResponse(
+        id=match_record.id,
+        status="accepted",
+        resolved_at=datetime.now(UTC),
+        message="Manual reconciliation match created successfully.",
+    )
+

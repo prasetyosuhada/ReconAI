@@ -89,3 +89,33 @@ class MatchActionResponse(BaseModel):
     status: str
     resolved_at: datetime
     message: str
+
+
+class ReconciliationSummaryResponse(BaseModel):
+    """API response schema for bank reconciliation summary."""
+
+    bank_statement_import_id: uuid.UUID
+    statement_period_start: date | None = None
+    statement_period_end: date | None = None
+    bank_statement_balance: float
+    gl_balance: float
+    difference: float
+    is_balanced: bool
+    status: str  # reconciled, review_required, partially_reconciled, unreconciled
+    total_transactions: int
+    matched_count: int
+    proposed_count: int
+    unmatched_count: int
+    gl_only_count: int
+    progress_percentage: int
+
+
+class ManualMatchRequest(BaseModel):
+    """Request schema for manually linking a bank transaction to a journal entry."""
+
+    bank_transaction_id: uuid.UUID
+    journal_entry_id: uuid.UUID
+    resolution_note: str | None = Field(
+        None, description="Optional explanation for manual match"
+    )
+
