@@ -25,6 +25,7 @@ import type {
   JournalEntryResponse,
   ReconciliationMatchResponse,
 } from '../../services/api'
+import { manualMatchReconciliation } from '../../services/api'
 import type { ReconFilterType } from './ReconciliationFiltersToolbar'
 
 interface Reconciliation2ColumnViewProps {
@@ -967,10 +968,23 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                       </span>
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={async () => {
+                          if (selectedTx) {
+                            try {
+                              await manualMatchReconciliation(
+                                selectedTx.id,
+                                je.id,
+                                `Manually linked to #JE-${je.id.substring(0, 8)}`
+                              )
+                              showToast(
+                                `Linked transaction to Journal Entry #JE-${je.id.substring(0, 8)}`
+                              )
+                              onRefresh?.()
+                            } catch (err) {
+                              console.error('Failed to link match:', err)
+                            }
+                          }
                           setShowFindMatchModal(false)
-                          showToast(`Linked transaction to Journal Entry #JE-${je.id.substring(0, 8)}`)
-                          onRefresh?.()
                         }}
                         className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors cursor-pointer"
                       >
