@@ -516,6 +516,62 @@ export async function fetchReconciliationMatches(params?: {
   return response.json()
 }
 
+export interface ChartOfAccountResponse {
+  id: string
+  account_code: string
+  account_name: string
+  account_type: string
+  is_active: boolean
+  is_sensitive: boolean
+}
+
+export interface ChartOfAccountListResponse {
+  items: ChartOfAccountResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export async function fetchChartOfAccounts(): Promise<ChartOfAccountListResponse> {
+  const response = await fetch(`${API_BASE_URL}/ledger/chart-of-accounts?limit=100`)
+  if (!response.ok) {
+    throw new Error('Failed to fetch chart of accounts')
+  }
+  return response.json()
+}
+
+export async function acceptReconciliationMatch(
+  matchId: string,
+  note?: string
+): Promise<{ id: string; status: string; resolved_at: string; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/reconciliation/${matchId}/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resolution_note: note || 'Accepted via Reconciliation UI' }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to accept reconciliation match')
+  }
+  return response.json()
+}
+
+export async function rejectReconciliationMatch(
+  matchId: string,
+  note?: string
+): Promise<{ id: string; status: string; resolved_at: string; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/reconciliation/${matchId}/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resolution_note: note || 'Rejected via Reconciliation UI' }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to reject reconciliation match')
+  }
+  return response.json()
+}
+
 // Audit Log & Traceability APIs
 export async function fetchAuditEvents(params?: {
   source_type?: string

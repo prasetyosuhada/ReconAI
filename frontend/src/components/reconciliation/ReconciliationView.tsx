@@ -9,14 +9,18 @@ import { Reconciliation2ColumnView } from './Reconciliation2ColumnView'
 import type {
   BankStatementImportResponse,
   BankTransactionResponse,
+  ChartOfAccountResponse,
   JournalEntryResponse,
   ReconciliationMatchResponse,
 } from '../../services/api'
 import {
+  acceptReconciliationMatch,
   fetchBankStatementImports,
   fetchBankTransactions,
+  fetchChartOfAccounts,
   fetchJournalEntries,
   fetchReconciliationMatches,
+  rejectReconciliationMatch,
 } from '../../services/api'
 
 export const ReconciliationView: React.FC = () => {
@@ -25,24 +29,28 @@ export const ReconciliationView: React.FC = () => {
   const [transactions, setTransactions] = useState<BankTransactionResponse[]>([])
   const [matches, setMatches] = useState<ReconciliationMatchResponse[]>([])
   const [journalEntries, setJournalEntries] = useState<JournalEntryResponse[]>([])
+  const [chartOfAccounts, setChartOfAccounts] = useState<ChartOfAccountResponse[]>([])
   const [loading, setLoading] = useState<boolean>(false)
+  const [actionLoading, setActionLoading] = useState<boolean>(false)
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null)
   const [selectedGLEntryId, setSelectedGLEntryId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<ReconFilterType>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
 
-  // Load bank transactions, matches, and posted GL entries
+  // Load bank transactions, matches, posted GL entries, and COA
   const loadData = useCallback(async (importId: string) => {
     setLoading(true)
     try {
-      const [txRes, matchRes, jeRes] = await Promise.all([
+      const [txRes, matchRes, jeRes, coaRes] = await Promise.all([
         fetchBankTransactions(importId),
         fetchReconciliationMatches({ bank_statement_import_id: importId }),
         fetchJournalEntries({ status: 'posted', limit: 100 }),
+        fetchChartOfAccounts().catch(() => ({ items: [], total: 0, limit: 100, offset: 0 })),
       ])
       setTransactions(txRes.items)
       setMatches(matchRes.items)
       setJournalEntries(jeRes.items)
+      setChartOfAccounts(coaRes.items)
       setSelectedTxId((prev) => (txRes.items.length > 0 && !prev ? txRes.items[0].id : prev))
       if (jeRes.items.length > 0) {
         setSelectedGLEntryId((prev) => prev ?? jeRes.items[0].id)
@@ -161,6 +169,41 @@ export const ReconciliationView: React.FC = () => {
     }
   }, [activeFilter, filteredGLOnlyEntries, filteredTransactions, selectedGLEntryId, selectedTxId])
 
+  // Handlers for accepting and rejecting reconciliation matches
+  const handleAcceptMatch = async (matchId: string) => {
+    setActionLoading(true)
+    try {
+      await acceptReconciliationMatch(matchId)
+      setMatches((prev) =>
+        prev.map((m) => (m.id === matchId ? { ...m, status: 'accepted' } : m))
+      )
+      if (activeImportId) {
+        await loadData(activeImportId)
+      }
+    } catch (err) {
+      console.error('Failed to accept match:', err)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleRejectMatch = async (matchId: string) => {
+    setActionLoading(true)
+    try {
+      await rejectReconciliationMatch(matchId)
+      setMatches((prev) =>
+        prev.map((m) => (m.id === matchId ? { ...m, status: 'rejected' } : m))
+      )
+      if (activeImportId) {
+        await loadData(activeImportId)
+      }
+    } catch (err) {
+      console.error('Failed to reject match:', err)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header Statistics & Control Actions */}
@@ -211,12 +254,20 @@ export const ReconciliationView: React.FC = () => {
         transactions={filteredTransactions}
         matches={matches}
         glOnlyEntries={filteredGLOnlyEntries}
+        postedJournalEntries={journalEntries}
+        chartOfAccounts={chartOfAccounts}
         activeFilter={activeFilter}
         loading={loading}
+        actionLoading={actionLoading}
         selectedTxId={selectedTxId}
         selectedGLEntryId={selectedGLEntryId}
         onSelectTx={(txId) => setSelectedTxId(txId)}
         onSelectGLEntry={(glId) => setSelectedGLEntryId(glId)}
+        onAcceptMatch={handleAcceptMatch}
+        onRejectMatch={handleRejectMatch}
+        onRefresh={() => {
+          if (activeImportId) loadData(activeImportId)
+        }}
       />
     </div>
   )
