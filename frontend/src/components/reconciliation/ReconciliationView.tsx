@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { ReconciliationHeader } from './ReconciliationHeader'
+import { ReconciliationBalanceSummary } from './ReconciliationBalanceSummary'
 import { Reconciliation2ColumnView } from './Reconciliation2ColumnView'
 import type {
   BankStatementImportResponse,
@@ -92,6 +93,17 @@ export const ReconciliationView: React.FC = () => {
         onRunSuccess={() => {
           if (activeImportId) loadData(activeImportId)
         }}
+      />
+
+      {/* Reconciliation Balance Comparison & Progress */}
+      <ReconciliationBalanceSummary
+        transactions={transactions}
+        matches={matches}
+        totalCount={transactions.length}
+        matchedCount={matchedCount}
+        proposedCount={proposedCount}
+        unmatchedCount={unmatchedCount < 0 ? 0 : unmatchedCount}
+        loading={loading}
       />
 
       {/* 2-Column Split Reconciliation Dashboard */}
