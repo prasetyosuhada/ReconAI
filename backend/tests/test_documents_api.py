@@ -81,7 +81,7 @@ def test_process_document_background_success(
     db_session.add(doc)
     db_session.commit()
 
-    mock_graph.invoke.return_value = {
+    intake_res = {
         "document_id": str(doc_id),
         "vendor_name": "Toko Gramedia",
         "transaction_date": "2026-08-01",
@@ -93,6 +93,8 @@ def test_process_document_background_success(
         "rationale": "High confidence extraction",
         "status": "extracted",
         "needs_review": False,
+    }
+    bookkeeping_res = {
         "journal_lines": [
             {
                 "account_code": "5100",
@@ -107,7 +109,15 @@ def test_process_document_background_success(
                 "credit_amount": 111000.0,
             },
         ],
+        "is_balanced": True,
+        "uses_sensitive_account": False,
+        "status": "ready_to_post",
     }
+
+    mock_graph.stream.return_value = [
+        {"document_intake": intake_res},
+        {"bookkeeping": bookkeeping_res},
+    ]
 
     process_document_background(
         document_id=str(doc_id),
@@ -161,7 +171,7 @@ def test_process_document_background_review_required(
     db_session.add(doc)
     db_session.commit()
 
-    mock_graph.invoke.return_value = {
+    intake_res = {
         "document_id": str(doc_id),
         "vendor_name": "Unknown Vendor",
         "confidence_score": 0.60,
@@ -169,6 +179,11 @@ def test_process_document_background_review_required(
         "needs_review": True,
         "risk_flags": ["low_confidence_extraction"],
     }
+
+    mock_graph.stream.return_value = [
+        {"document_intake": intake_res},
+        {"review_router": {"needs_review": True}},
+    ]
 
     process_document_background(
         document_id=str(doc_id),
@@ -182,3 +197,66 @@ def test_process_document_background_review_required(
     assert review is not None
     assert review.status == "pending"
     assert review.review_type == "extraction"
+
+
+@patch("app.services.document_processing.document_processing_graph")
+@patch("app.services.document_processing.SessionLocal")
+def test_stream_document_processing_sse(mock_session_class, mock_graph, client, db_session):
+    mock_session_class.return_value = db_session
+
+    doc_id = uuid.uuid4()
+    doc = Document(
+        id=doc_id,
+        original_filename="stream_invoice.pdf",
+        stored_file_path="/tmp/stream_invoice.pdf",
+        mime_type="application/pdf",
+        file_size_bytes=1024,
+        document_type="invoice",
+        status="uploaded",
+    )
+    db_session.add(doc)
+    db_session.commit()
+
+    intake_res = {
+        "document_id": str(doc_id),
+        "vendor_name": "PLN Indonesia",
+        "transaction_date": "2026-08-01",
+        "subtotal_amount": 500000.0,
+        "tax_amount": 55000.0,
+        "total_amount": 555000.0,
+        "currency": "IDR",
+        "confidence_score": 0.95,
+        "status": "extracted",
+        "needs_review": False,
+    }
+    bookkeeping_res = {
+        "journal_lines": [
+            {
+                "account_code": "5200",
+                "account_name": "Electricity",
+                "debit_amount": 555000.0,
+                "credit_amount": 0.0,
+            },
+            {
+                "account_code": "1010",
+                "account_name": "Bank Account",
+                "debit_amount": 0.0,
+                "credit_amount": 555000.0,
+            },
+        ],
+        "is_balanced": True,
+        "uses_sensitive_account": True,
+        "status": "bookkeeping_review_required",
+    }
+
+    mock_graph.stream.return_value = [
+        {"document_intake": intake_res},
+        {"bookkeeping": bookkeeping_res},
+    ]
+
+    response = client.get(f"/api/v1/documents/stream/{doc_id}")
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers.get("content-type", "")
+    assert "data:" in response.text
+
+

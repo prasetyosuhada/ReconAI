@@ -15,6 +15,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -28,7 +29,10 @@ from app.schemas.document import (
     DocumentListResponse,
     DocumentResponse,
 )
-from app.services.document_processing import process_document_background
+from app.services.document_processing import (
+    process_document_background,
+    stream_document_processing,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,26 @@ def _get_upload_dir() -> Path:
     """Ensure upload storage directory exists."""
     UPLOAD_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     return UPLOAD_STORAGE_DIR
+
+
+@router.get(
+    "/stream/{document_id}",
+    summary="Stream live document processing events via Server-Sent Events (SSE)",
+)
+def stream_document_processing_endpoint(
+    document_id: str,
+) -> StreamingResponse:
+    """Run/stream live document intake and bookkeeping progress events via SSE."""
+    return StreamingResponse(
+        stream_document_processing(document_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 
 @router.get(

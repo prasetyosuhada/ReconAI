@@ -4,9 +4,13 @@ import { uploadDocument } from '../../services/api'
 
 interface DropzoneUploadProps {
   onUploadSuccess: () => void
+  onStartStream?: (documentId: string, filename: string) => void
 }
 
-export const DropzoneUpload: React.FC<DropzoneUploadProps> = ({ onUploadSuccess }) => {
+export const DropzoneUpload: React.FC<DropzoneUploadProps> = ({
+  onUploadSuccess,
+  onStartStream,
+}) => {
   const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -73,12 +77,19 @@ export const DropzoneUpload: React.FC<DropzoneUploadProps> = ({ onUploadSuccess 
 
     try {
       const res = await uploadDocument(selectedFile)
-      const filename = res.original_filename || res.document?.original_filename || selectedFile.name
+      const filename =
+        res.original_filename || res.document?.original_filename || selectedFile.name
+      const docId = res.id || res.document?.id
+
       setSuccessMsg(
         `Document "${filename}" uploaded successfully! AI extraction pipeline triggered.`
       )
       setSelectedFile(null)
       onUploadSuccess()
+
+      if (docId && onStartStream) {
+        onStartStream(docId, filename)
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Upload failed. Please try again.'
       setErrorMsg(message)

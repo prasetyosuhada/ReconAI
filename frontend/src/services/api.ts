@@ -29,6 +29,29 @@ export interface ReconciliationStreamEvent {
   rationale?: string
 }
 
+export interface DocumentStreamEvent {
+  stage:
+    | 'init'
+    | 'ocr_started'
+    | 'ocr_extracted'
+    | 'coa_loaded'
+    | 'intake_agent'
+    | 'intake_done'
+    | 'bookkeeping_done'
+    | 'review_queued'
+    | 'journal_created'
+    | 'completed'
+    | 'error'
+  message: string
+  percentage?: number
+  vendor_name?: string
+  total_amount?: number
+  currency?: string
+  confidence_score?: number
+  status?: string
+  text_preview?: string
+}
+
 export interface DocumentResponse {
   id: string
   original_filename: string
