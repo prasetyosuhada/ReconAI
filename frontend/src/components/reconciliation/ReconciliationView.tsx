@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { ReconciliationHeader } from './ReconciliationHeader'
 import { ReconciliationBalanceSummary } from './ReconciliationBalanceSummary'
+import {
+  ReconciliationFiltersToolbar,
+  type ReconFilterType,
+} from './ReconciliationFiltersToolbar'
 import { Reconciliation2ColumnView } from './Reconciliation2ColumnView'
 import type {
   BankStatementImportResponse,
@@ -20,6 +24,8 @@ export const ReconciliationView: React.FC = () => {
   const [matches, setMatches] = useState<ReconciliationMatchResponse[]>([])
   const [loading, setLoading] = useState<boolean>(false)
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null)
+  const [activeFilter, setActiveFilter] = useState<ReconFilterType>('all')
+  const [searchQuery, setSearchQuery] = useState<string>('')
 
   // Load bank transactions + reconciliation matches for a given import ID
   const loadData = useCallback(async (importId: string) => {
@@ -75,7 +81,44 @@ export const ReconciliationView: React.FC = () => {
     (m) => m.status === 'accepted' || m.status === 'matched'
   ).length
   const proposedCount = matches.filter((m) => m.status === 'proposed').length
-  const unmatchedCount = transactions.length - (matchedCount + proposedCount)
+  const unmatchedCount = Math.max(0, transactions.length - (matchedCount + proposedCount))
+
+  // Filter transactions based on active tab and search query
+  const filteredTransactions = transactions.filter((tx) => {
+    const match = matches.find((m) => m.bank_transaction_id === tx.id)
+    const isMatched = match?.status === 'accepted' || match?.status === 'matched'
+    const isProposed = match?.status === 'proposed'
+    const isUnmatched =
+      !match || match.status === 'unmatched' || match.match_rule_type === 'unmatched'
+
+    if (activeFilter === 'matched' && !isMatched) return false
+    if (activeFilter === 'needs_review' && !isProposed) return false
+    if (activeFilter === 'bank_only' && !isUnmatched) return false
+    if (activeFilter === 'reconciled' && !isMatched) return false
+    if (activeFilter === 'gl_only') return false
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim()
+      const descMatch = tx.description.toLowerCase().includes(q)
+      const refMatch = tx.reference_number?.toLowerCase().includes(q) ?? false
+      const amtMatch = tx.amount.toString().includes(q)
+      const dateMatch = tx.transaction_date.toLowerCase().includes(q)
+      const idMatch = tx.id.toLowerCase().includes(q)
+      return descMatch || refMatch || amtMatch || dateMatch || idMatch
+    }
+
+    return true
+  })
+
+  // Auto select active transaction when filter changes
+  useEffect(() => {
+    if (filteredTransactions.length > 0) {
+      const stillExists = filteredTransactions.some((t) => t.id === selectedTxId)
+      if (!stillExists) {
+        setSelectedTxId(filteredTransactions[0].id)
+      }
+    }
+  }, [filteredTransactions, selectedTxId])
 
   return (
     <div className="space-y-6">
@@ -84,7 +127,7 @@ export const ReconciliationView: React.FC = () => {
         totalCount={transactions.length}
         matchedCount={matchedCount}
         proposedCount={proposedCount}
-        unmatchedCount={unmatchedCount < 0 ? 0 : unmatchedCount}
+        unmatchedCount={unmatchedCount}
         activeImportId={activeImportId}
         imports={imports}
         transactions={transactions}
@@ -102,13 +145,29 @@ export const ReconciliationView: React.FC = () => {
         totalCount={transactions.length}
         matchedCount={matchedCount}
         proposedCount={proposedCount}
-        unmatchedCount={unmatchedCount < 0 ? 0 : unmatchedCount}
+        unmatchedCount={unmatchedCount}
         loading={loading}
+      />
+
+      {/* Filters Toolbar & Search */}
+      <ReconciliationFiltersToolbar
+        activeFilter={activeFilter}
+        onSelectFilter={setActiveFilter}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        counts={{
+          all: transactions.length,
+          matched: matchedCount,
+          needs_review: proposedCount,
+          bank_only: unmatchedCount,
+          gl_only: 0,
+          reconciled: matchedCount,
+        }}
       />
 
       {/* 2-Column Split Reconciliation Dashboard */}
       <Reconciliation2ColumnView
-        transactions={transactions}
+        transactions={filteredTransactions}
         matches={matches}
         loading={loading}
         selectedTxId={selectedTxId}

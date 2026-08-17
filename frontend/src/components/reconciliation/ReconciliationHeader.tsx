@@ -327,34 +327,49 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
         </div>
       </div>
 
-      {/* Summary Counts Row */}
+      {/* Accounting-Oriented Summary Cards Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-1">
-          <span className="text-[11px] text-slate-400 font-semibold uppercase">
-            Total Bank Mutations
+        {/* Total Transactions */}
+        <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-1 hover:border-slate-600/60 transition-colors">
+          <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+            Total Transactions
           </span>
-          <div className="text-2xl font-bold text-white">{totalCount}</div>
+          <div className="text-2xl font-extrabold text-white">{totalCount}</div>
+          <div className="text-[10px] text-slate-500 font-medium">Bank statement lines</div>
         </div>
 
-        <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-1">
-          <span className="text-[11px] text-emerald-400 font-semibold uppercase flex items-center gap-1">
-            <CheckCircle2 className="w-3.5 h-3.5" /> Exact Matched
+        {/* Matched */}
+        <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-1 hover:border-emerald-500/30 transition-colors">
+          <span className="text-[11px] text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Matched
           </span>
-          <div className="text-2xl font-bold text-emerald-400">{matchedCount}</div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-extrabold text-emerald-400">{matchedCount}</span>
+            {totalCount > 0 && (
+              <span className="text-xs font-semibold text-emerald-500/80">
+                {((matchedCount / totalCount) * 100).toFixed(1)}%
+              </span>
+            )}
+          </div>
+          <div className="text-[10px] text-slate-500 font-medium">Reconciled with GL</div>
         </div>
 
-        <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-1">
-          <span className="text-[11px] text-amber-400 font-semibold uppercase flex items-center gap-1">
-            <Clock className="w-3.5 h-3.5" /> Possible Match (Review)
+        {/* Needs Review */}
+        <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-1 hover:border-amber-500/30 transition-colors">
+          <span className="text-[11px] text-amber-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5" /> Needs Review
           </span>
-          <div className="text-2xl font-bold text-amber-400">{proposedCount}</div>
+          <div className="text-2xl font-extrabold text-amber-400">{proposedCount}</div>
+          <div className="text-[10px] text-slate-500 font-medium">AI suggested candidates</div>
         </div>
 
-        <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-1">
-          <span className="text-[11px] text-slate-400 font-semibold uppercase">
-            Unmatched Open Items
+        {/* Unmatched */}
+        <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700/50 space-y-1 hover:border-slate-600/60 transition-colors">
+          <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+            Unmatched
           </span>
-          <div className="text-2xl font-bold text-slate-300">{unmatchedCount}</div>
+          <div className="text-2xl font-extrabold text-slate-300">{unmatchedCount}</div>
+          <div className="text-[10px] text-slate-500 font-medium">Open / bank-only items</div>
         </div>
       </div>
     </div>
