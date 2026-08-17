@@ -65,7 +65,11 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
             candidate_dicts.append(
                 {
                     "id": str(je.id),
-                    "entry_date": je.entry_date,
+                    "entry_date": (
+                        je.entry_date.isoformat()
+                        if hasattr(je.entry_date, "isoformat")
+                        else str(je.entry_date)
+                    ),
                     "description": je.description,
                     "total_debit": tot_deb,
                     "total_credit": tot_cred,
@@ -84,7 +88,11 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
 
             tx_dict = {
                 "id": str(tx.id),
-                "transaction_date": tx.transaction_date,
+                "transaction_date": (
+                    tx.transaction_date.isoformat()
+                    if hasattr(tx.transaction_date, "isoformat")
+                    else str(tx.transaction_date)
+                ),
                 "description": tx.description,
                 "amount": float(tx.amount),
                 "currency": tx.currency,
