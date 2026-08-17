@@ -9,11 +9,13 @@ import { Reconciliation2ColumnView } from './Reconciliation2ColumnView'
 import type {
   BankStatementImportResponse,
   BankTransactionResponse,
+  JournalEntryResponse,
   ReconciliationMatchResponse,
 } from '../../services/api'
 import {
   fetchBankStatementImports,
   fetchBankTransactions,
+  fetchJournalEntries,
   fetchReconciliationMatches,
 } from '../../services/api'
 
@@ -22,22 +24,29 @@ export const ReconciliationView: React.FC = () => {
   const [activeImportId, setActiveImportId] = useState<string | null>(null)
   const [transactions, setTransactions] = useState<BankTransactionResponse[]>([])
   const [matches, setMatches] = useState<ReconciliationMatchResponse[]>([])
+  const [journalEntries, setJournalEntries] = useState<JournalEntryResponse[]>([])
   const [loading, setLoading] = useState<boolean>(false)
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null)
+  const [selectedGLEntryId, setSelectedGLEntryId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<ReconFilterType>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
 
-  // Load bank transactions + reconciliation matches for a given import ID
+  // Load bank transactions, matches, and posted GL entries
   const loadData = useCallback(async (importId: string) => {
     setLoading(true)
     try {
-      const [txRes, matchRes] = await Promise.all([
+      const [txRes, matchRes, jeRes] = await Promise.all([
         fetchBankTransactions(importId),
         fetchReconciliationMatches({ bank_statement_import_id: importId }),
+        fetchJournalEntries({ status: 'posted', limit: 100 }),
       ])
       setTransactions(txRes.items)
       setMatches(matchRes.items)
+      setJournalEntries(jeRes.items)
       setSelectedTxId((prev) => (txRes.items.length > 0 && !prev ? txRes.items[0].id : prev))
+      if (jeRes.items.length > 0) {
+        setSelectedGLEntryId((prev) => prev ?? jeRes.items[0].id)
+      }
     } catch (err: unknown) {
       console.error('Failed to load reconciliation data:', err)
     } finally {
@@ -83,6 +92,31 @@ export const ReconciliationView: React.FC = () => {
   const proposedCount = matches.filter((m) => m.status === 'proposed').length
   const unmatchedCount = Math.max(0, transactions.length - (matchedCount + proposedCount))
 
+  // Find set of Journal Entries matched to bank transactions
+  const matchedJEIds = new Set(
+    matches
+      .filter(
+        (m) =>
+          m.journal_entry_id &&
+          (m.status === 'accepted' || m.status === 'matched' || m.status === 'proposed')
+      )
+      .map((m) => m.journal_entry_id)
+  )
+
+  // GL-Only entries (posted journal entries not matched to any bank mutation in this batch)
+  const allGLOnlyEntries = journalEntries.filter((je) => !matchedJEIds.has(je.id))
+  const filteredGLOnlyEntries = allGLOnlyEntries.filter((je) => {
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim()
+      const descMatch = je.description.toLowerCase().includes(q)
+      const amtMatch = (je.total_debit || 0).toString().includes(q)
+      const dateMatch = je.entry_date.toLowerCase().includes(q)
+      const idMatch = je.id.toLowerCase().includes(q)
+      return descMatch || amtMatch || dateMatch || idMatch
+    }
+    return true
+  })
+
   // Filter transactions based on active tab and search query
   const filteredTransactions = transactions.filter((tx) => {
     const match = matches.find((m) => m.bank_transaction_id === tx.id)
@@ -112,13 +146,20 @@ export const ReconciliationView: React.FC = () => {
 
   // Auto select active transaction when filter changes
   useEffect(() => {
-    if (filteredTransactions.length > 0) {
+    if (activeFilter === 'gl_only') {
+      if (filteredGLOnlyEntries.length > 0) {
+        const stillExists = filteredGLOnlyEntries.some((g) => g.id === selectedGLEntryId)
+        if (!stillExists) {
+          setSelectedGLEntryId(filteredGLOnlyEntries[0].id)
+        }
+      }
+    } else if (filteredTransactions.length > 0) {
       const stillExists = filteredTransactions.some((t) => t.id === selectedTxId)
       if (!stillExists) {
         setSelectedTxId(filteredTransactions[0].id)
       }
     }
-  }, [filteredTransactions, selectedTxId])
+  }, [activeFilter, filteredGLOnlyEntries, filteredTransactions, selectedGLEntryId, selectedTxId])
 
   return (
     <div className="space-y-6">
@@ -160,7 +201,7 @@ export const ReconciliationView: React.FC = () => {
           matched: matchedCount,
           needs_review: proposedCount,
           bank_only: unmatchedCount,
-          gl_only: 0,
+          gl_only: allGLOnlyEntries.length,
           reconciled: matchedCount,
         }}
       />
@@ -169,9 +210,13 @@ export const ReconciliationView: React.FC = () => {
       <Reconciliation2ColumnView
         transactions={filteredTransactions}
         matches={matches}
+        glOnlyEntries={filteredGLOnlyEntries}
+        activeFilter={activeFilter}
         loading={loading}
         selectedTxId={selectedTxId}
+        selectedGLEntryId={selectedGLEntryId}
         onSelectTx={(txId) => setSelectedTxId(txId)}
+        onSelectGLEntry={(glId) => setSelectedGLEntryId(glId)}
       />
     </div>
   )

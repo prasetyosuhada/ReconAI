@@ -1,9 +1,11 @@
 import React from 'react'
 import {
+  AlertCircle,
+  AlertTriangle,
   ArrowRight,
   BookOpen,
+  Building2,
   CheckCircle2,
-  Clock,
   FileSpreadsheet,
   HelpCircle,
   Info,
@@ -11,47 +13,84 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react'
-import type { BankTransactionResponse, ReconciliationMatchResponse } from '../../services/api'
+import type {
+  BankTransactionResponse,
+  JournalEntryResponse,
+  ReconciliationMatchResponse,
+} from '../../services/api'
+import type { ReconFilterType } from './ReconciliationFiltersToolbar'
 
 interface Reconciliation2ColumnViewProps {
   transactions: BankTransactionResponse[]
   matches: ReconciliationMatchResponse[]
+  glOnlyEntries?: JournalEntryResponse[]
+  activeFilter: ReconFilterType
   loading: boolean
   selectedTxId: string | null
+  selectedGLEntryId?: string | null
   onSelectTx: (txId: string) => void
+  onSelectGLEntry?: (glId: string) => void
+}
+
+function formatCardDate(isoOrDate: string): string {
+  try {
+    const d = new Date(isoOrDate)
+    if (isNaN(d.getTime())) return isoOrDate
+    return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
+  } catch {
+    return isoOrDate
+  }
+}
+
+function formatCardAmount(amount: number, currency: string = 'IDR'): string {
+  const isNegative = amount < 0
+  const absFormatted = new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: currency || 'IDR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(Math.abs(amount))
+  return isNegative ? `- ${absFormatted}` : `+ ${absFormatted}`
 }
 
 export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps> = ({
   transactions,
   matches,
+  glOnlyEntries = [],
+  activeFilter,
   loading,
   selectedTxId,
+  selectedGLEntryId,
   onSelectTx,
+  onSelectGLEntry,
 }) => {
+  const isGLOnlyTab = activeFilter === 'gl_only'
+
   const selectedTx = transactions.find((t) => t.id === selectedTxId) || transactions[0]
   const selectedMatch = matches.find(
     (m) => m.bank_transaction_id === (selectedTx ? selectedTx.id : '')
   )
+  const selectedGL = glOnlyEntries.find((g) => g.id === selectedGLEntryId) || glOnlyEntries[0]
 
   const getStatusBadge = (status: string) => {
     switch (status.toLowerCase()) {
       case 'matched':
       case 'accepted':
         return (
-          <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
-            <CheckCircle2 className="w-3 h-3" /> Matched
+          <span className="px-2 py-0.5 rounded-full bg-emerald-950/70 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold tracking-wider flex items-center gap-1">
+            <CheckCircle2 className="w-3 h-3" /> MATCHED
           </span>
         )
       case 'proposed':
         return (
-          <span className="px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
-            <Clock className="w-3 h-3" /> Review Match
+          <span className="px-2 py-0.5 rounded-full bg-amber-950/70 border border-amber-500/30 text-amber-400 text-[10px] font-bold tracking-wider flex items-center gap-1">
+            <AlertTriangle className="w-3 h-3" /> REVIEW REQUIRED
           </span>
         )
       default:
         return (
-          <span className="px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400 text-[10px] font-bold uppercase tracking-wider">
-            Unmatched
+          <span className="px-2 py-0.5 rounded-full bg-slate-800/90 border border-slate-700 text-slate-300 text-[10px] font-bold tracking-wider flex items-center gap-1">
+            <AlertCircle className="w-3 h-3 text-cyan-400" /> BANK ONLY
           </span>
         )
     }
@@ -59,31 +98,99 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      {/* Left Column: Bank Statement Transactions List (5 cols) */}
-      <div className="lg:col-span-5 p-5 rounded-2xl bg-slate-800/40 border border-slate-700/50 shadow-xl backdrop-blur-sm space-y-4">
-        <div className="flex items-center justify-between">
+      {/* Left Column: Transactions List (5 cols) */}
+      <div className="lg:col-span-5 p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl backdrop-blur-sm space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-            Bank Transactions Mutasi
+            {isGLOnlyTab ? (
+              <>
+                <Building2 className="w-4 h-4 text-indigo-400" />
+                <span>General Ledger (GL Only) Entries</span>
+              </>
+            ) : (
+              <>
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                <span>Bank Statement Transactions</span>
+              </>
+            )}
           </h3>
-          <span className="text-[11px] text-slate-400">{transactions.length} Records</span>
+          <span className="text-[11px] font-medium text-slate-400 px-2 py-0.5 rounded-full bg-slate-800">
+            {isGLOnlyTab ? glOnlyEntries.length : transactions.length} Records
+          </span>
         </div>
 
-        {loading && transactions.length === 0 ? (
+        {/* Loading State */}
+        {loading && (isGLOnlyTab ? glOnlyEntries.length === 0 : transactions.length === 0) ? (
           <div className="py-12 text-center text-slate-400 space-y-2">
             <Loader2 className="w-6 h-6 animate-spin text-emerald-400 mx-auto" />
-            <p className="text-xs">Fetching bank statement items...</p>
+            <p className="text-xs">Fetching reconciliation records...</p>
           </div>
-        ) : transactions.length === 0 ? (
-          <div className="py-12 text-center text-slate-400 space-y-2 bg-slate-900/40 rounded-xl border border-slate-800">
+        ) : isGLOnlyTab ? (
+          /* GL Only List */
+          glOnlyEntries.length === 0 ? (
+            <div className="py-12 text-center text-slate-400 space-y-2 bg-slate-950/40 rounded-xl border border-slate-800">
+              <Building2 className="w-8 h-8 text-slate-600 mx-auto" />
+              <p className="text-xs font-semibold text-slate-300">No GL-Only Transactions</p>
+              <p className="text-[11px] text-slate-500">
+                All posted general ledger entries have corresponding bank matches.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2.5 max-h-[600px] overflow-y-auto pr-1">
+              {glOnlyEntries.map((ge) => {
+                const isSelected = selectedGL?.id === ge.id
+                return (
+                  <div
+                    key={ge.id}
+                    onClick={() => onSelectGLEntry?.(ge.id)}
+                    className={`p-4 rounded-xl border cursor-pointer transition-all duration-150 space-y-2.5 ${
+                      isSelected
+                        ? 'bg-slate-900 border-indigo-500/60 shadow-lg shadow-indigo-500/10 ring-1 ring-indigo-500/20'
+                        : 'bg-slate-950/40 border-slate-800/80 hover:bg-slate-900/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-400 font-mono">
+                        {formatCardDate(ge.entry_date)}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-indigo-950/70 border border-indigo-500/30 text-indigo-400 text-[10px] font-bold tracking-wider flex items-center gap-1">
+                        <Building2 className="w-3 h-3" /> GL ONLY
+                      </span>
+                    </div>
+
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-100 line-clamp-1">
+                        {ge.description}
+                      </h4>
+                      <p className="text-[10px] font-mono text-indigo-400 mt-0.5">
+                        #JE-{ge.id.substring(0, 8)}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-800/70">
+                      <span className="text-[10px] text-slate-500 font-medium uppercase">
+                        Posted GL
+                      </span>
+                      <span className="text-xs font-bold font-mono text-indigo-300">
+                        {formatCardAmount(ge.total_debit || 0)}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        ) : /* Bank Transactions List */
+        transactions.length === 0 ? (
+          <div className="py-12 text-center text-slate-400 space-y-2 bg-slate-950/40 rounded-xl border border-slate-800">
             <FileSpreadsheet className="w-8 h-8 text-slate-600 mx-auto" />
-            <p className="text-xs font-semibold text-slate-300">No Bank Transactions</p>
+            <p className="text-xs font-semibold text-slate-300">No Transactions Found</p>
             <p className="text-[11px] text-slate-500">
-              Import a CSV statement to populate this list.
+              No bank statement items match the active filter or search criteria.
             </p>
           </div>
         ) : (
-          <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1">
+          <div className="space-y-2.5 max-h-[600px] overflow-y-auto pr-1">
             {transactions.map((tx) => {
               const isSelected = selectedTx?.id === tx.id
               const matchForTx = matches.find((m) => m.bank_transaction_id === tx.id)
@@ -93,40 +200,40 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                 <div
                   key={tx.id}
                   onClick={() => onSelectTx(tx.id)}
-                  className={`p-3.5 rounded-xl border cursor-pointer transition-all duration-150 space-y-2 ${
+                  className={`p-4 rounded-xl border cursor-pointer transition-all duration-150 space-y-2.5 ${
                     isSelected
-                      ? 'bg-slate-900 border-indigo-500/60 shadow-md shadow-indigo-500/10 scale-[1.01]'
-                      : 'bg-slate-950/40 border-slate-800/80 hover:bg-slate-900/60'
+                      ? 'bg-slate-900 border-emerald-500/60 shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-500/20'
+                      : 'bg-slate-950/40 border-slate-800/80 hover:bg-slate-900/60 hover:border-slate-700'
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-mono text-slate-400 font-semibold">
-                      {tx.transaction_date}
+                    <span className="text-xs font-semibold text-slate-400 font-mono">
+                      {formatCardDate(tx.transaction_date)}
                     </span>
                     {getStatusBadge(statusStr)}
                   </div>
 
                   <div>
-                    <h4 className="text-xs font-semibold text-slate-200 line-clamp-1">
+                    <h4 className="text-xs font-bold text-slate-100 line-clamp-1">
                       {tx.description}
                     </h4>
                     {tx.reference_number && (
-                      <p className="text-[10px] font-mono text-slate-500 mt-0.5">
+                      <p className="text-[10px] font-mono text-slate-400 mt-0.5">
                         Ref: {tx.reference_number}
                       </p>
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between pt-1 border-t border-slate-800/60">
-                    <span className="text-[11px] text-slate-500 font-mono">{tx.currency}</span>
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-800/70">
+                    <span className="text-[10px] text-slate-500 font-medium uppercase">
+                      {tx.currency}
+                    </span>
                     <span
                       className={`text-xs font-bold font-mono ${
                         tx.amount < 0 ? 'text-rose-400' : 'text-emerald-400'
                       }`}
                     >
-                      {tx.amount > 0
-                        ? `+${tx.amount.toLocaleString()}`
-                        : tx.amount.toLocaleString()}
+                      {formatCardAmount(tx.amount, tx.currency)}
                     </span>
                   </div>
                 </div>
@@ -137,16 +244,55 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
       </div>
 
       {/* Right Column: Comparative Ledger Matching Panel (7 cols) */}
-      <div className="lg:col-span-7 p-5 rounded-2xl bg-slate-800/40 border border-slate-700/50 shadow-xl backdrop-blur-sm space-y-5">
-        <div className="flex items-center justify-between">
+      <div className="lg:col-span-7 p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl backdrop-blur-sm space-y-5">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <h3 className="text-sm font-bold text-white flex items-center gap-2">
             <BookOpen className="w-4 h-4 text-indigo-400" />
-            General Ledger Match Candidate
+            <span>Reconciliation Analysis</span>
           </h3>
-          <span className="text-[11px] text-slate-400">Reconciliation Analysis</span>
+          <span className="text-[11px] text-slate-400">Two-Sided Matching Workspace</span>
         </div>
 
-        {selectedTx ? (
+        {/* GL Only View in Analysis Panel */}
+        {isGLOnlyTab && selectedGL ? (
+          <div className="space-y-4">
+            <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
+                  General Ledger Entry Detail
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-950/80 text-indigo-300 border border-indigo-500/30">
+                  GL ONLY
+                </span>
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <div>
+                  <p className="font-bold text-slate-100 text-sm">{selectedGL.description}</p>
+                  <p className="text-slate-400 text-[11px] font-mono mt-0.5">
+                    Date: {formatCardDate(selectedGL.entry_date)} • ID: #JE-{selectedGL.id.substring(0, 8)}
+                  </p>
+                </div>
+                <div className="text-right font-mono text-sm font-bold text-indigo-400">
+                  {formatCardAmount(selectedGL.total_debit || 0)}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 rounded-xl bg-slate-950/40 border border-slate-800 text-center space-y-3">
+              <HelpCircle className="w-10 h-10 text-indigo-400/60 mx-auto" />
+              <div>
+                <p className="text-sm font-bold text-slate-200">
+                  No Corresponding Bank Mutation Found
+                </p>
+                <p className="text-xs text-slate-400 max-w-md mx-auto mt-1 leading-relaxed">
+                  This journal entry is posted in the General Ledger, but does not appear in the
+                  imported bank statement. This may represent an outstanding check, pending deposit,
+                  or timing difference.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : selectedTx ? (
           <div className="space-y-4">
             {/* Selected Bank Transaction Card */}
             <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
@@ -155,14 +301,14 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
               </span>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
                 <div>
-                  <p className="font-bold text-slate-100">{selectedTx.description}</p>
+                  <p className="font-bold text-slate-100 text-sm">{selectedTx.description}</p>
                   <p className="text-slate-400 text-[11px] font-mono mt-0.5">
-                    Date: {selectedTx.transaction_date}{' '}
+                    Date: {formatCardDate(selectedTx.transaction_date)}{' '}
                     {selectedTx.reference_number && `• Ref: ${selectedTx.reference_number}`}
                   </p>
                 </div>
                 <div className="text-right font-mono text-sm font-bold text-emerald-400">
-                  {selectedTx.amount.toLocaleString()} {selectedTx.currency}
+                  {formatCardAmount(selectedTx.amount, selectedTx.currency)}
                 </div>
               </div>
             </div>
@@ -187,7 +333,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                   <div>
                     <span className="text-slate-500 block text-[11px]">Ledger Entry Date</span>
                     <span className="font-semibold text-slate-200 font-mono">
-                      {selectedMatch.journal_entry.entry_date}
+                      {formatCardDate(selectedMatch.journal_entry.entry_date)}
                     </span>
                   </div>
                   <div>
@@ -216,12 +362,12 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                 <div className="flex items-center justify-between pt-2">
                   <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold">
                     <ShieldCheck className="w-4 h-4" />
-                    Amounts & Dates Verified Deterministically
+                    Amounts &amp; Dates Verified Deterministically
                   </div>
 
                   <button
                     type="button"
-                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-md shadow-emerald-600/20 flex items-center gap-1.5"
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-md shadow-emerald-600/20 flex items-center gap-1.5 cursor-pointer"
                   >
                     <CheckCircle2 className="w-4 h-4" /> Accept Reconciliation
                   </button>
@@ -253,3 +399,4 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
     </div>
   )
 }
+
