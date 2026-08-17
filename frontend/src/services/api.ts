@@ -180,8 +180,13 @@ export interface ReconciliationMatchResponse {
   id: string
   bank_transaction_id: string
   journal_entry_id?: string
-  status: string // proposed, accepted, rejected
+  status: string // proposed, accepted, rejected, matched
+  match_type?: string // exact, fuzzy, manual, unmatched
   confidence_score?: number
+  amount_score?: number
+  date_score?: number
+  vendor_score?: number
+  rationale?: string
   match_rule_type?: string
   match_explanation?: string
   matched_at?: string
