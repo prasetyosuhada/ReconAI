@@ -107,6 +107,7 @@ def stream_document_processing(
         final_state: dict[str, Any] = dict(initial_state)
 
         for step_output in document_processing_graph.stream(initial_state):
+            print("STEP OUTPUT:\n", step_output)
             # 1. Document Intake Agent Node
             if "document_intake" in step_output:
                 intake_data = step_output["document_intake"]

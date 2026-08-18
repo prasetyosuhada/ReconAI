@@ -154,3 +154,34 @@ class ManualMatchRequest(BaseModel):
         None, description="Optional explanation for manual match"
     )
 
+
+class CreateAdjustmentJournalRequest(BaseModel):
+    """Request schema for creating and posting an adjusting journal entry from a bank mutation."""
+
+    bank_transaction_id: uuid.UUID = Field(
+        ..., description="UUID of the bank transaction to create journal entry for"
+    )
+    entry_date: date | None = Field(
+        None, description="Optional custom entry date (defaults to transaction date)"
+    )
+    description: str | None = Field(
+        None, description="Optional custom memo (defaults to transaction description)"
+    )
+    lines: list[SuggestedJournalLine] | None = Field(
+        None,
+        description="Optional custom journal lines (defaults to AI suggested lines)",
+    )
+
+
+class CreateAdjustmentJournalResponse(BaseModel):
+    """Response schema after creating and posting an adjusting journal entry."""
+
+    journal_entry_id: uuid.UUID
+    bank_transaction_id: uuid.UUID
+    reconciliation_match_id: uuid.UUID
+    status: str = Field(..., description="e.g. posted")
+    total_debit: float
+    total_credit: float
+    message: str
+
+

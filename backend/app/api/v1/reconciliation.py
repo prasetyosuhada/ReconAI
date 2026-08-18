@@ -27,6 +27,8 @@ from app.models.reconciliation import (
 from app.schemas.reconciliation import (
     AdjustmentSuggestionRequest,
     AdjustmentSuggestionResponse,
+    CreateAdjustmentJournalRequest,
+    CreateAdjustmentJournalResponse,
     ManualMatchRequest,
     MatchActionRequest,
     MatchActionResponse,
@@ -37,6 +39,7 @@ from app.schemas.reconciliation import (
     ReconciliationSummaryResponse,
     SuggestedJournalLine,
 )
+from app.services.accounting import save_journal_entry_safely
 from app.services.reconciliation import (
     execute_reconciliation_workflow,
     stream_reconciliation_workflow,
@@ -600,4 +603,209 @@ def manual_match_transaction(
         resolved_at=datetime.now(UTC),
         message="Manual reconciliation match created successfully.",
     )
+
+
+@router.post(
+    "/create-adjustment",
+    response_model=CreateAdjustmentJournalResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create and post adjusting journal entry from an unmatched bank mutation",
+)
+def create_and_post_adjustment_entry(
+    req: CreateAdjustmentJournalRequest,
+    db: Session = Depends(get_db),
+) -> CreateAdjustmentJournalResponse:
+    """Create a balanced double-entry journal entry for an unmatched bank mutation,
+
+    post it to the General Ledger, and mark the transaction as reconciled.
+    """
+    from app.models.adjustment_suggestion import AdjustmentSuggestion
+    from app.models.review import ReviewItem
+
+    tx = (
+        db.query(BankTransaction)
+        .filter(BankTransaction.id == req.bank_transaction_id)
+        .first()
+    )
+    if not tx:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Bank transaction [{req.bank_transaction_id}] not found.",
+        )
+
+    # 1. Determine double-entry lines
+    if req.lines and len(req.lines) >= 2:
+        lines_data = [
+            {
+                "account_code": l.account_code,
+                "account_name": l.account_name,
+                "description": l.description,
+                "debit_amount": l.debit_amount,
+                "credit_amount": l.credit_amount,
+            }
+            for l in req.lines
+        ]
+    else:
+        # Fallback to stored suggestion
+        suggestion = (
+            db.query(AdjustmentSuggestion)
+            .filter(AdjustmentSuggestion.bank_transaction_id == tx.id)
+            .first()
+        )
+        if suggestion and suggestion.suggested_lines:
+            lines_data = suggestion.suggested_lines
+        else:
+            raw_amt = float(tx.amount)
+            abs_amt = abs(raw_amt)
+            if raw_amt < 0:
+                lines_data = [
+                    {
+                        "account_code": "5900",
+                        "account_name": "Miscellaneous Expense",
+                        "description": tx.description,
+                        "debit_amount": abs_amt,
+                        "credit_amount": 0.0,
+                    },
+                    {
+                        "account_code": "1010",
+                        "account_name": "Bank Account",
+                        "description": "Bank Outflow",
+                        "debit_amount": 0.0,
+                        "credit_amount": abs_amt,
+                    },
+                ]
+            else:
+                lines_data = [
+                    {
+                        "account_code": "1010",
+                        "account_name": "Bank Account",
+                        "description": "Bank Inflow",
+                        "debit_amount": abs_amt,
+                        "credit_amount": 0.0,
+                    },
+                    {
+                        "account_code": "4000",
+                        "account_name": "Sales Revenue",
+                        "description": tx.description,
+                        "debit_amount": 0.0,
+                        "credit_amount": abs_amt,
+                    },
+                ]
+
+    entry_date = req.entry_date or tx.transaction_date
+    entry_desc = req.description or f"Adjustment: {tx.description}"
+
+    # 2. Persist journal entry safely with deterministic double-entry guardrail
+    journal_payload = {
+        "entry_date": entry_date,
+        "description": entry_desc,
+        "status": "posted",
+        "source_type": "reconciliation",
+        "agent_name": "BookkeepingAgent",
+        "confidence_score": 1.0,
+        "rationale": f"Adjusting journal entry created from bank mutation: {tx.description}",
+        "lines": lines_data,
+    }
+
+    save_result = save_journal_entry_safely(
+        journal_data=journal_payload,
+        db_session=db,
+        raise_on_error=False,
+    )
+
+    if not save_result.success or not save_result.journal_entry_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to post adjusting journal entry: {'; '.join(save_result.errors)}",
+        )
+
+    je_id = uuid.UUID(save_result.journal_entry_id)
+    je = db.query(JournalEntry).filter(JournalEntry.id == je_id).first()
+    if je:
+        je.posted_at = datetime.now(UTC)
+
+    # 3. Update Bank Transaction status
+    tx.status = "matched"
+
+    # 4. Upsert ReconciliationMatch record
+    existing_match = (
+        db.query(ReconciliationMatch)
+        .filter(ReconciliationMatch.bank_transaction_id == tx.id)
+        .first()
+    )
+
+    if existing_match:
+        existing_match.journal_entry_id = je_id
+        existing_match.match_type = "adjustment"
+        existing_match.status = "accepted"
+        existing_match.confidence_score = 1.00
+        existing_match.amount_score = 1.00
+        existing_match.date_score = 1.00
+        existing_match.vendor_score = 1.00
+        existing_match.rationale = "Adjusting journal entry created and posted to ledger."
+        existing_match.updated_at = datetime.now(UTC)
+        match_rec = existing_match
+    else:
+        match_rec = ReconciliationMatch(
+            id=uuid.uuid4(),
+            bank_transaction_id=tx.id,
+            journal_entry_id=je_id,
+            match_type="adjustment",
+            status="accepted",
+            confidence_score=1.00,
+            amount_score=1.00,
+            date_score=1.00,
+            vendor_score=1.00,
+            rationale="Adjusting journal entry created and posted to ledger.",
+        )
+        db.add(match_rec)
+
+    # 5. Resolve any pending ReviewItem for this bank transaction
+    pending_reviews = (
+        db.query(ReviewItem)
+        .filter(
+            ReviewItem.source_type == "bank_transaction",
+            ReviewItem.source_id == tx.id,
+            ReviewItem.status == "pending",
+        )
+        .all()
+    )
+    for r in pending_reviews:
+        r.status = "approved"
+        r.resolution_action = "created_adjustment_entry"
+        r.resolved_at = datetime.now(UTC)
+
+    # 6. Audit Trail
+    audit = AuditEvent(
+        event_type="reconciliation_adjustment_created",
+        source_type="journal_entry",
+        source_id=je_id,
+        actor_type="human",
+        actor_name="api_user",
+        input_snapshot={
+            "bank_transaction_id": str(tx.id),
+            "lines": lines_data,
+        },
+        output_snapshot={
+            "journal_entry_id": str(je_id),
+            "reconciliation_match_id": str(match_rec.id),
+            "status": "posted",
+        },
+    )
+    db.add(audit)
+    db.commit()
+
+    total_deb = sum(float(l.get("debit_amount", 0.0)) for l in lines_data)
+    total_cred = sum(float(l.get("credit_amount", 0.0)) for l in lines_data)
+
+    return CreateAdjustmentJournalResponse(
+        journal_entry_id=je_id,
+        bank_transaction_id=tx.id,
+        reconciliation_match_id=match_rec.id,
+        status="posted",
+        total_debit=total_deb,
+        total_credit=total_cred,
+        message="Adjusting journal entry created and posted to General Ledger successfully.",
+    )
+
 

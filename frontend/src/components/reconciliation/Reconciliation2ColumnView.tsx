@@ -26,7 +26,11 @@ import type {
   JournalEntryResponse,
   ReconciliationMatchResponse,
 } from '../../services/api'
-import { manualMatchReconciliation, suggestAdjustmentJournal } from '../../services/api'
+import {
+  createAdjustmentJournalEntry,
+  manualMatchReconciliation,
+  suggestAdjustmentJournal,
+} from '../../services/api'
 import type { ReconFilterType } from './ReconciliationFiltersToolbar'
 
 interface Reconciliation2ColumnViewProps {
@@ -105,11 +109,34 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
   const [suggestion, setSuggestion] = useState<AdjustmentSuggestionResponse | null>(null)
   const [suggestionLoading, setSuggestionLoading] = useState<boolean>(false)
   const [suggestionError, setSuggestionError] = useState<string | null>(null)
+  const [isPostingJE, setIsPostingJE] = useState<boolean>(false)
   const lastFetchedTxId = useRef<string | null>(null)
 
   const showToast = (msg: string) => {
     setCustomToast(msg)
     setTimeout(() => setCustomToast(null), 3000)
+  }
+
+  const handleSaveAndPostJournalEntry = async () => {
+    if (!selectedTx) return
+    setIsPostingJE(true)
+    try {
+      const res = await createAdjustmentJournalEntry({
+        bank_transaction_id: selectedTx.id,
+        lines: suggestion?.suggested_lines,
+        description: selectedTx.description,
+      })
+      showToast(
+        `✓ Adjusting Journal Entry #JE-${res.journal_entry_id.substring(0, 8)} posted to General Ledger!`
+      )
+      setShowCreateJEModal(false)
+      onRefresh?.()
+    } catch (err) {
+      console.error('Failed to create adjusting journal entry:', err)
+      showToast(err instanceof Error ? `Error: ${err.message}` : 'Failed to post journal entry.')
+    } finally {
+      setIsPostingJE(false)
+    }
   }
 
   // Toggle Outstanding state for Bank mutations or GL entries
@@ -1128,21 +1155,27 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
+                disabled={isPostingJE}
                 onClick={() => setShowCreateJEModal(false)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition-colors cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setShowCreateJEModal(false)
-                  showToast('Journal Entry created and queued for ledger posting.')
-                  onRefresh?.()
-                }}
-                className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs transition-colors shadow-md shadow-purple-600/20 flex items-center gap-1.5 cursor-pointer"
+                disabled={isPostingJE}
+                onClick={handleSaveAndPostJournalEntry}
+                className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-semibold text-xs transition-colors shadow-md shadow-purple-600/20 flex items-center gap-1.5 cursor-pointer"
               >
-                <CheckCircle2 className="w-4 h-4" /> Save &amp; Post Journal Entry
+                {isPostingJE ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Posting to Ledger...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" /> Save &amp; Post Journal Entry
+                  </>
+                )}
               </button>
             </div>
           </div>

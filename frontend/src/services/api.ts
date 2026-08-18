@@ -606,6 +606,37 @@ export async function suggestAdjustmentJournal(
   return response.json()
 }
 
+export interface CreateAdjustmentJournalResponse {
+  journal_entry_id: string
+  bank_transaction_id: string
+  reconciliation_match_id: string
+  status: string
+  total_debit: number
+  total_credit: number
+  message: string
+}
+
+export async function createAdjustmentJournalEntry(payload: {
+  bank_transaction_id: string
+  entry_date?: string
+  description?: string
+  lines?: SuggestedJournalLine[]
+}): Promise<CreateAdjustmentJournalResponse> {
+  const response = await fetch(`${API_BASE_URL}/reconciliation/create-adjustment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to create and post adjusting journal entry')
+  }
+
+  return response.json()
+}
+
+
 export async function fetchReconciliationMatches(params?: {
   bank_statement_import_id?: string
   status?: string
