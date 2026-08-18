@@ -159,18 +159,27 @@ def suggest_adjustment_journal(
         for c in coa_rows
     ]
 
-    # Build extraction_data dict from bank transaction fields
+    # Build extraction_data dict from bank transaction fields.
+    # Bank statement amounts can be negative (debit/outflow) or positive (credit/inflow).
+    # BookkeepingAgent requires total_amount > 0, so we pass abs() and encode the
+    # direction semantically in extraction_notes for LLM reasoning.
+    raw_amount = float(tx.amount)
+    abs_amount = abs(raw_amount)
+    tx_direction = "DEBIT (outflow / expense / payment)" if raw_amount < 0 else "CREDIT (inflow / revenue / receipt)"
+
     extraction_data = {
         "vendor_name": tx.description,
         "transaction_date": str(tx.transaction_date),
-        "total_amount": float(tx.amount),
+        "total_amount": abs_amount,
         "currency": tx.currency,
         "document_type": "bank_transaction",
         "line_items": [],
         "extraction_notes": (
             f"Unmatched bank statement mutation: '{tx.description}'. "
             f"Ref: {tx.reference_number or 'N/A'}. "
-            "Please classify to the most appropriate expense or revenue account."
+            f"Transaction direction: {tx_direction}. "
+            f"Original signed amount: {raw_amount:,.2f} {tx.currency}. "
+            "Please classify to the most appropriate account and generate a balanced journal entry."
         ),
     }
 
@@ -184,6 +193,7 @@ def suggest_adjustment_journal(
         extraction_data=extraction_data,
         chart_of_accounts=coa_list,
     )
+    print("\n========================BOOKKEEPING AGENT RESPONSE========================\n", agent_resp)
 
     result = agent_resp.result
     suggested_lines = [
