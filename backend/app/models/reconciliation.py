@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base_class import Base
 
 if TYPE_CHECKING:
+    from app.models.adjustment_suggestion import AdjustmentSuggestion
     from app.models.journal import JournalEntry
 
 
@@ -91,6 +92,12 @@ class BankTransaction(Base):
     matches: Mapped[list["ReconciliationMatch"]] = relationship(
         "ReconciliationMatch",
         back_populates="bank_transaction",
+        cascade="all, delete-orphan",
+    )
+    adjustment_suggestion: Mapped["AdjustmentSuggestion | None"] = relationship(
+        "AdjustmentSuggestion",
+        back_populates="bank_transaction",
+        uselist=False,
         cascade="all, delete-orphan",
     )
 

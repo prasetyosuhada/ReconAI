@@ -141,7 +141,9 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
     })
   }
 
-  // Auto-fetch BookkeepingAgent suggestion when an unmatched tx is selected
+  // Auto-fetch pre-computed BookkeepingAgent suggestion (stored in DB during Run Recon Engine)
+  // For matched transactions, no suggestion needed.
+  // For unmatched Bank Only: reads from DB instantly (no LLM call on demand).
   useEffect(() => {
     const isBankOnly = selectedTx && !selectedMatch
     if (!isBankOnly) {
@@ -161,10 +163,17 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
         setSuggestion(res)
       })
       .catch((err: Error) => {
-        setSuggestionError(err.message)
+        // 404 = suggestion not yet generated (Run Recon Engine not run yet)
+        // Surface a friendlier message vs a generic API error
+        if (err.message.includes('Run Recon Engine')) {
+          setSuggestionError('💡 Run Recon Engine first to generate a COA suggestion for this transaction.')
+        } else {
+          setSuggestionError(err.message)
+        }
       })
       .finally(() => setSuggestionLoading(false))
   }, [selectedTx?.id, selectedMatch])
+
 
   const getStatusBadge = (status: string) => {
     switch (status.toLowerCase()) {
@@ -505,11 +514,30 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                       )}
 
                       {suggestionError && !suggestionLoading && (
-                        <div className="p-3 rounded-xl bg-red-950/30 border border-red-500/30 flex items-start gap-2">
-                          <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-                          <span className="text-xs text-red-300">{suggestionError}</span>
+                        <div
+                          className={`p-3 rounded-xl flex items-start gap-2 ${
+                            suggestionError.includes('Run Recon Engine')
+                              ? 'bg-blue-950/30 border border-blue-500/30'
+                              : 'bg-red-950/30 border border-red-500/30'
+                          }`}
+                        >
+                          {suggestionError.includes('Run Recon Engine') ? (
+                            <Info className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                          )}
+                          <span
+                            className={`text-xs ${
+                              suggestionError.includes('Run Recon Engine')
+                                ? 'text-blue-300'
+                                : 'text-red-300'
+                            }`}
+                          >
+                            {suggestionError}
+                          </span>
                         </div>
                       )}
+
 
                       {suggestion && !suggestionLoading && (
                         <div className="p-4 rounded-xl bg-gradient-to-r from-purple-950/30 to-indigo-950/30 border border-purple-500/30 space-y-3">

@@ -117,16 +117,19 @@ def run_reconciliation_workflow(
     "/suggest-adjustment",
     response_model=AdjustmentSuggestionResponse,
     status_code=status.HTTP_200_OK,
-    summary="Ask BookkeepingAgent to suggest a COA and adjusting journal entry for an unmatched bank transaction",
+    summary="Retrieve pre-computed BookkeepingAgent COA suggestion for an unmatched bank transaction",
 )
 def suggest_adjustment_journal(
     req: AdjustmentSuggestionRequest,
     db: Session = Depends(get_db),
 ) -> AdjustmentSuggestionResponse:
-    """Use BookkeepingAgent (LLM) to suggest Chart of Accounts classification and
-    balanced double-entry journal lines for an unmatched bank transaction."""
-    from app.agents.bookkeeping import run_bookkeeping_agent
-    from app.models.coa import ChartOfAccount
+    """Read the BookkeepingAgent suggestion stored in DB during Run Recon Engine.
+
+    Suggestions are generated eagerly for Bank Only transactions when the
+    reconciliation workflow runs. This endpoint is a fast DB read — no LLM is invoked.
+    Returns 404 if Run Recon Engine has not yet been executed for this transaction.
+    """
+    from app.models.adjustment_suggestion import AdjustmentSuggestion
     from app.models.reconciliation import BankTransaction
 
     tx = (
@@ -140,72 +143,23 @@ def suggest_adjustment_journal(
             detail=f"Bank transaction [{req.bank_transaction_id}] not found.",
         )
 
-    # Load active Chart of Accounts
-    coa_rows = (
-        db.query(ChartOfAccount)
-        .filter(ChartOfAccount.is_active == True)  # noqa: E712
-        .order_by(ChartOfAccount.account_code)
-        .all()
+    suggestion = (
+        db.query(AdjustmentSuggestion)
+        .filter(AdjustmentSuggestion.bank_transaction_id == tx.id)
+        .first()
     )
-    coa_list = [
-        {
-            "account_code": c.account_code,
-            "account_name": c.account_name,
-            "account_type": c.account_type,
-            "normal_balance": c.normal_balance,
-            "is_sensitive": c.is_sensitive,
-            "description": c.description,
-        }
-        for c in coa_rows
-    ]
-
-    # Build extraction_data dict from bank transaction fields.
-    # Bank statement amounts can be negative (debit/outflow) or positive (credit/inflow).
-    # BookkeepingAgent requires total_amount > 0, so we pass abs() and encode the
-    # direction semantically in extraction_notes for LLM reasoning.
-    raw_amount = float(tx.amount)
-    abs_amount = abs(raw_amount)
-    tx_direction = "DEBIT (outflow / expense / payment)" if raw_amount < 0 else "CREDIT (inflow / revenue / receipt)"
-
-    extraction_data = {
-        "vendor_name": tx.description,
-        "transaction_date": str(tx.transaction_date),
-        "total_amount": abs_amount,
-        "currency": tx.currency,
-        "document_type": "bank_transaction",
-        "line_items": [],
-        "extraction_notes": (
-            f"Unmatched bank statement mutation: '{tx.description}'. "
-            f"Ref: {tx.reference_number or 'N/A'}. "
-            f"Transaction direction: {tx_direction}. "
-            f"Original signed amount: {raw_amount:,.2f} {tx.currency}. "
-            "Please classify to the most appropriate account and generate a balanced journal entry."
-        ),
-    }
+    if not suggestion:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No COA suggestion found for bank transaction [{req.bank_transaction_id}]. "
+                "Please run 'Run Recon Engine' first to generate suggestions for unmatched transactions."
+            ),
+        )
 
     logger.info(
-        "Calling BookkeepingAgent for bank tx [%s]: %s",
-        tx.id,
-        tx.description,
+        "Returning stored BookkeepingAgent suggestion for bank tx [%s]", tx.id
     )
-
-    agent_resp = run_bookkeeping_agent(
-        extraction_data=extraction_data,
-        chart_of_accounts=coa_list,
-    )
-    print("\n========================BOOKKEEPING AGENT RESPONSE========================\n", agent_resp)
-
-    result = agent_resp.result
-    suggested_lines = [
-        SuggestedJournalLine(
-            account_code=line.account_code,
-            account_name=line.account_name,
-            description=line.description,
-            debit_amount=line.debit_amount,
-            credit_amount=line.credit_amount,
-        )
-        for line in result.journal_lines
-    ]
 
     return AdjustmentSuggestionResponse(
         bank_transaction_id=str(tx.id),
@@ -213,13 +167,22 @@ def suggest_adjustment_journal(
         transaction_date=str(tx.transaction_date),
         transaction_amount=float(tx.amount),
         currency=tx.currency,
-        confidence_score=agent_resp.confidence_score,
-        rationale=agent_resp.rationale,
-        is_balanced=result.is_balanced,
-        uses_sensitive_account=result.uses_sensitive_account,
-        risk_flags=list(result.risk_flags or []),
-        suggested_lines=suggested_lines,
-        agent_name=agent_resp.agent_name,
+        confidence_score=float(suggestion.confidence_score),
+        rationale=suggestion.rationale,
+        is_balanced=suggestion.is_balanced,
+        uses_sensitive_account=suggestion.uses_sensitive_account,
+        risk_flags=list(suggestion.risk_flags or []),
+        suggested_lines=[
+            SuggestedJournalLine(
+                account_code=line["account_code"],
+                account_name=line["account_name"],
+                description=line.get("description"),
+                debit_amount=line.get("debit_amount", 0.0),
+                credit_amount=line.get("credit_amount", 0.0),
+            )
+            for line in (suggestion.suggested_lines or [])
+        ],
+        agent_name=suggestion.agent_name,
     )
 
 
