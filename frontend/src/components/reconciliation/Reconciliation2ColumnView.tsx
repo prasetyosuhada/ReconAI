@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   AlertTriangle,
@@ -20,12 +20,13 @@ import {
   X,
 } from 'lucide-react'
 import type {
+  AdjustmentSuggestionResponse,
   BankTransactionResponse,
   ChartOfAccountResponse,
   JournalEntryResponse,
   ReconciliationMatchResponse,
 } from '../../services/api'
-import { manualMatchReconciliation } from '../../services/api'
+import { manualMatchReconciliation, suggestAdjustmentJournal } from '../../services/api'
 import type { ReconFilterType } from './ReconciliationFiltersToolbar'
 
 interface Reconciliation2ColumnViewProps {
@@ -72,7 +73,6 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
   matches,
   glOnlyEntries = [],
   postedJournalEntries = [],
-  chartOfAccounts = [],
   activeFilter,
   loading,
   actionLoading = false,
@@ -100,6 +100,12 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
   const [outstandingTxIds, setOutstandingTxIds] = useState<Set<string>>(new Set())
   const [outstandingGLIds, setOutstandingGLIds] = useState<Set<string>>(new Set())
   const [customToast, setCustomToast] = useState<string | null>(null)
+
+  // AI Adjustment Suggestion from BookkeepingAgent (real LLM call)
+  const [suggestion, setSuggestion] = useState<AdjustmentSuggestionResponse | null>(null)
+  const [suggestionLoading, setSuggestionLoading] = useState<boolean>(false)
+  const [suggestionError, setSuggestionError] = useState<string | null>(null)
+  const lastFetchedTxId = useRef<string | null>(null)
 
   const showToast = (msg: string) => {
     setCustomToast(msg)
@@ -135,85 +141,30 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
     })
   }
 
-  // Dynamic AI COA Suggestion Classifier
-  const getSuggestedCOA = (description: string) => {
-    const desc = (description || '').toLowerCase()
-    if (chartOfAccounts.length === 0) return null
-
-    if (
-      desc.includes('fee') ||
-      desc.includes('admin') ||
-      desc.includes('charge') ||
-      desc.includes('biaya') ||
-      desc.includes('provisi')
-    ) {
-      const acc =
-        chartOfAccounts.find(
-          (c) =>
-            c.account_code.startsWith('6105') ||
-            c.account_name.toLowerCase().includes('bank') ||
-            c.account_name.toLowerCase().includes('charge')
-        ) || chartOfAccounts[0]
-      return { account: acc, confidence: 94, reason: 'Bank Administration / Charge Fee' }
+  // Auto-fetch BookkeepingAgent suggestion when an unmatched tx is selected
+  useEffect(() => {
+    const isBankOnly = selectedTx && !selectedMatch
+    if (!isBankOnly) {
+      setSuggestion(null)
+      setSuggestionError(null)
+      return
     }
+    if (lastFetchedTxId.current === selectedTx.id) return
 
-    if (
-      desc.includes('aws') ||
-      desc.includes('cloud') ||
-      desc.includes('google') ||
-      desc.includes('server') ||
-      desc.includes('hosting') ||
-      desc.includes('saas')
-    ) {
-      const acc =
-        chartOfAccounts.find(
-          (c) =>
-            c.account_name.toLowerCase().includes('software') ||
-            c.account_name.toLowerCase().includes('tech') ||
-            c.account_name.toLowerCase().includes('operating')
-        ) || chartOfAccounts[0]
-      return { account: acc, confidence: 91, reason: 'Cloud Infrastructure & Software' }
-    }
+    lastFetchedTxId.current = selectedTx.id
+    setSuggestion(null)
+    setSuggestionError(null)
+    setSuggestionLoading(true)
 
-    if (
-      desc.includes('bunga') ||
-      desc.includes('interest') ||
-      desc.includes('giro') ||
-      desc.includes('revenue')
-    ) {
-      const acc =
-        chartOfAccounts.find(
-          (c) =>
-            c.account_type === 'revenue' ||
-            c.account_name.toLowerCase().includes('interest') ||
-            c.account_name.toLowerCase().includes('pendapatan')
-        ) || chartOfAccounts[0]
-      return { account: acc, confidence: 95, reason: 'Bank Interest Revenue' }
-    }
-
-    if (
-      desc.includes('sewa') ||
-      desc.includes('rent') ||
-      desc.includes('listrik') ||
-      desc.includes('pln') ||
-      desc.includes('water')
-    ) {
-      const acc =
-        chartOfAccounts.find(
-          (c) =>
-            c.account_name.toLowerCase().includes('rent') ||
-            c.account_name.toLowerCase().includes('utilit') ||
-            c.account_name.toLowerCase().includes('listrik')
-        ) || chartOfAccounts[0]
-      return { account: acc, confidence: 89, reason: 'Office & Utility Expenses' }
-    }
-
-    const defaultAcc =
-      chartOfAccounts.find((c) => c.account_type === 'expense' && c.is_active) || chartOfAccounts[0]
-    return { account: defaultAcc, confidence: 78, reason: 'Operating Expense Category' }
-  }
-
-  const suggestedCOA = selectedTx ? getSuggestedCOA(selectedTx.description) : null
+    suggestAdjustmentJournal(selectedTx.id)
+      .then((res) => {
+        setSuggestion(res)
+      })
+      .catch((err: Error) => {
+        setSuggestionError(err.message)
+      })
+      .finally(() => setSuggestionLoading(false))
+  }, [selectedTx?.id, selectedMatch])
 
   const getStatusBadge = (status: string) => {
     switch (status.toLowerCase()) {
@@ -543,8 +494,24 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                         </div>
                       </div>
 
-                      {/* AI COA Suggestion Widget (Section 13) */}
-                      {suggestedCOA && (
+                      {/* AI COA Suggestion Widget – BookkeepingAgent LLM Output */}
+                      {suggestionLoading && (
+                        <div className="p-4 rounded-xl bg-gradient-to-r from-purple-950/30 to-indigo-950/30 border border-purple-500/30 flex items-center gap-3">
+                          <Loader2 className="w-4 h-4 text-purple-400 animate-spin shrink-0" />
+                          <span className="text-xs text-purple-300">
+                            BookkeepingAgent is classifying this transaction…
+                          </span>
+                        </div>
+                      )}
+
+                      {suggestionError && !suggestionLoading && (
+                        <div className="p-3 rounded-xl bg-red-950/30 border border-red-500/30 flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                          <span className="text-xs text-red-300">{suggestionError}</span>
+                        </div>
+                      )}
+
+                      {suggestion && !suggestionLoading && (
                         <div className="p-4 rounded-xl bg-gradient-to-r from-purple-950/30 to-indigo-950/30 border border-purple-500/30 space-y-3">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
@@ -553,22 +520,67 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                                 AI COA Suggestion
                               </span>
                             </div>
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30 font-mono">
-                              Confidence: {suggestedCOA.confidence}%
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {suggestion.uses_sensitive_account && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                  Sensitive
+                                </span>
+                              )}
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30 font-mono">
+                                {Math.round(suggestion.confidence_score * 100)}% Confidence
+                              </span>
+                            </div>
                           </div>
 
-                          <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800 space-y-1">
-                            <span className="text-slate-400 block text-[10px] uppercase font-bold">
-                              Suggested Ledger Account
-                            </span>
-                            <p className="font-bold text-white font-mono text-xs">
-                              {suggestedCOA.account.account_code} •{' '}
-                              {suggestedCOA.account.account_name}
-                            </p>
-                            <p className="text-[11px] text-slate-400 italic">
-                              Category: {suggestedCOA.reason}
-                            </p>
+                          {/* Rationale from LLM */}
+                          <p className="text-[11px] text-slate-300 leading-relaxed italic border-l-2 border-purple-500/40 pl-2">
+                            {suggestion.rationale}
+                          </p>
+
+                          {/* Risk flags */}
+                          {suggestion.risk_flags.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {suggestion.risk_flags.map((flag) => (
+                                <span
+                                  key={flag}
+                                  className="px-2 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                                >
+                                  ⚠ {flag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Double-entry lines */}
+                          <div className="rounded-lg bg-slate-900/80 border border-slate-800 overflow-hidden">
+                            <div className="px-3 py-1.5 bg-slate-800/60 border-b border-slate-700">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                Proposed Journal Lines
+                              </span>
+                            </div>
+                            <div className="divide-y divide-slate-800">
+                              {suggestion.suggested_lines.map((line, idx) => (
+                                <div key={idx} className="px-3 py-2 flex items-center justify-between text-xs">
+                                  <div>
+                                    <span className={`font-mono font-bold mr-1 ${ line.debit_amount > 0 ? 'text-emerald-400' : 'text-slate-400' }`}>
+                                      [{line.debit_amount > 0 ? 'DR' : 'CR'}]
+                                    </span>
+                                    <span className="text-white font-medium">{line.account_code}</span>
+                                    <span className="text-slate-400 ml-1">• {line.account_name}</span>
+                                  </div>
+                                  <span className={`font-mono font-semibold ${ line.debit_amount > 0 ? 'text-emerald-400' : 'text-slate-300' }`}>
+                                    {line.debit_amount > 0
+                                      ? formatCardAmount(line.debit_amount, suggestion.currency)
+                                      : formatCardAmount(line.credit_amount, suggestion.currency)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            {!suggestion.is_balanced && (
+                              <div className="px-3 py-1.5 bg-red-950/30 border-t border-red-800/40 text-[10px] text-red-400 font-semibold">
+                                ⚠ Journal is not balanced — please review before posting
+                              </div>
+                            )}
                           </div>
 
                           <button
@@ -1042,29 +1054,45 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                 <span className="font-semibold text-white">{selectedTx.description}</span>
               </div>
 
-              {/* Proposed Double-Entry Lines */}
+              {/* Proposed Double-Entry Lines – from BookkeepingAgent */}
               <div className="border-t border-slate-800 pt-3 space-y-2">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
                   Proposed Double-Entry Lines
                 </span>
                 <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-300 font-medium">
-                      [DR] {suggestedCOA?.account.account_code || '6105'} •{' '}
-                      {suggestedCOA?.account.account_name || 'Bank Charges Expense'}
-                    </span>
-                    <span className="font-mono font-bold text-emerald-400">
-                      {formatCardAmount(Math.abs(selectedTx.amount))}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-400 font-medium">
-                      [CR] 1101 • Cash at Bank (BCA)
-                    </span>
-                    <span className="font-mono font-bold text-slate-300">
-                      {formatCardAmount(Math.abs(selectedTx.amount))}
-                    </span>
-                  </div>
+                  {suggestion?.suggested_lines && suggestion.suggested_lines.length > 0 ? (
+                    suggestion.suggested_lines.map((line, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-xs">
+                        <span className="text-slate-300 font-medium">
+                          [{line.debit_amount > 0 ? 'DR' : 'CR'}] {line.account_code} •{' '}
+                          {line.account_name}
+                        </span>
+                        <span className="font-mono font-bold text-emerald-400">
+                          {formatCardAmount(
+                            line.debit_amount > 0 ? line.debit_amount : line.credit_amount,
+                            suggestion.currency
+                          )}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-300 font-medium">
+                          [DR] 6105 • Bank Charges Expense
+                        </span>
+                        <span className="font-mono font-bold text-emerald-400">
+                          {formatCardAmount(Math.abs(selectedTx.amount))}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400 font-medium">[CR] 1101 • Cash at Bank</span>
+                        <span className="font-mono font-bold text-slate-300">
+                          {formatCardAmount(Math.abs(selectedTx.amount))}
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </div>

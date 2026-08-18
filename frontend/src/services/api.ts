@@ -566,6 +566,46 @@ export async function runReconciliationWorkflow(
   return response.json()
 }
 
+export interface SuggestedJournalLine {
+  account_code: string
+  account_name: string
+  description?: string | null
+  debit_amount: number
+  credit_amount: number
+}
+
+export interface AdjustmentSuggestionResponse {
+  bank_transaction_id: string
+  transaction_description: string
+  transaction_date: string
+  transaction_amount: number
+  currency: string
+  confidence_score: number
+  rationale: string
+  is_balanced: boolean
+  uses_sensitive_account: boolean
+  risk_flags: string[]
+  suggested_lines: SuggestedJournalLine[]
+  agent_name: string
+}
+
+export async function suggestAdjustmentJournal(
+  bankTransactionId: string
+): Promise<AdjustmentSuggestionResponse> {
+  const response = await fetch(`${API_BASE_URL}/reconciliation/suggest-adjustment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bank_transaction_id: bankTransactionId }),
+  })
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to get COA suggestion from BookkeepingAgent')
+  }
+
+  return response.json()
+}
+
 export async function fetchReconciliationMatches(params?: {
   bank_statement_import_id?: string
   status?: string

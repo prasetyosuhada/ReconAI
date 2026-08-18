@@ -110,6 +110,41 @@ class ReconciliationSummaryResponse(BaseModel):
     progress_percentage: int
 
 
+class AdjustmentSuggestionRequest(BaseModel):
+    """Request schema to ask BookkeepingAgent to suggest an adjusting journal entry for an unmatched bank transaction."""
+
+    bank_transaction_id: uuid.UUID = Field(
+        ..., description="UUID of the unmatched bank transaction to classify"
+    )
+
+
+class SuggestedJournalLine(BaseModel):
+    """A proposed double-entry line for an adjusting journal entry."""
+
+    account_code: str
+    account_name: str
+    description: str | None = None
+    debit_amount: float
+    credit_amount: float
+
+
+class AdjustmentSuggestionResponse(BaseModel):
+    """API response schema for BookkeepingAgent COA suggestion for an unmatched bank transaction."""
+
+    bank_transaction_id: str
+    transaction_description: str
+    transaction_date: str
+    transaction_amount: float
+    currency: str
+    confidence_score: float
+    rationale: str
+    is_balanced: bool
+    uses_sensitive_account: bool
+    risk_flags: list[str]
+    suggested_lines: list[SuggestedJournalLine]
+    agent_name: str = "bookkeeping_agent"
+
+
 class ManualMatchRequest(BaseModel):
     """Request schema for manually linking a bank transaction to a journal entry."""
 

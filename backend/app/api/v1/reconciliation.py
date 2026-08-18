@@ -25,6 +25,8 @@ from app.models.reconciliation import (
     ReconciliationMatch,
 )
 from app.schemas.reconciliation import (
+    AdjustmentSuggestionRequest,
+    AdjustmentSuggestionResponse,
     ManualMatchRequest,
     MatchActionRequest,
     MatchActionResponse,
@@ -33,6 +35,7 @@ from app.schemas.reconciliation import (
     ReconciliationMatchListResponse,
     ReconciliationMatchResponse,
     ReconciliationSummaryResponse,
+    SuggestedJournalLine,
 )
 from app.services.reconciliation import (
     execute_reconciliation_workflow,
@@ -107,6 +110,106 @@ def run_reconciliation_workflow(
         bank_statement_import_id=request.bank_statement_import_id,
         status="matching_in_progress",
         message="Reconciliation workflow started.",
+    )
+
+
+@router.post(
+    "/suggest-adjustment",
+    response_model=AdjustmentSuggestionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Ask BookkeepingAgent to suggest a COA and adjusting journal entry for an unmatched bank transaction",
+)
+def suggest_adjustment_journal(
+    req: AdjustmentSuggestionRequest,
+    db: Session = Depends(get_db),
+) -> AdjustmentSuggestionResponse:
+    """Use BookkeepingAgent (LLM) to suggest Chart of Accounts classification and
+    balanced double-entry journal lines for an unmatched bank transaction."""
+    from app.agents.bookkeeping import run_bookkeeping_agent
+    from app.models.coa import ChartOfAccount
+    from app.models.reconciliation import BankTransaction
+
+    tx = (
+        db.query(BankTransaction)
+        .filter(BankTransaction.id == req.bank_transaction_id)
+        .first()
+    )
+    if not tx:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Bank transaction [{req.bank_transaction_id}] not found.",
+        )
+
+    # Load active Chart of Accounts
+    coa_rows = (
+        db.query(ChartOfAccount)
+        .filter(ChartOfAccount.is_active == True)  # noqa: E712
+        .order_by(ChartOfAccount.account_code)
+        .all()
+    )
+    coa_list = [
+        {
+            "account_code": c.account_code,
+            "account_name": c.account_name,
+            "account_type": c.account_type,
+            "normal_balance": c.normal_balance,
+            "is_sensitive": c.is_sensitive,
+            "description": c.description,
+        }
+        for c in coa_rows
+    ]
+
+    # Build extraction_data dict from bank transaction fields
+    extraction_data = {
+        "vendor_name": tx.description,
+        "transaction_date": str(tx.transaction_date),
+        "total_amount": float(tx.amount),
+        "currency": tx.currency,
+        "document_type": "bank_transaction",
+        "line_items": [],
+        "extraction_notes": (
+            f"Unmatched bank statement mutation: '{tx.description}'. "
+            f"Ref: {tx.reference_number or 'N/A'}. "
+            "Please classify to the most appropriate expense or revenue account."
+        ),
+    }
+
+    logger.info(
+        "Calling BookkeepingAgent for bank tx [%s]: %s",
+        tx.id,
+        tx.description,
+    )
+
+    agent_resp = run_bookkeeping_agent(
+        extraction_data=extraction_data,
+        chart_of_accounts=coa_list,
+    )
+
+    result = agent_resp.result
+    suggested_lines = [
+        SuggestedJournalLine(
+            account_code=line.account_code,
+            account_name=line.account_name,
+            description=line.description,
+            debit_amount=line.debit_amount,
+            credit_amount=line.credit_amount,
+        )
+        for line in result.journal_lines
+    ]
+
+    return AdjustmentSuggestionResponse(
+        bank_transaction_id=str(tx.id),
+        transaction_description=tx.description,
+        transaction_date=str(tx.transaction_date),
+        transaction_amount=float(tx.amount),
+        currency=tx.currency,
+        confidence_score=agent_resp.confidence_score,
+        rationale=agent_resp.rationale,
+        is_balanced=result.is_balanced,
+        uses_sensitive_account=result.uses_sensitive_account,
+        risk_flags=list(result.risk_flags or []),
+        suggested_lines=suggested_lines,
+        agent_name=agent_resp.agent_name,
     )
 
 
