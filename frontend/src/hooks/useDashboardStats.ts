@@ -21,21 +21,15 @@ export function useDashboardStats() {
   useEffect(() => {
     refresh()
 
-    // Listen for custom event triggered when review items / ledger / docs are updated
+    // Listen for custom event triggered when review items / ledger / docs are updated (event-driven, no periodic polling)
     const handleUpdate = () => {
       refresh()
     }
 
     window.addEventListener('review-queue-updated', handleUpdate)
-    window.addEventListener('focus', handleUpdate)
-
-    // Polling interval every 4 seconds to keep badge and stats live
-    const interval = setInterval(refresh, 4000)
 
     return () => {
       window.removeEventListener('review-queue-updated', handleUpdate)
-      window.removeEventListener('focus', handleUpdate)
-      clearInterval(interval)
     }
   }, [refresh])
 
