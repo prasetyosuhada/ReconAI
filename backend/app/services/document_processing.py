@@ -50,6 +50,43 @@ def stream_document_processing(
             yield f"data: {json.dumps({'stage': 'error', 'message': f'Document [{document_id}] not found.'})}\n\n"
             return
 
+        # Guard against duplicate concurrent execution or re-execution of already-completed documents
+        if doc.status in (
+            "extracted",
+            "ready_to_post",
+            "review_required",
+            "extraction_review_required",
+            "bookkeeping_review_required",
+        ):
+            logger.info(
+                "Document %s already processed (status=%s). Returning existing results.",
+                document_id,
+                doc.status,
+            )
+            existing_extraction = (
+                db.query(DocumentExtraction)
+                .filter(DocumentExtraction.document_id == doc.id)
+                .first()
+            )
+            vendor = (
+                existing_extraction.vendor_name
+                if existing_extraction
+                else "Document"
+            )
+            tot_amount = (
+                float(existing_extraction.total_amount)
+                if existing_extraction and existing_extraction.total_amount
+                else 0.0
+            )
+            curr = existing_extraction.currency if existing_extraction else "IDR"
+            conf = (
+                float(existing_extraction.confidence_score)
+                if existing_extraction
+                else 1.0
+            )
+            yield f"data: {json.dumps({'stage': 'completed', 'percentage': 100, 'status': doc.status, 'confidence_score': conf, 'vendor_name': vendor, 'total_amount': tot_amount, 'currency': curr, 'message': f'Document \"{doc.original_filename}\" is already processed.'})}\n\n"
+            return
+
         file_path = stored_file_path or doc.stored_file_path
         effective_mime = mime_type or doc.mime_type
         fname = original_filename or doc.original_filename
@@ -149,27 +186,51 @@ def stream_document_processing(
         final_risk_flags = final_state.get("risk_flags", []) or []
         final_rationale = final_state.get("rationale")
 
-        # 1. Save DocumentExtraction record in DB
-        extraction = DocumentExtraction(
-            id=uuid.uuid4(),
-            document_id=doc.id,
-            vendor_name=final_state.get("vendor_name"),
-            transaction_date=_parse_date(final_state.get("transaction_date")),
-            subtotal_amount=final_state.get("subtotal_amount"),
-            tax_amount=final_state.get("tax_amount"),
-            total_amount=final_state.get("total_amount"),
-            currency=final_state.get("currency", "IDR"),
-            line_items=final_state.get("line_items", []),
-            raw_text=final_state.get("raw_text"),
-            confidence_score=final_confidence,
-            rationale=final_rationale,
-            status="extracted" if not needs_review else "draft",
+        # 1. Save DocumentExtraction record in DB (idempotent upsert)
+        existing_extraction = (
+            db.query(DocumentExtraction)
+            .filter(DocumentExtraction.document_id == doc.id)
+            .first()
         )
-        db.add(extraction)
+        if existing_extraction:
+            extraction = existing_extraction
+            extraction.vendor_name = final_state.get("vendor_name")
+            extraction.transaction_date = _parse_date(
+                final_state.get("transaction_date")
+            )
+            extraction.subtotal_amount = final_state.get("subtotal_amount")
+            extraction.tax_amount = final_state.get("tax_amount")
+            extraction.total_amount = final_state.get("total_amount")
+            extraction.currency = final_state.get("currency", "IDR")
+            extraction.line_items = final_state.get("line_items", [])
+            extraction.raw_text = final_state.get("raw_text")
+            extraction.confidence_score = final_confidence
+            extraction.rationale = final_rationale
+            extraction.status = "extracted" if not needs_review else "draft"
+        else:
+            extraction = DocumentExtraction(
+                id=uuid.uuid4(),
+                document_id=doc.id,
+                vendor_name=final_state.get("vendor_name"),
+                transaction_date=_parse_date(
+                    final_state.get("transaction_date")
+                ),
+                subtotal_amount=final_state.get("subtotal_amount"),
+                tax_amount=final_state.get("tax_amount"),
+                total_amount=final_state.get("total_amount"),
+                currency=final_state.get("currency", "IDR"),
+                line_items=final_state.get("line_items", []),
+                raw_text=final_state.get("raw_text"),
+                confidence_score=final_confidence,
+                rationale=final_rationale,
+                status="extracted" if not needs_review else "draft",
+            )
+            db.add(extraction)
+
         db.commit()
         db.refresh(extraction)
 
-        # 2. Save Proposed Journal Entry using deterministic guardrails
+        # 2. Save Proposed Journal Entry using deterministic guardrails (idempotent check)
         proposed_journal = (
             final_state.get("journal_entry")
             or final_state.get("proposed_journal")
@@ -177,9 +238,24 @@ def stream_document_processing(
         )
         saved_journal_id = None
 
-        if proposed_journal:
+        existing_je = (
+            db.query(JournalEntry)
+            .filter(JournalEntry.document_id == doc.id)
+            .first()
+        )
+
+        if existing_je:
+            saved_journal_id = str(existing_je.id)
+            logger.info(
+                "JournalEntry already exists for document %s (#JE-%s). Skipping duplicate insert.",
+                doc.id,
+                saved_journal_id[:8],
+            )
+        elif proposed_journal:
             journal_desc = f"Journal for {fname} ({vendor})"
-            journal_entry_date = _parse_date(final_state.get("transaction_date")) or date.today()
+            journal_entry_date = (
+                _parse_date(final_state.get("transaction_date")) or date.today()
+            )
             journal_data = {
                 "document_id": doc.id,
                 "extraction_id": extraction.id,
@@ -196,12 +272,16 @@ def stream_document_processing(
             if save_res.success:
                 saved_journal_id = save_res.journal_entry_id
 
-        # 3. Handle Human-in-the-Loop Review Queue
+        # 3. Handle Human-in-the-Loop Review Queue (idempotent check)
         review_item_created = False
 
         if (
             needs_review
-            or final_status in ("extraction_review_required", "bookkeeping_review_required")
+            or final_status
+            in (
+                "extraction_review_required",
+                "bookkeeping_review_required",
+            )
             or final_risk_flags
         ):
             review_type = (
@@ -213,16 +293,18 @@ def stream_document_processing(
             is_sensitive = "uses_sensitive_account" in final_risk_flags
             priority = "high" if is_sensitive or not is_balanced else "normal"
 
-            flags_str = ", ".join(final_risk_flags) if final_risk_flags else "None"
-            review_summary = (
-                f"Agent flagged document. Conf: {final_confidence:.2f}, Flags: {flags_str}"
+            flags_str = (
+                ", ".join(final_risk_flags) if final_risk_flags else "None"
             )
+            review_summary = f"Agent flagged document. Conf: {final_confidence:.2f}, Flags: {flags_str}"
 
             if review_type == "bookkeeping" and saved_journal_id:
                 review_payload: dict = {
                     "journal_entry_id": str(saved_journal_id),
                     "vendor_name": final_state.get("vendor_name"),
-                    "transaction_date": str(final_state.get("transaction_date") or ""),
+                    "transaction_date": str(
+                        final_state.get("transaction_date") or ""
+                    ),
                     "total_amount": final_state.get("total_amount"),
                     "subtotal_amount": final_state.get("subtotal_amount"),
                     "tax_amount": final_state.get("tax_amount"),
@@ -235,7 +317,9 @@ def stream_document_processing(
                     "risk_flags": final_risk_flags,
                     "confidence_score": final_confidence,
                     "is_balanced": final_state.get("is_balanced", True),
-                    "uses_sensitive_account": final_state.get("uses_sensitive_account", False),
+                    "uses_sensitive_account": final_state.get(
+                        "uses_sensitive_account", False
+                    ),
                 }
                 review_source_type = "journal_entry"
                 review_source_id = (
@@ -246,7 +330,9 @@ def stream_document_processing(
             else:
                 review_payload = {
                     "vendor_name": final_state.get("vendor_name"),
-                    "transaction_date": str(final_state.get("transaction_date") or ""),
+                    "transaction_date": str(
+                        final_state.get("transaction_date") or ""
+                    ),
                     "total_amount": final_state.get("total_amount"),
                     "subtotal_amount": final_state.get("subtotal_amount"),
                     "tax_amount": final_state.get("tax_amount"),
@@ -261,23 +347,34 @@ def stream_document_processing(
                 review_source_type = "document"
                 review_source_id = doc.id
 
-            review_item = ReviewItem(
-                id=uuid.uuid4(),
-                review_type=review_type,
-                status="pending",
-                priority=priority,
-                source_type=review_source_type,
-                source_id=review_source_id,
-                title=f"Review Needed: {fname}",
-                summary=review_summary,
-                suggested_action=(
-                    "Review and correct the extracted data before bookkeeping."
-                    if review_type == "extraction"
-                    else "Review the AI-generated journal entry account classification."
-                ),
-                original_payload=review_payload,
+            existing_review = (
+                db.query(ReviewItem)
+                .filter(
+                    ReviewItem.source_type == review_source_type,
+                    ReviewItem.source_id == review_source_id,
+                    ReviewItem.status == "pending",
+                )
+                .first()
             )
-            db.add(review_item)
+
+            if not existing_review:
+                review_item = ReviewItem(
+                    id=uuid.uuid4(),
+                    review_type=review_type,
+                    status="pending",
+                    priority=priority,
+                    source_type=review_source_type,
+                    source_id=review_source_id,
+                    title=f"Review Needed: {fname}",
+                    summary=review_summary,
+                    suggested_action=(
+                        "Review and correct the extracted data before bookkeeping."
+                        if review_type == "extraction"
+                        else "Review the AI-generated journal entry account classification."
+                    ),
+                    original_payload=review_payload,
+                )
+                db.add(review_item)
             review_item_created = True
 
             yield f"data: {json.dumps({'stage': 'review_queued', 'percentage': 95, 'message': f'⚠️ Routed to Human Review Queue ({priority} priority). Flags: {flags_str}'})}\n\n"
@@ -288,32 +385,44 @@ def stream_document_processing(
         doc.status = final_status
         db.commit()
 
-        # 4. Audit Trail Event
-        audit = AuditEvent(
-            event_type="extraction_completed",
-            source_type="document",
-            source_id=doc.id,
-            actor_type="agent",
-            actor_name="DocumentProcessingGraph",
-            input_snapshot={
-                "document_id": str(doc_uuid),
-                "original_filename": fname,
-            },
-            output_snapshot={
-                "status": final_status,
-                "confidence_score": final_confidence,
-                "needs_review": needs_review,
-                "extraction_id": str(extraction.id),
-                "journal_entry_id": str(saved_journal_id) if saved_journal_id else None,
-                "review_item_created": review_item_created,
-            },
-            confidence_score=final_confidence,
-            rationale=final_rationale,
+        # 4. Audit Trail Event (idempotent)
+        existing_audit = (
+            db.query(AuditEvent)
+            .filter(
+                AuditEvent.event_type == "extraction_completed",
+                AuditEvent.source_id == doc.id,
+            )
+            .first()
         )
-        db.add(audit)
-        db.commit()
+        if not existing_audit:
+            audit = AuditEvent(
+                event_type="extraction_completed",
+                source_type="document",
+                source_id=doc.id,
+                actor_type="agent",
+                actor_name="DocumentProcessingGraph",
+                input_snapshot={
+                    "document_id": str(doc_uuid),
+                    "original_filename": fname,
+                },
+                output_snapshot={
+                    "status": final_status,
+                    "confidence_score": final_confidence,
+                    "needs_review": needs_review,
+                    "extraction_id": str(extraction.id),
+                    "journal_entry_id": (
+                        str(saved_journal_id) if saved_journal_id else None
+                    ),
+                    "review_item_created": review_item_created,
+                },
+                confidence_score=final_confidence,
+                rationale=final_rationale,
+            )
+            db.add(audit)
+            db.commit()
 
         yield f"data: {json.dumps({'stage': 'completed', 'percentage': 100, 'status': final_status, 'confidence_score': final_confidence, 'vendor_name': vendor, 'total_amount': tot_amount, 'currency': curr, 'message': f'🎉 Document \"{fname}\" processing completed successfully!'})}\n\n"
+
 
     except Exception as e:
         logger.error(
