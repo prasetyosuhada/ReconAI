@@ -10,6 +10,7 @@ from app.db.session import SessionLocal
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
+from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
 from app.services.accounting import save_journal_entry_safely
 from app.services.document_extraction import extract_document_content
