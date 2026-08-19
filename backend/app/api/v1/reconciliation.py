@@ -155,25 +155,17 @@ def suggest_adjustment_journal(
         .first()
     )
     if not suggestion:
-        logger.info(
-            "No pre-computed suggestion for bank tx [%s]. Generating on-demand with BookkeepingAgent...",
-            tx.id,
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No COA suggestion found for bank transaction [{req.bank_transaction_id}]. "
+                "Suggestion is generated automatically when the match is rejected or unmatched. "
+                "Run 'Run Recon Engine' first if this is a Bank Only transaction."
+            ),
         )
-        try:
-            suggestion = compute_and_save_adjustment_suggestion(tx=tx, db=db)
-        except Exception as err:
-            logger.error(
-                "Failed to generate on-demand COA suggestion for tx [%s]: %s",
-                tx.id,
-                err,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to generate COA suggestion: {err}",
-            ) from err
 
     logger.info(
-        "Returning BookkeepingAgent suggestion for bank tx [%s]", tx.id
+        "Returning stored BookkeepingAgent suggestion for bank tx [%s]", tx.id
     )
 
     return AdjustmentSuggestionResponse(

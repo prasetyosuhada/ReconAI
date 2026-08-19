@@ -206,7 +206,9 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
     }
   }, [item?.id])
 
-  // Load Bookkeeping suggestion if this is an unmatched bank transaction (no candidate JE)
+  // Load pre-computed BookkeepingAgent suggestion (only from DB cache, no LLM call on open)
+  // For fuzzy match items, no COA suggestion needed (they have a candidate GL entry already).
+  // Suggestion will be present in DB after: (1) Run Recon Engine, or (2) Confirm Rejection.
   useEffect(() => {
     if (isFuzzyMatch || !bankTxId) return
 
@@ -218,7 +220,10 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
         setSuggestion(res)
       })
       .catch((err: Error) => {
-        if (err.message.includes('Run Recon Engine')) {
+        // 404 = suggestion not yet generated - this is expected before rejection is confirmed
+        if (err.message.toLowerCase().includes('no coa suggestion')) {
+          setSuggestionError(null) // suppress error - not harmful, suggestion will appear after rejection
+        } else if (err.message.includes('Run Recon Engine')) {
           setSuggestionError('Run Recon Engine to generate precomputed COA suggestions.')
         } else {
           setSuggestionError(err.message)
