@@ -17,6 +17,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.session import get_db
+from app.models.adjustment_suggestion import AdjustmentSuggestion
 from app.models.audit import AuditEvent
 from app.models.journal import JournalEntry
 from app.models.reconciliation import (
@@ -24,6 +25,7 @@ from app.models.reconciliation import (
     BankTransaction,
     ReconciliationMatch,
 )
+from app.models.review import ReviewItem
 from app.schemas.reconciliation import (
     AdjustmentSuggestionRequest,
     AdjustmentSuggestionResponse,
@@ -41,6 +43,7 @@ from app.schemas.reconciliation import (
 )
 from app.services.accounting import save_journal_entry_safely
 from app.services.reconciliation import (
+    compute_and_save_adjustment_suggestion,
     execute_reconciliation_workflow,
     stream_reconciliation_workflow,
 )
@@ -337,8 +340,6 @@ def accept_reconciliation_match(
     if match.bank_transaction:
         match.bank_transaction.status = "matched"
 
-    from app.models.review import ReviewItem
-
     if match.bank_transaction_id:
         rev_item = (
             db.query(ReviewItem)
@@ -431,8 +432,6 @@ def reject_reconciliation_match(
 
     # Eagerly compute & save COA suggestion for newly unmatched transaction
     if match.bank_transaction:
-        from app.models.adjustment_suggestion import AdjustmentSuggestion
-
         existing_sug = (
             db.query(AdjustmentSuggestion)
             .filter(AdjustmentSuggestion.bank_transaction_id == match.bank_transaction.id)
