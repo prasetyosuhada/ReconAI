@@ -328,6 +328,24 @@ def accept_reconciliation_match(
     if match.bank_transaction:
         match.bank_transaction.status = "matched"
 
+    from app.models.review import ReviewItem
+
+    if match.bank_transaction_id:
+        rev_item = (
+            db.query(ReviewItem)
+            .filter(
+                ReviewItem.source_type == "bank_transaction",
+                ReviewItem.source_id == match.bank_transaction_id,
+                ReviewItem.status == "pending",
+            )
+            .first()
+        )
+        if rev_item:
+            rev_item.status = "approved"
+            rev_item.resolved_by = "human_user"
+            rev_item.resolved_at = datetime.now(UTC)
+            rev_item.resolution_note = action_req.resolution_note if action_req else "Approved in Reconciliation View."
+
     note = action_req.resolution_note if action_req else None
     audit = AuditEvent(
         event_type="reconciliation_match_accepted",
@@ -385,6 +403,22 @@ def reject_reconciliation_match(
 
     if match.bank_transaction:
         match.bank_transaction.status = "imported"
+
+    if match.bank_transaction_id:
+        rev_item = (
+            db.query(ReviewItem)
+            .filter(
+                ReviewItem.source_type == "bank_transaction",
+                ReviewItem.source_id == match.bank_transaction_id,
+                ReviewItem.status == "pending",
+            )
+            .first()
+        )
+        if rev_item:
+            rev_item.status = "rejected"
+            rev_item.resolved_by = "human_user"
+            rev_item.resolved_at = datetime.now(UTC)
+            rev_item.resolution_note = action_req.resolution_note if action_req else "Rejected in Reconciliation View."
 
     note = action_req.resolution_note if action_req else None
     audit = AuditEvent(

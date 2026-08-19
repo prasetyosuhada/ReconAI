@@ -214,6 +214,12 @@ export const ReconciliationView: React.FC = () => {
       setMatches((prev) =>
         prev.map((m) => (m.id === matchId ? { ...m, status: 'accepted' } : m))
       )
+      setTransactions((prev) =>
+        prev.map((t) => {
+          const match = matches.find((m) => m.id === matchId)
+          return match && match.bank_transaction_id === t.id ? { ...t, status: 'matched' } : t
+        })
+      )
       if (activeImportId) {
         await loadData(activeImportId)
       }
@@ -230,6 +236,12 @@ export const ReconciliationView: React.FC = () => {
       await rejectReconciliationMatch(matchId)
       setMatches((prev) =>
         prev.map((m) => (m.id === matchId ? { ...m, status: 'rejected' } : m))
+      )
+      setTransactions((prev) =>
+        prev.map((t) => {
+          const match = matches.find((m) => m.id === matchId)
+          return match && match.bank_transaction_id === t.id ? { ...t, status: 'unmatched' } : t
+        })
       )
       if (activeImportId) {
         await loadData(activeImportId)

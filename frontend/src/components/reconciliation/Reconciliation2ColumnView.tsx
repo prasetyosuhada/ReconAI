@@ -172,7 +172,13 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
   // For matched transactions, no suggestion needed.
   // For unmatched Bank Only: reads from DB instantly (no LLM call on demand).
   useEffect(() => {
-    const isBankOnly = selectedTx && !selectedMatch
+    const isBankOnly =
+      Boolean(selectedTx) &&
+      (!selectedMatch ||
+        !selectedMatch.journal_entry ||
+        selectedMatch.status === 'rejected' ||
+        selectedMatch.status === 'unmatched')
+
     if (!isBankOnly) {
       setSuggestion(null)
       setSuggestionError(null)
@@ -199,7 +205,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
         }
       })
       .finally(() => setSuggestionLoading(false))
-  }, [selectedTx?.id, selectedMatch])
+  }, [selectedTx?.id, selectedMatch?.id, selectedMatch?.status])
 
 
   const getStatusBadge = (status: string) => {
@@ -513,7 +519,13 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
 
               {/* Section B: Reconciliation Analysis & Candidate GL */}
               {(() => {
-                if (!selectedMatch || !selectedMatch.journal_entry) {
+                const isRejectedOrUnmatched =
+                  !selectedMatch ||
+                  !selectedMatch.journal_entry ||
+                  selectedMatch.status === 'rejected' ||
+                  selectedMatch.status === 'unmatched'
+
+                if (isRejectedOrUnmatched) {
                   // State: No GL Match Found (Bank Only)
                   return (
                     <div className="space-y-4">
@@ -688,18 +700,17 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                   )
                 }
 
-                const score = Math.round((selectedMatch.confidence_score ?? 1) * 100)
-                const isExact =
-                  (selectedMatch.match_type === 'exact' ||
-                    selectedMatch.match_rule_type === 'EXACT_MATCH' ||
-                    score >= 95) &&
-                  selectedMatch.status !== 'proposed'
-
                 const isAlreadyAccepted =
                   selectedMatch.status === 'accepted' || selectedMatch.status === 'matched'
 
-                if (isExact) {
-                  // State: EXACT MATCH
+                if (isAlreadyAccepted) {
+                  // State: MATCHED / RECONCILED GL TRANSACTION
+                  const score = Math.round((selectedMatch.confidence_score ?? 1) * 100)
+                  const isExact =
+                    selectedMatch.match_type === 'exact' ||
+                    selectedMatch.match_rule_type === 'EXACT_MATCH' ||
+                    score >= 95
+
                   return (
                     <div className="p-5 rounded-xl bg-emerald-950/20 border border-emerald-500/30 space-y-4">
                       <div className="flex items-center justify-between">
@@ -710,7 +721,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                           </h4>
                         </div>
                         <span className="px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
-                          ✓ EXACT MATCH (100%)
+                          {isExact ? '✓ EXACT MATCH (100%)' : `✓ RECONCILED (${score}%)`}
                         </span>
                       </div>
 
@@ -744,47 +755,32 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                       <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
                         <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold">
                           <ShieldCheck className="w-4 h-4" />
-                          Amounts &amp; Dates Verified Deterministically
+                          Amounts &amp; Dates Verified
                         </div>
 
-                        {isAlreadyAccepted ? (
-                          <div className="flex items-center gap-2">
-                            <span className="px-3 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Reconciled
-                            </span>
-                            {onRejectMatch && (
-                              <button
-                                type="button"
-                                disabled={actionLoading}
-                                onClick={() => onRejectMatch(selectedMatch.id)}
-                                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-semibold transition-colors cursor-pointer"
-                                title="Undo match"
-                              >
-                                <Undo2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={actionLoading}
-                            onClick={() => onAcceptMatch?.(selectedMatch.id)}
-                            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-all shadow-md shadow-emerald-600/20 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                          >
-                            {actionLoading ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <CheckCircle2 className="w-4 h-4" />
-                            )}
-                            Accept Reconciliation
-                          </button>
-                        )}
+                        <div className="flex items-center gap-2">
+                          <span className="px-3 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Reconciled
+                          </span>
+                          {onRejectMatch && (
+                            <button
+                              type="button"
+                              disabled={actionLoading}
+                              onClick={() => onRejectMatch(selectedMatch.id)}
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-rose-300 text-xs font-semibold transition-colors cursor-pointer"
+                              title="Undo match / Unmatch"
+                            >
+                              <Undo2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )
                 }
 
-                // State: POSSIBLE GL CANDIDATE / AI SUGGESTED (Review Required / Low Confidence)
+                // State: POSSIBLE GL CANDIDATE / AI SUGGESTED (Review Required / Proposed)
+                const score = Math.round((selectedMatch.confidence_score ?? 1) * 100)
                 const isLowConfidence = score < 50
                 const hasSignalScores =
                   selectedMatch.amount_score != null ||
