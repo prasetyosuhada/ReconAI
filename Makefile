@@ -36,9 +36,12 @@ db-clean: ## Stop PostgreSQL container and wipe all database data (volumes)
 db-reset: ## Reset database completely (wipe, recreate, migrate, seed)
 	@$(MAKE) db-clean
 	@$(MAKE) db-up
+	@echo "--> Waiting for PostgreSQL to be ready..."
+	@sleep 3
 	@$(MAKE) migrate
 	@$(MAKE) seed
 	@echo "--> Database reset complete!"
+
 
 migrate: ## Run Alembic database migrations
 	@echo "--> Running Alembic migrations..."

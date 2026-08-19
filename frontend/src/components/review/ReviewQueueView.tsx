@@ -3,6 +3,7 @@ import { ReviewQueueHeader } from './ReviewQueueHeader'
 import { ReviewQueueList } from './ReviewQueueList'
 import { ExtractionReviewModal } from './ExtractionReviewModal'
 import { BookkeepingReviewModal } from './BookkeepingReviewModal'
+import { ReconciliationReviewModal } from './ReconciliationReviewModal'
 import type { ReviewItemResponse } from '../../services/api'
 import { fetchReviewItems } from '../../services/api'
 
@@ -48,9 +49,10 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
   const highPriorityCount = items.filter(
     (i) => i.priority === 'high' && i.status === 'pending'
   ).length
-  const approvedCount = items.filter((i) => i.status === 'posted').length
+  const approvedCount = items.filter((i) => i.status === 'posted' || i.status === 'approved').length
 
   const isBookkeepingItem = selectedItem?.review_type === 'bookkeeping'
+  const isReconciliationItem = selectedItem?.review_type === 'reconciliation'
 
   return (
     <div className="space-y-6">
@@ -73,6 +75,15 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
         onTypeFilterChange={setTypeFilter}
       />
 
+      {/* Reconciliation Review Modal — for reconciliation type items */}
+      {selectedItem && isReconciliationItem && (
+        <ReconciliationReviewModal
+          item={selectedItem}
+          onClose={() => setSelectedItem(null)}
+          onResolved={() => loadReviewItems()}
+        />
+      )}
+
       {/* Bookkeeping Review Modal — for bookkeeping type items */}
       {selectedItem && isBookkeepingItem && (
         <BookkeepingReviewModal
@@ -83,7 +94,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
       )}
 
       {/* Extraction Review Modal — for extraction / other types */}
-      {selectedItem && !isBookkeepingItem && (
+      {selectedItem && !isBookkeepingItem && !isReconciliationItem && (
         <ExtractionReviewModal
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
@@ -93,3 +104,4 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
     </div>
   )
 }
+

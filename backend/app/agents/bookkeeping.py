@@ -38,7 +38,6 @@ def run_bookkeeping_agent(
         BookkeepingResponse containing confidence score, rationale, and proposed entry.
     """
     logger.info("Executing Bookkeeping Agent...")
-    print("\n========================EXTRACTION DATA========================\n", extraction_data)
 
     total_amount = extraction_data.get("total_amount")
     vendor_name = extraction_data.get("vendor_name", "Unknown")
@@ -109,7 +108,6 @@ def run_bookkeeping_agent(
             f"--- CHART OF ACCOUNTS REFERENCE ---\n"
             f"{coa_formatted}\n"
         )
-        print("USER CONTENT BOOKKEEPING: ", user_content)
 
         messages = [
             SystemMessage(content=BOOKKEEPING_SYSTEM_PROMPT),
@@ -122,7 +120,6 @@ def run_bookkeeping_agent(
         )
 
         response: BookkeepingResponse = structured_llm.invoke(messages)
-        print("\\n========================BOOKKEEPING AGENT RESPONSE========================\\n", response)
 
         logger.info(
             "🤖 [LLM Bookkeeping] Lines: %d | Conf: %.2f | Rationale: %s",

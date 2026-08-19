@@ -450,6 +450,25 @@ def approve_review_item(
                 )
             next_workflow_status = "posted"
 
+    elif item.source_type == "bank_transaction":
+        from app.models.reconciliation import BankTransaction, ReconciliationMatch
+
+        tx = db.query(BankTransaction).filter(BankTransaction.id == item.source_id).first()
+        match = (
+            db.query(ReconciliationMatch)
+            .filter(ReconciliationMatch.bank_transaction_id == item.source_id)
+            .first()
+        )
+        if match:
+            match.status = "accepted"
+            match.updated_at = now_utc
+            if tx:
+                tx.status = "matched"
+            next_workflow_status = "matched"
+        elif tx:
+            next_workflow_status = "approved"
+
+
     # Audit Trail Event
     audit = AuditEvent(
         event_type="review_item_approved",
@@ -652,6 +671,22 @@ def reject_review_item(
         je = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
         if je:
             je.status = "rejected"
+
+    elif item.source_type == "bank_transaction":
+        from app.models.reconciliation import BankTransaction, ReconciliationMatch
+
+        tx = db.query(BankTransaction).filter(BankTransaction.id == item.source_id).first()
+        match = (
+            db.query(ReconciliationMatch)
+            .filter(ReconciliationMatch.bank_transaction_id == item.source_id)
+            .first()
+        )
+        if match:
+            match.status = "rejected"
+            match.updated_at = now_utc
+        if tx:
+            tx.status = "imported"
+
 
     # Audit Event
     audit = AuditEvent(

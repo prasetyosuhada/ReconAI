@@ -238,6 +238,10 @@ def stream_document_processing(
             or final_state.get("journal_lines")
         )
         saved_journal_id = None
+        journal_desc = f"Journal for {fname} ({vendor})"
+        journal_entry_date = (
+            _parse_date(final_state.get("transaction_date")) or date.today()
+        )
 
         existing_je = (
             db.query(JournalEntry)
@@ -253,10 +257,6 @@ def stream_document_processing(
                 saved_journal_id[:8],
             )
         elif proposed_journal:
-            journal_desc = f"Journal for {fname} ({vendor})"
-            journal_entry_date = (
-                _parse_date(final_state.get("transaction_date")) or date.today()
-            )
             journal_data = {
                 "document_id": doc.id,
                 "extraction_id": extraction.id,
