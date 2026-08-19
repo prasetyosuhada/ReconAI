@@ -13,12 +13,14 @@ import {
 } from 'lucide-react'
 import type {
   AdjustmentSuggestionResponse,
+  BankTransactionResponse,
   JournalEntryResponse,
   ReviewItemResponse,
 } from '../../services/api'
 import {
   approveReviewItem,
   createAdjustmentJournalEntry,
+  fetchBankTransactionDetail,
   fetchJournalEntryDetail,
   fetchReviewItemDetail,
   rejectReviewItem,
@@ -61,6 +63,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
 }) => {
   const [detailItem, setDetailItem] = useState<ReviewItemResponse | null>(item)
   const [_loadingDetail, setLoadingDetail] = useState<boolean>(false)
+  const [bankTxRecord, setBankTxRecord] = useState<BankTransactionResponse | null>(null)
   const [candidateJE, setCandidateJE] = useState<JournalEntryResponse | null>(null)
   const [loadingCandidate, setLoadingCandidate] = useState<boolean>(false)
 
@@ -80,14 +83,46 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
   const activeItem = detailItem || item
   const payload: Record<string, any> = activeItem?.original_payload || {}
 
-  // Parse bank transaction attributes from payload
+  // Parse bank transaction attributes from bankTxRecord, payload, or activeItem
   const bankTx = payload.bank_transaction || payload
-  const bankTxId = activeItem?.source_id || bankTx.id || payload.tx_id || ''
-  const txDescription = bankTx.description || payload.vendor_name || activeItem?.title || 'Bank Mutation'
-  const txDate = bankTx.transaction_date || payload.transaction_date || ''
-  const txAmount = Number(bankTx.amount ?? payload.total_amount ?? 0)
-  const txCurrency = bankTx.currency || payload.currency || 'IDR'
-  const txRef = bankTx.reference_number || payload.reference_number || 'N/A'
+  const bankTxId =
+    activeItem?.source_id || bankTxRecord?.id || bankTx.id || payload.tx_id || ''
+
+  const rawTxDescription =
+    bankTxRecord?.description ||
+    bankTx.description ||
+    payload.description ||
+    payload.vendor_name ||
+    activeItem?.title ||
+    'Bank Mutation'
+
+  // Clean description if it has "Review Match: " or "Unmatched Bank TX: " prefix
+  const txDescription = rawTxDescription
+    .replace(/^Review Match:\s*/i, '')
+    .replace(/^Unmatched Bank TX:\s*/i, '')
+
+  const txDate =
+    bankTxRecord?.transaction_date ||
+    bankTx.transaction_date ||
+    payload.transaction_date ||
+    payload.date ||
+    ''
+
+  const txAmount = Number(
+    bankTxRecord?.amount ??
+      bankTx.amount ??
+      payload.amount ??
+      payload.total_amount ??
+      0
+  )
+
+  const txCurrency =
+    bankTxRecord?.currency || bankTx.currency || payload.currency || 'IDR'
+  const txRef =
+    bankTxRecord?.reference_number ||
+    bankTx.reference_number ||
+    payload.reference_number ||
+    'N/A'
 
   // Candidate Match metadata (if fuzzy match)
   const proposedJEId =
@@ -103,7 +138,13 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
   const rationale =
     payload.rationale || activeItem?.summary || 'Reconciliation review required by rule engine.'
 
-  // Load detailed review item and candidate GL entry
+  // Total GL debit amount (fallback to sum of debit lines)
+  const candidateTotalDebit =
+    candidateJE?.total_debit ||
+    candidateJE?.lines?.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0) ||
+    0
+
+  // Load detailed review item and candidate GL entry / bank transaction
   useEffect(() => {
     let ignore = false
     setDetailItem(item)
@@ -112,6 +153,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
     setShowRejectInput(false)
     setRejectionReason('')
     setCandidateJE(null)
+    setBankTxRecord(null)
 
     if (!item?.id) return
 
@@ -134,6 +176,18 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
               })
               .finally(() => {
                 if (!ignore) setLoadingCandidate(false)
+              })
+          }
+
+          // Fetch bank transaction entity if source_id is available
+          const txId = res.source_id || p.tx_id || p.id
+          if (res.source_type === 'bank_transaction' && txId) {
+            fetchBankTransactionDetail(String(txId))
+              .then((tx) => {
+                if (!ignore) setBankTxRecord(tx)
+              })
+              .catch((err) => {
+                console.warn('Could not fetch bank transaction detail:', err)
               })
           }
         }
@@ -250,7 +304,6 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
       setSubmitting(false)
     }
   }
-
 
   if (!item) return null
 
@@ -394,7 +447,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
                       <div>
                         <span className="text-[10px] text-slate-500 block">Total GL Amount</span>
                         <span className="text-xs font-mono font-bold text-emerald-400">
-                          {formatCurrency(candidateJE.total_debit || 0)}
+                          {formatCurrency(candidateTotalDebit)}
                         </span>
                       </div>
                     </div>

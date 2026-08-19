@@ -522,6 +522,16 @@ export async function fetchBankStatementImports(params?: {
   return response.json()
 }
 
+export async function fetchBankTransactionDetail(
+  transactionId: string
+): Promise<BankTransactionResponse> {
+  const response = await fetch(`${API_BASE_URL}/bank-statements/transactions/${transactionId}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch bank transaction ${transactionId}`)
+  }
+  return response.json()
+}
+
 export async function uploadBankStatementCSV(file: File): Promise<BankStatementImportResponse> {
   const formData = new FormData()
   formData.append('file', file)

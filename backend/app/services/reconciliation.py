@@ -218,8 +218,16 @@ def stream_reconciliation_workflow(
                                 suggested_action="Approve or edit match.",
                                 original_payload={
                                     "tx_id": str(tx.id),
-                                    "proposed_je_id": str(matched_je_id),
-                                    "confidence": conf,
+                                    "transaction_date": str(tx.transaction_date),
+                                    "amount": float(tx.amount),
+                                    "description": tx.description,
+                                    "currency": tx.currency or "IDR",
+                                    "reference_number": tx.reference_number,
+                                    "proposed_journal_entry_id": str(matched_je_id),
+                                    "confidence_score": conf,
+                                    "amount_score": best_match.amount_score,
+                                    "date_score": best_match.date_score,
+                                    "vendor_score": best_match.vendor_score,
                                     "rationale": best_match.rationale,
                                 },
                             )

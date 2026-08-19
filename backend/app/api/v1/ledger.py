@@ -53,9 +53,15 @@ def _to_journal_list_item(entry: JournalEntry) -> JournalEntryListItemResponse:
 def _to_journal_detail(entry: JournalEntry) -> JournalEntryDetailResponse:
     """Helper to convert JournalEntry ORM object to JournalEntryDetailResponse."""
     line_responses = []
+    tot_debit = 0.0
+    tot_credit = 0.0
     for line in entry.lines:
         ac_code = line.account.account_code if line.account else "UNKNOWN"
         ac_name = line.account.account_name if line.account else "Unassigned"
+        deb = float(line.debit_amount)
+        cred = float(line.credit_amount)
+        tot_debit += deb
+        tot_credit += cred
         line_responses.append(
             JournalLineResponse(
                 id=line.id,
@@ -63,8 +69,8 @@ def _to_journal_detail(entry: JournalEntry) -> JournalEntryDetailResponse:
                 account_id=line.account_id,
                 account_code=ac_code,
                 account_name=ac_name,
-                debit_amount=float(line.debit_amount),
-                credit_amount=float(line.credit_amount),
+                debit_amount=deb,
+                credit_amount=cred,
                 description=line.description,
             )
         )
@@ -80,11 +86,14 @@ def _to_journal_detail(entry: JournalEntry) -> JournalEntryDetailResponse:
         confidence_score=entry.confidence_score,
         rationale=entry.rationale,
         risk_flags=entry.risk_flags,
+        total_debit=tot_debit,
+        total_credit=tot_credit,
         lines=line_responses,
         posted_at=entry.posted_at,
         created_at=entry.created_at,
         updated_at=entry.updated_at,
     )
+
 
 
 @router.get(

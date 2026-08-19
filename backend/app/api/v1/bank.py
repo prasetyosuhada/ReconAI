@@ -297,3 +297,38 @@ def list_bank_statement_transactions(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get(
+    "/transactions/{transaction_id}",
+    response_model=BankTransactionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get single bank transaction by ID",
+)
+@bank_router.get(
+    "/transactions/{transaction_id}",
+    response_model=BankTransactionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get single bank transaction by ID",
+)
+def get_bank_transaction(
+    transaction_id: str,
+    db: Session = Depends(get_db),
+) -> BankTransactionResponse:
+    """Fetch single bank transaction by UUID."""
+    try:
+        tx_uuid = uuid.UUID(transaction_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid bank transaction UUID format.",
+        ) from None
+
+    tx = db.query(BankTransaction).filter(BankTransaction.id == tx_uuid).first()
+    if not tx:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Bank transaction [{transaction_id}] not found.",
+        )
+    return tx
+

@@ -67,6 +67,8 @@ class JournalEntryDetailResponse(BaseModel):
     confidence_score: float | None = Field(None, description="Confidence score")
     rationale: str | None = Field(None, description="Rationale explanation")
     risk_flags: list[Any] | None = Field(None, description="Risk flags")
+    total_debit: float = Field(0.0, description="Sum of debit amounts")
+    total_credit: float = Field(0.0, description="Sum of credit amounts")
     lines: list[JournalLineResponse] = Field(
         default_factory=list, description="Journal lines"
     )
@@ -75,6 +77,7 @@ class JournalEntryDetailResponse(BaseModel):
     updated_at: datetime = Field(..., description="Last update timestamp")
 
     model_config = ConfigDict(from_attributes=True)
+
 
 
 class ChartOfAccountResponse(BaseModel):

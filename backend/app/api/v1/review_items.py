@@ -344,7 +344,36 @@ def get_review_item_detail(
 
     payload: dict = {}
     if isinstance(item.original_payload, dict):
-        payload = item.original_payload
+        payload = dict(item.original_payload)
+
+    # Enrich with BankTransaction & ReconciliationMatch data if reconciliation item
+    if item.source_type == "bank_transaction" and item.source_id:
+        from app.models.reconciliation import BankTransaction, ReconciliationMatch
+
+        tx = db.query(BankTransaction).filter(BankTransaction.id == item.source_id).first()
+        if tx:
+            payload.setdefault("tx_id", str(tx.id))
+            payload.setdefault("transaction_date", str(tx.transaction_date))
+            payload.setdefault("amount", float(tx.amount))
+            payload.setdefault("description", tx.description)
+            payload.setdefault("currency", tx.currency or "IDR")
+            payload.setdefault("reference_number", tx.reference_number)
+
+            # Check if match candidate exists
+            match = (
+                db.query(ReconciliationMatch)
+                .filter(ReconciliationMatch.bank_transaction_id == tx.id)
+                .order_by(ReconciliationMatch.created_at.desc())
+                .first()
+            )
+            if match and match.journal_entry_id:
+                payload.setdefault("proposed_journal_entry_id", str(match.journal_entry_id))
+                payload.setdefault("confidence_score", match.confidence_score)
+                payload.setdefault("amount_score", match.amount_score)
+                payload.setdefault("date_score", match.date_score)
+                payload.setdefault("vendor_score", match.vendor_score)
+                if match.rationale:
+                    payload.setdefault("rationale", match.rationale)
 
     return ReviewItemDetailResponse(
         id=item.id,
@@ -356,7 +385,7 @@ def get_review_item_detail(
         title=item.title,
         summary=item.summary,
         suggested_action=item.suggested_action,
-        original_payload=item.original_payload,
+        original_payload=payload,
         edited_payload=item.edited_payload,
         resolution_note=item.resolution_note,
         resolved_by=item.resolved_by,
@@ -365,10 +394,10 @@ def get_review_item_detail(
         updated_at=item.updated_at,
         # Convenience fields: populated from pinned payload for guaranteed consistency
         confidence_score=float(payload["confidence_score"])
-        if "confidence_score" in payload
+        if "confidence_score" in payload and payload["confidence_score"] is not None
         else None,
         risk_flags=list(payload.get("risk_flags") or []),
-        journal_entry_id=payload.get("journal_entry_id"),
+        journal_entry_id=payload.get("journal_entry_id") or payload.get("proposed_journal_entry_id"),
     )
 
 
