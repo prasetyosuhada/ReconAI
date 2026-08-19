@@ -26,6 +26,17 @@ import {
   rejectReconciliationMatch,
 } from '../../services/api'
 
+const refreshImports = async (
+  setImports: React.Dispatch<React.SetStateAction<BankStatementImportResponse[]>>
+) => {
+  try {
+    const res = await fetchBankStatementImports({ limit: 50 })
+    setImports(res.items)
+  } catch (err) {
+    console.error('Failed to refresh imports:', err)
+  }
+}
+
 export const ReconciliationView: React.FC = () => {
   const [imports, setImports] = useState<BankStatementImportResponse[]>([])
   const [activeImportId, setActiveImportId] = useState<string | null>(null)
@@ -261,9 +272,12 @@ export const ReconciliationView: React.FC = () => {
   }
 
   const handleStreamCompleted = () => {
+    setIsStreamingRecon(false)
     if (activeImportId) {
       loadData(activeImportId)
     }
+    // Refresh imports list so the import status (matched/partially_matched) is updated
+    refreshImports(setImports)
   }
 
   return (
@@ -283,6 +297,7 @@ export const ReconciliationView: React.FC = () => {
         isStreaming={isStreamingRecon}
         onRunSuccess={() => {
           if (activeImportId) loadData(activeImportId)
+          refreshImports(setImports)
         }}
       />
 

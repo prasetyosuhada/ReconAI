@@ -52,6 +52,20 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
 
   const activeImport = imports.find((i) => i.id === activeImportId) ?? null
 
+  // Button is only active when a fresh import exists that hasn't been processed yet
+  const canRunRecon =
+    !!activeImportId &&
+    !!activeImport &&
+    activeImport.status === 'imported'
+
+  const reconEngineDisabledReason = !activeImportId
+    ? 'Upload a Bank Statement CSV first'
+    : activeImport && activeImport.status === 'matching_in_progress'
+      ? 'Reconciliation engine is running…'
+      : activeImport && activeImport.status !== 'imported'
+        ? 'Already run — import a new statement to run again'
+        : null
+
   const handleCSVSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return
     const file = e.target.files[0]
@@ -213,8 +227,9 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
           <button
             type="button"
             onClick={handleRunReconciliation}
-            disabled={runningEngine || isStreaming || !activeImportId}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-semibold text-xs transition-all shadow-lg shadow-emerald-600/30 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            disabled={runningEngine || isStreaming || !canRunRecon}
+            title={reconEngineDisabledReason ?? undefined}
+            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-semibold text-xs transition-all shadow-lg shadow-emerald-600/30 flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             {runningEngine || isStreaming ? (
               <Loader2 className="w-4 h-4 animate-spin" />
