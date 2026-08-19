@@ -182,11 +182,14 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
     if (!isBankOnly) {
       setSuggestion(null)
       setSuggestionError(null)
+      lastFetchedTxId.current = null
       return
     }
-    if (lastFetchedTxId.current === selectedTx.id) return
 
-    lastFetchedTxId.current = selectedTx.id
+    const fetchKey = `${selectedTx.id}-${selectedMatch?.status || 'none'}`
+    if (lastFetchedTxId.current === fetchKey) return
+
+    lastFetchedTxId.current = fetchKey
     setSuggestion(null)
     setSuggestionError(null)
     setSuggestionLoading(true)
@@ -196,13 +199,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
         setSuggestion(res)
       })
       .catch((err: Error) => {
-        // 404 = suggestion not yet generated (Run Recon Engine not run yet)
-        // Surface a friendlier message vs a generic API error
-        if (err.message.includes('Run Recon Engine')) {
-          setSuggestionError('💡 Run Recon Engine first to generate a COA suggestion for this transaction.')
-        } else {
-          setSuggestionError(err.message)
-        }
+        setSuggestionError(err.message)
       })
       .finally(() => setSuggestionLoading(false))
   }, [selectedTx?.id, selectedMatch?.id, selectedMatch?.status])

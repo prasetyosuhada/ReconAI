@@ -152,16 +152,25 @@ def suggest_adjustment_journal(
         .first()
     )
     if not suggestion:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"No COA suggestion found for bank transaction [{req.bank_transaction_id}]. "
-                "Please run 'Run Recon Engine' first to generate suggestions for unmatched transactions."
-            ),
+        logger.info(
+            "No pre-computed suggestion for bank tx [%s]. Generating on-demand with BookkeepingAgent...",
+            tx.id,
         )
+        try:
+            suggestion = compute_and_save_adjustment_suggestion(tx=tx, db=db)
+        except Exception as err:
+            logger.error(
+                "Failed to generate on-demand COA suggestion for tx [%s]: %s",
+                tx.id,
+                err,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to generate COA suggestion: {err}",
+            ) from err
 
     logger.info(
-        "Returning stored BookkeepingAgent suggestion for bank tx [%s]", tx.id
+        "Returning BookkeepingAgent suggestion for bank tx [%s]", tx.id
     )
 
     return AdjustmentSuggestionResponse(
@@ -419,6 +428,25 @@ def reject_reconciliation_match(
             rev_item.resolved_by = "human_user"
             rev_item.resolved_at = datetime.now(UTC)
             rev_item.resolution_note = action_req.resolution_note if action_req else "Rejected in Reconciliation View."
+
+    # Eagerly compute & save COA suggestion for newly unmatched transaction
+    if match.bank_transaction:
+        from app.models.adjustment_suggestion import AdjustmentSuggestion
+
+        existing_sug = (
+            db.query(AdjustmentSuggestion)
+            .filter(AdjustmentSuggestion.bank_transaction_id == match.bank_transaction.id)
+            .first()
+        )
+        if not existing_sug:
+            try:
+                compute_and_save_adjustment_suggestion(tx=match.bank_transaction, db=db)
+            except Exception as e:
+                logger.warning(
+                    "Could not generate eager suggestion on match reject for tx [%s]: %s",
+                    match.bank_transaction_id,
+                    e,
+                )
 
     note = action_req.resolution_note if action_req else None
     audit = AuditEvent(

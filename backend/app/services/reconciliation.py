@@ -22,6 +22,91 @@ from app.services.accounting import find_exact_reconciliation_matches
 logger = logging.getLogger(__name__)
 
 
+def compute_and_save_adjustment_suggestion(
+    tx: BankTransaction,
+    db: Any,
+    coa_list: list[dict[str, Any]] | None = None,
+) -> AdjustmentSuggestion:
+    """Run BookkeepingAgent on a bank transaction and upsert to AdjustmentSuggestion table."""
+    if coa_list is None:
+        coa_rows = (
+            db.query(ChartOfAccount)
+            .filter(ChartOfAccount.is_active.is_(True))
+            .all()
+        )
+        coa_list = [
+            {
+                "account_code": c.account_code,
+                "account_name": c.account_name,
+                "account_type": c.account_type,
+                "normal_balance": c.normal_balance,
+                "is_sensitive": c.is_sensitive,
+                "description": c.description,
+            }
+            for c in coa_rows
+        ]
+
+    raw_amount = float(tx.amount)
+    abs_amount = abs(raw_amount)
+    tx_direction = (
+        "DEBIT (outflow / expense / payment)"
+        if raw_amount < 0
+        else "CREDIT (inflow / revenue / receipt)"
+    )
+
+    bk_extraction = {
+        "vendor_name": tx.description,
+        "transaction_date": str(tx.transaction_date),
+        "total_amount": abs_amount,
+        "currency": tx.currency,
+        "document_type": "bank_transaction",
+        "line_items": [],
+        "extraction_notes": (
+            f"Unmatched bank statement mutation: '{tx.description}'. "
+            f"Ref: {tx.reference_number or 'N/A'}. "
+            f"Transaction direction: {tx_direction}. "
+            f"Original signed amount: {raw_amount:,.2f} {tx.currency}. "
+            "Please classify to the most appropriate account and "
+            "generate a balanced journal entry."
+        ),
+    }
+
+    bk_resp = run_bookkeeping_agent(
+        extraction_data=bk_extraction,
+        chart_of_accounts=coa_list,
+    )
+
+    # Upsert: delete existing suggestion first, then insert
+    db.query(AdjustmentSuggestion).filter(
+        AdjustmentSuggestion.bank_transaction_id == tx.id
+    ).delete(synchronize_session=False)
+
+    suggestion = AdjustmentSuggestion(
+        id=uuid.uuid4(),
+        bank_transaction_id=tx.id,
+        confidence_score=bk_resp.confidence_score,
+        rationale=bk_resp.rationale,
+        is_balanced=bk_resp.result.is_balanced,
+        uses_sensitive_account=bk_resp.result.uses_sensitive_account,
+        risk_flags=list(bk_resp.result.risk_flags or []),
+        suggested_lines=[
+            {
+                "account_code": line.account_code,
+                "account_name": line.account_name,
+                "description": line.description,
+                "debit_amount": line.debit_amount,
+                "credit_amount": line.credit_amount,
+            }
+            for line in bk_resp.result.journal_lines
+        ],
+        agent_name=bk_resp.agent_name,
+    )
+    db.add(suggestion)
+    db.commit()
+    db.refresh(suggestion)
+    return suggestion
+
+
 def stream_reconciliation_workflow(
     import_id: str | uuid.UUID,
 ) -> Generator[str, None, None]:
@@ -277,65 +362,10 @@ def stream_reconciliation_workflow(
                         yield f"data: {json.dumps({'stage': 'bookkeeping_classifying', 'tx_id': str(tx.id), 'message': f'🤖 BookkeepingAgent classifying {tx.description} for COA suggestion...'})}\n\n"
 
                         try:
-                            raw_amount = float(tx.amount)
-                            abs_amount = abs(raw_amount)
-                            tx_direction = (
-                                "DEBIT (outflow / expense / payment)"
-                                if raw_amount < 0
-                                else "CREDIT (inflow / revenue / receipt)"
+                            suggestion = compute_and_save_adjustment_suggestion(
+                                tx=tx, db=db, coa_list=coa_list
                             )
-
-                            bk_extraction = {
-                                "vendor_name": tx.description,
-                                "transaction_date": str(tx.transaction_date),
-                                "total_amount": abs_amount,
-                                "currency": tx.currency,
-                                "document_type": "bank_transaction",
-                                "line_items": [],
-                                "extraction_notes": (
-                                    f"Unmatched bank statement mutation: '{tx.description}'. "
-                                    f"Ref: {tx.reference_number or 'N/A'}. "
-                                    f"Transaction direction: {tx_direction}. "
-                                    f"Original signed amount: {raw_amount:,.2f} {tx.currency}. "
-                                    "Please classify to the most appropriate account and "
-                                    "generate a balanced journal entry."
-                                ),
-                            }
-
-                            bk_resp = run_bookkeeping_agent(
-                                extraction_data=bk_extraction,
-                                chart_of_accounts=coa_list,
-                            )
-
-                            # Upsert: delete existing suggestion first, then insert
-                            db.query(AdjustmentSuggestion).filter(
-                                AdjustmentSuggestion.bank_transaction_id == tx.id
-                            ).delete(synchronize_session=False)
-
-                            suggestion = AdjustmentSuggestion(
-                                id=uuid.uuid4(),
-                                bank_transaction_id=tx.id,
-                                confidence_score=bk_resp.confidence_score,
-                                rationale=bk_resp.rationale,
-                                is_balanced=bk_resp.result.is_balanced,
-                                uses_sensitive_account=bk_resp.result.uses_sensitive_account,
-                                risk_flags=list(bk_resp.result.risk_flags or []),
-                                suggested_lines=[
-                                    {
-                                        "account_code": line.account_code,
-                                        "account_name": line.account_name,
-                                        "description": line.description,
-                                        "debit_amount": line.debit_amount,
-                                        "credit_amount": line.credit_amount,
-                                    }
-                                    for line in bk_resp.result.journal_lines
-                                ],
-                                agent_name=bk_resp.agent_name,
-                            )
-                            db.add(suggestion)
-                            db.commit()
-
-                            yield f"data: {json.dumps({'stage': 'bookkeeping_suggestion_saved', 'tx_id': str(tx.id), 'confidence': bk_resp.confidence_score, 'message': f'💡 COA suggestion saved for {tx.description} (confidence {int(bk_resp.confidence_score * 100)}%).'})}\n\n"
+                            yield f"data: {json.dumps({'stage': 'bookkeeping_suggestion_saved', 'tx_id': str(tx.id), 'confidence': suggestion.confidence_score, 'message': f'💡 COA suggestion saved for {tx.description} (confidence {int(suggestion.confidence_score * 100)}%).'})}\n\n"
 
                         except Exception as bk_err:
                             logger.warning(

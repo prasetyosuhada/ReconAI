@@ -702,7 +702,9 @@ def reject_review_item(
             je.status = "rejected"
 
     elif item.source_type == "bank_transaction":
+        from app.models.adjustment_suggestion import AdjustmentSuggestion
         from app.models.reconciliation import BankTransaction, ReconciliationMatch
+        from app.services.reconciliation import compute_and_save_adjustment_suggestion
 
         tx = db.query(BankTransaction).filter(BankTransaction.id == item.source_id).first()
         match = (
@@ -715,6 +717,17 @@ def reject_review_item(
             match.updated_at = now_utc
         if tx:
             tx.status = "imported"
+            existing_sug = (
+                db.query(AdjustmentSuggestion)
+                .filter(AdjustmentSuggestion.bank_transaction_id == tx.id)
+                .first()
+            )
+            if not existing_sug:
+                try:
+                    compute_and_save_adjustment_suggestion(tx=tx, db=db)
+                except Exception as e:
+                    logger.warning("Could not generate eager suggestion on review item reject: %s", e)
+
 
 
     # Audit Event
