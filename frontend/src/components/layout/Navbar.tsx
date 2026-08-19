@@ -8,7 +8,7 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({
   activeTabTitle = 'Dashboard',
-  pendingReviewCount = 3,
+  pendingReviewCount = 0,
 }) => {
   return (
     <header className="sticky top-0 z-30 h-16 bg-slate-900/80 backdrop-blur-md border-b border-slate-800/80 px-6 flex items-center justify-between">

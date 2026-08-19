@@ -26,7 +26,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   collapsed,
   onToggleCollapse,
-  pendingReviewCount = 3,
+  pendingReviewCount = 0,
 }) => {
   const navItems = [
     {

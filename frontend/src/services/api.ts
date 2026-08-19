@@ -377,6 +377,12 @@ export async function fetchReviewItemDetail(reviewItemId: string): Promise<Revie
   return response.json()
 }
 
+export function notifyReviewQueueUpdated() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('review-queue-updated'))
+  }
+}
+
 export async function approveReviewItem(
   reviewItemId: string,
   notes?: string
@@ -392,7 +398,9 @@ export async function approveReviewItem(
     throw new Error(err.detail || 'Failed to approve review item')
   }
 
-  return response.json()
+  const result = await response.json()
+  notifyReviewQueueUpdated()
+  return result
 }
 
 export async function editReviewItem(
@@ -414,7 +422,9 @@ export async function editReviewItem(
     throw new Error(err.detail || 'Failed to edit review item')
   }
 
-  return response.json()
+  const result = await response.json()
+  notifyReviewQueueUpdated()
+  return result
 }
 
 export async function rejectReviewItem(
@@ -432,7 +442,9 @@ export async function rejectReviewItem(
     throw new Error(err.detail || 'Failed to reject review item')
   }
 
-  return response.json()
+  const result = await response.json()
+  notifyReviewQueueUpdated()
+  return result
 }
 
 // General Ledger API
@@ -643,7 +655,9 @@ export async function createAdjustmentJournalEntry(payload: {
     throw new Error(err.detail || 'Failed to create and post adjusting journal entry')
   }
 
-  return response.json()
+  const result = await response.json()
+  notifyReviewQueueUpdated()
+  return result
 }
 
 
@@ -703,7 +717,9 @@ export async function acceptReconciliationMatch(
     const err = await response.json().catch(() => ({}))
     throw new Error(err.detail || 'Failed to accept reconciliation match')
   }
-  return response.json()
+  const result = await response.json()
+  notifyReviewQueueUpdated()
+  return result
 }
 
 export async function rejectReconciliationMatch(
@@ -719,7 +735,9 @@ export async function rejectReconciliationMatch(
     const err = await response.json().catch(() => ({}))
     throw new Error(err.detail || 'Failed to reject reconciliation match')
   }
-  return response.json()
+  const result = await response.json()
+  notifyReviewQueueUpdated()
+  return result
 }
 
 export async function fetchReconciliationSummary(
@@ -750,7 +768,9 @@ export async function manualMatchReconciliation(
     const err = await response.json().catch(() => ({}))
     throw new Error(err.detail || 'Failed to manually link match')
   }
-  return response.json()
+  const result = await response.json()
+  notifyReviewQueueUpdated()
+  return result
 }
 
 

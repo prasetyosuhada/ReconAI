@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import { ReviewQueueHeader } from './ReviewQueueHeader'
 import { ReviewQueueList } from './ReviewQueueList'
 import { ExtractionReviewModal } from './ExtractionReviewModal'
 import { BookkeepingReviewModal } from './BookkeepingReviewModal'
 import { ReconciliationReviewModal } from './ReconciliationReviewModal'
 import type { ReviewItemResponse } from '../../services/api'
-import { fetchReviewItems } from '../../services/api'
+import { fetchReviewItems, notifyReviewQueueUpdated } from '../../services/api'
 
 interface ReviewQueueViewProps {
   onInspectItem?: (item: ReviewItemResponse) => void
@@ -18,7 +18,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
   const [typeFilter, setTypeFilter] = useState<string>('')
   const [selectedItem, setSelectedItem] = useState<ReviewItemResponse | null>(null)
 
-  const loadReviewItems = async () => {
+  const loadReviewItems = useCallback(async () => {
     setLoading(true)
     try {
       const res = await fetchReviewItems({
@@ -32,11 +32,19 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
     } finally {
       setLoading(false)
     }
-  }
+  }, [statusFilter, typeFilter])
 
   useEffect(() => {
     loadReviewItems()
-  }, [statusFilter, typeFilter])
+
+    const handleExternalUpdate = () => {
+      loadReviewItems()
+    }
+    window.addEventListener('review-queue-updated', handleExternalUpdate)
+    return () => {
+      window.removeEventListener('review-queue-updated', handleExternalUpdate)
+    }
+  }, [loadReviewItems])
 
   const handleInspect = (item: ReviewItemResponse) => {
     setSelectedItem(item)
@@ -53,6 +61,11 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
 
   const isBookkeepingItem = selectedItem?.review_type === 'bookkeeping'
   const isReconciliationItem = selectedItem?.review_type === 'reconciliation'
+
+  const handleResolved = () => {
+    loadReviewItems()
+    notifyReviewQueueUpdated()
+  }
 
   return (
     <div className="space-y-6">
@@ -80,7 +93,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
         <ReconciliationReviewModal
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
-          onResolved={() => loadReviewItems()}
+          onResolved={handleResolved}
         />
       )}
 
@@ -89,7 +102,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
         <BookkeepingReviewModal
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
-          onResolved={() => loadReviewItems()}
+          onResolved={handleResolved}
         />
       )}
 
@@ -98,7 +111,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
         <ExtractionReviewModal
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
-          onResolved={() => loadReviewItems()}
+          onResolved={handleResolved}
         />
       )}
     </div>

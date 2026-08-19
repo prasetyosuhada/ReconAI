@@ -23,7 +23,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   children,
   activeTab,
   onSelectTab,
-  pendingReviewCount = 3,
+  pendingReviewCount = 0,
 }) => {
   const [collapsed, setCollapsed] = useState(false)
 
