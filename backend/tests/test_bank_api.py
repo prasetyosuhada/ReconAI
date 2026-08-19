@@ -106,5 +106,36 @@ def test_list_bank_statement_transactions(client, db_session):
     assert response.status_code == 200
     data = response.json()
     assert data["total"] == 1
+    assert len(data["items"]) == 1
     assert data["items"][0]["description"] == "Software Subscription"
     assert data["items"][0]["amount"] == -299000.0
+
+
+def test_get_single_bank_transaction(client, db_session):
+    imp_id = uuid.uuid4()
+    imp = BankStatementImport(
+        id=imp_id,
+        original_filename="october.csv",
+        status="imported",
+        row_count=1,
+    )
+    tx_id = uuid.uuid4()
+    tx = BankTransaction(
+        id=tx_id,
+        bank_statement_import_id=imp_id,
+        transaction_date=date(2026, 8, 10),
+        description="Hosting Service",
+        amount=-500000.0,
+        currency="IDR",
+        reference_number="REF-100",
+        status="imported",
+    )
+    db_session.add_all([imp, tx])
+    db_session.commit()
+
+    response = client.get(f"/api/v1/bank-statements/transactions/{tx_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == str(tx_id)
+    assert data["description"] == "Hosting Service"
+    assert data["amount"] == -500000.0

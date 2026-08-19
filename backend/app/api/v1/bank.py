@@ -27,6 +27,7 @@ from app.schemas.bank import (
     BankStatementImportListResponse,
     BankStatementImportResponse,
     BankTransactionListResponse,
+    BankTransactionResponse,
 )
 
 logger = logging.getLogger(__name__)
