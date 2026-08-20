@@ -16,6 +16,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type {
+  ChartOfAccountResponse,
   DocumentExtractionResponse,
   JournalLineEditPayload,
   ReviewItemResponse,
@@ -23,6 +24,7 @@ import type {
 import {
   approveReviewItem,
   editReviewItem,
+  fetchChartOfAccounts,
   fetchLatestDocumentExtraction,
   rejectReviewItem,
 } from '../../services/api'
@@ -52,6 +54,19 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
 }) => {
   const [latestExtraction, setLatestExtraction] = useState<DocumentExtractionResponse | null>(null)
   const [extractionLoading, setExtractionLoading] = useState<boolean>(false)
+  const [dbCOA, setDbCOA] = useState<ChartOfAccountResponse[]>([])
+
+  useEffect(() => {
+    fetchChartOfAccounts()
+      .then((res) => {
+        if (res.items && res.items.length > 0) {
+          setDbCOA(res.items)
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch COA from database:', err)
+      })
+  }, [])
 
   // Extraction payload states
   const originalPayload = item?.original_payload || {}
@@ -270,11 +285,17 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
   }
 
   const handleAddLine = () => {
+    const defaultAcct =
+      dbCOA.find((c) => c.account_type === 'expense') ||
+      dbCOA[0] || {
+        account_code: '5900',
+        account_name: 'Miscellaneous Expense',
+      }
     setLines([
       ...lines,
       {
-        account_code: '5200',
-        account_name: 'General Expense',
+        account_code: defaultAcct.account_code,
+        account_name: defaultAcct.account_name,
         debit_amount: 0,
         credit_amount: 0,
         description: '',
@@ -900,37 +921,49 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                     <table className="w-full text-left text-xs">
                       <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 font-semibold uppercase text-[10px]">
                         <tr>
-                          <th className="py-2.5 px-3">Account Code</th>
-                          <th className="py-2.5 px-3">Account Name</th>
-                          <th className="py-2.5 px-3 text-right">Debit ({extractedCurrency})</th>
-                          <th className="py-2.5 px-3 text-right">Credit ({extractedCurrency})</th>
-                          <th className="py-2.5 px-3 text-center">Action</th>
+                          <th className="py-2.5 px-3 w-56">Account (COA)</th>
+                          <th className="py-2.5 px-3">Line Memo</th>
+                          <th className="py-2.5 px-3 text-right w-36">Debit ({extractedCurrency})</th>
+                          <th className="py-2.5 px-3 text-right w-36">Credit ({extractedCurrency})</th>
+                          <th className="py-2.5 px-3 text-center w-12">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/80">
                         {lines.map((line, idx) => (
-                          <tr key={idx} className="hover:bg-slate-900">
-                            <td className="py-2 px-3 w-28">
-                              <input
-                                type="text"
+                          <tr key={idx} className="hover:bg-slate-900 transition-colors">
+                            <td className="py-2 px-3">
+                              <select
                                 value={line.account_code}
-                                onChange={(e) =>
-                                  handleLineChange(idx, 'account_code', e.target.value)
-                                }
-                                className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-slate-100 font-mono focus:border-indigo-500"
-                              />
+                                onChange={(e) => {
+                                  const newCode = e.target.value
+                                  const found = dbCOA.find((c) => c.account_code === newCode)
+                                  handleLineChange(idx, 'account_code', newCode)
+                                  if (found) {
+                                    handleLineChange(idx, 'account_name', found.account_name)
+                                  }
+                                }}
+                                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition-colors"
+                              >
+                                <option value="" disabled>Select COA Account...</option>
+                                {dbCOA.map((coa) => (
+                                  <option key={coa.account_code} value={coa.account_code}>
+                                    [{coa.account_code}] {coa.account_name} ({coa.account_type})
+                                  </option>
+                                ))}
+                              </select>
                             </td>
                             <td className="py-2 px-3">
                               <input
                                 type="text"
-                                value={line.account_name || ''}
+                                value={line.description || ''}
                                 onChange={(e) =>
-                                  handleLineChange(idx, 'account_name', e.target.value)
+                                  handleLineChange(idx, 'description', e.target.value)
                                 }
-                                className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-slate-100 focus:border-indigo-500"
+                                placeholder="Line memo"
+                                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
                               />
                             </td>
-                            <td className="py-2 px-3 w-32">
+                            <td className="py-2 px-3">
                               <input
                                 type="number"
                                 step="any"
@@ -938,10 +971,10 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                                 onChange={(e) =>
                                   handleLineChange(idx, 'debit_amount', e.target.value)
                                 }
-                                className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-emerald-400 font-bold text-right focus:border-indigo-500"
+                                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-emerald-400 font-bold text-right font-mono focus:outline-none focus:border-indigo-500"
                               />
                             </td>
-                            <td className="py-2 px-3 w-32">
+                            <td className="py-2 px-3">
                               <input
                                 type="number"
                                 step="any"
@@ -949,15 +982,16 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                                 onChange={(e) =>
                                   handleLineChange(idx, 'credit_amount', e.target.value)
                                 }
-                                className="w-full px-2 py-1 bg-slate-950 border border-slate-700 rounded text-xs text-indigo-400 font-bold text-right focus:border-indigo-500"
+                                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-indigo-400 font-bold text-right font-mono focus:outline-none focus:border-indigo-500"
                               />
                             </td>
-                            <td className="py-2 px-3 text-center w-12">
+                            <td className="py-2 px-3 text-center">
                               <button
                                 type="button"
                                 onClick={() => handleRemoveLine(idx)}
-                                className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                                title="Delete line"
+                                disabled={lines.length <= 2}
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                title={lines.length <= 2 ? 'Minimum 2 lines required' : 'Delete line'}
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>

@@ -3,12 +3,15 @@ import {
   AlertTriangle,
   BookOpen,
   CheckCircle2,
+  Plus,
   Scale,
   ShieldAlert,
   Sparkles,
+  Trash2,
   XCircle,
 } from 'lucide-react'
-import type { JournalLineEditPayload } from '../../services/api'
+import type { ChartOfAccountResponse, JournalLineEditPayload } from '../../services/api'
+import { fetchChartOfAccounts } from '../../services/api'
 
 export interface BookkeepingLine extends JournalLineEditPayload {
   id?: string
@@ -111,6 +114,20 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
   onAddLine,
   emptyMessage = 'No journal entry lines available.',
 }) => {
+  const [dbCOA, setDbCOA] = React.useState<ChartOfAccountResponse[]>([])
+
+  React.useEffect(() => {
+    fetchChartOfAccounts()
+      .then((res) => {
+        if (res.items && res.items.length > 0) {
+          setDbCOA(res.items)
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch COA from database:', err)
+      })
+  }, [])
+
   const totalDebits = lines.reduce((sum, line) => sum + (Number(line.debit_amount) || 0), 0)
   const totalCredits = lines.reduce((sum, line) => sum + (Number(line.credit_amount) || 0), 0)
   const balanceDiff = Math.abs(totalDebits - totalCredits)
@@ -366,30 +383,40 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="bg-slate-950 border-b border-slate-800 text-slate-400 text-xs font-bold uppercase tracking-wider">
-                <th className="py-3 px-4 w-36">Account</th>
-                <th className="py-3 px-4">Description</th>
+                <th className="py-3 px-4 w-60">Account (COA)</th>
+                <th className="py-3 px-4">Line Memo</th>
                 <th className="py-3 px-4 text-right w-44">Debit</th>
                 <th className="py-3 px-4 text-right w-44">Credit</th>
-                {isEditing && <th className="py-3 px-4 w-12" />}
+                {isEditing && <th className="py-3 px-4 w-12 text-center">Action</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/80">
               {lines.map((line, index) => (
                 <tr
                   key={`${line.id || line.account_code}-${index}`}
-                  className="hover:bg-slate-900/60"
+                  className="hover:bg-slate-900/60 transition-colors"
                 >
                   <td className="py-3 px-4 align-top">
                     {isEditing && onLineChange ? (
-                      <input
-                        type="text"
+                      <select
                         value={line.account_code}
-                        onChange={(event) =>
-                          onLineChange(index, 'account_code', event.target.value)
-                        }
-                        className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
-                        placeholder="Code"
-                      />
+                        onChange={(event) => {
+                          const newCode = event.target.value
+                          const found = dbCOA.find((c) => c.account_code === newCode)
+                          onLineChange(index, 'account_code', newCode)
+                          if (found) {
+                            onLineChange(index, 'account_name', found.account_name)
+                          }
+                        }}
+                        className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition-colors"
+                      >
+                        <option value="" disabled>Select COA Account...</option>
+                        {dbCOA.map((coa) => (
+                          <option key={coa.account_code} value={coa.account_code}>
+                            [{coa.account_code}] {coa.account_name} ({coa.account_type})
+                          </option>
+                        ))}
+                      </select>
                     ) : (
                       <span className="font-mono text-xs text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded">
                         {line.account_code || '-'}
@@ -398,15 +425,17 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
                   </td>
                   <td className="py-3 px-4 align-top">
                     {isEditing && onLineChange ? (
-                      <input
-                        type="text"
-                        value={line.account_name || ''}
-                        onChange={(event) =>
-                          onLineChange(index, 'account_name', event.target.value)
-                        }
-                        className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
-                        placeholder="Account name"
-                      />
+                      <div className="space-y-1">
+                        <input
+                          type="text"
+                          value={line.description || ''}
+                          onChange={(event) =>
+                            onLineChange(index, 'description', event.target.value)
+                          }
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500 placeholder-slate-600"
+                          placeholder="Line memo / description"
+                        />
+                      </div>
                     ) : (
                       <div>
                         <p className="text-sm font-semibold text-slate-100">
@@ -429,7 +458,7 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
                         onChange={(event) =>
                           onLineChange(index, 'debit_amount', event.target.value)
                         }
-                        className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs font-mono text-emerald-400 font-bold text-right focus:outline-none focus:border-indigo-500"
+                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-emerald-400 font-bold text-right focus:outline-none focus:border-indigo-500"
                       />
                     ) : line.debit_amount > 0 ? (
                       <span className="font-mono font-semibold text-slate-100 text-sm">
@@ -448,7 +477,7 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
                         onChange={(event) =>
                           onLineChange(index, 'credit_amount', event.target.value)
                         }
-                        className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs font-mono text-indigo-400 font-bold text-right focus:outline-none focus:border-indigo-500"
+                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-indigo-400 font-bold text-right focus:outline-none focus:border-indigo-500"
                       />
                     ) : line.credit_amount > 0 ? (
                       <span className="font-mono font-semibold text-slate-100 text-sm">
@@ -464,10 +493,10 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
                         type="button"
                         onClick={() => onRemoveLine?.(index)}
                         disabled={lines.length <= 2}
-                        className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                        title="Remove line"
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        title={lines.length <= 2 ? 'Minimum 2 lines required' : 'Remove line'}
                       >
-                        X
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </td>
                   )}
@@ -523,9 +552,10 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
             <button
               type="button"
               onClick={onAddLine}
-              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold inline-flex items-center gap-1 transition-all"
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer"
             >
-              + Add Line
+              <Plus className="w-3.5 h-3.5 text-indigo-400" />
+              Add Line
             </button>
           )}
         </div>
