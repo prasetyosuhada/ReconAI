@@ -340,22 +340,9 @@ def stream_reconciliation_workflow(
 
                     else:
                         unmatched_count += 1
-                        # No matches found by agent — save to ReviewItem
-                        review = ReviewItem(
-                            id=uuid.uuid4(),
-                            review_type="reconciliation",
-                            status="pending",
-                            priority="high",
-                            source_type="bank_transaction",
-                            source_id=tx.id,
-                            title=f"Unmatched Bank TX: {tx.description}",
-                            summary=f"No matching entry for {tx.amount} IDR.",
-                            suggested_action="Create journal or match manually.",
-                            original_payload=tx_dict,
-                        )
-                        db.add(review)
-                        db.commit()
-
+                        # No matches found by agent — bank transaction remains Bank Only.
+                        # Unmatched (Bank Only) items are resolved in the Bank Reconciliation view
+                        # (e.g. Create Adjusting Journal) and are not routed to the Human Review Queue.
                         yield f"data: {json.dumps({'stage': 'unmatched_queued', 'tx_id': str(tx.id), 'unmatched_count': unmatched_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'✕ No matching GL entry for {tx.description}. Marked as Bank Only.'})}\n\n"
 
                         # --- BookkeepingAgent: classify the unmatched tx & save to DB ---
