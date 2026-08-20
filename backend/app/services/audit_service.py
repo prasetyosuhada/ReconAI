@@ -33,7 +33,7 @@ def log_event(
         doc_id_str = str(document_id)
         if isinstance(input_snapshot, dict) and "document_id" not in input_snapshot:
             input_snapshot["document_id"] = doc_id_str
-        elif isinstance(output_snapshot, dict) and "document_id" not in output_snapshot:
+        if isinstance(output_snapshot, dict) and "document_id" not in output_snapshot:
             output_snapshot["document_id"] = doc_id_str
 
     final_rationale = rationale if rationale is not None else summary

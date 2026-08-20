@@ -188,6 +188,10 @@ def stream_document_processing(
         final_risk_flags = final_state.get("risk_flags", []) or []
         final_rationale = final_state.get("rationale")
 
+        provider_meta = {
+            "low_confidence_fields": final_state.get("low_confidence_fields", [])
+        }
+
         # 1. Save DocumentExtraction record in DB (idempotent upsert)
         existing_extraction = (
             db.query(DocumentExtraction)
@@ -206,6 +210,7 @@ def stream_document_processing(
             extraction.currency = final_state.get("currency", "IDR")
             extraction.line_items = final_state.get("line_items", [])
             extraction.raw_text = final_state.get("raw_text")
+            extraction.provider_metadata = provider_meta
             extraction.confidence_score = final_confidence
             extraction.rationale = final_rationale
             extraction.status = "extracted" if not needs_review else "draft"
@@ -223,6 +228,7 @@ def stream_document_processing(
                 currency=final_state.get("currency", "IDR"),
                 line_items=final_state.get("line_items", []),
                 raw_text=final_state.get("raw_text"),
+                provider_metadata=provider_meta,
                 confidence_score=final_confidence,
                 rationale=final_rationale,
                 status="extracted" if not needs_review else "draft",
@@ -387,7 +393,7 @@ def stream_document_processing(
         doc.status = final_status
         db.commit()
 
-        # 4. Audit Trail Event (idempotent)
+        # 4. Audit Trail Event: extraction_completed (idempotent)
         existing_audit = (
             db.query(AuditEvent)
             .filter(
@@ -423,6 +429,62 @@ def stream_document_processing(
                 document_id=doc.id,
             )
             db.commit()
+
+        # 5. Audit Trail Event: bookkeeping_completed (if bookkeeping produced a journal entry)
+        if saved_journal_id:
+            je_uuid = (
+                uuid.UUID(saved_journal_id)
+                if isinstance(saved_journal_id, str)
+                else saved_journal_id
+            )
+            existing_bk_audit = (
+                db.query(AuditEvent)
+                .filter(
+                    AuditEvent.event_type == "bookkeeping_completed",
+                    AuditEvent.source_id == je_uuid,
+                )
+                .first()
+            )
+            if not existing_bk_audit:
+                decision_str = "Bookkeeping classified"
+                if proposed_journal and isinstance(proposed_journal, list):
+                    debit_lines = [
+                        f"COA: {l.get('account_code')} - {l.get('account_name', '')}".strip(" -")
+                        for l in proposed_journal
+                        if float(l.get("debit_amount", 0.0) or 0.0) > 0
+                    ]
+                    if debit_lines:
+                        decision_str = debit_lines[0]
+
+                reasoning_list = []
+                if final_rationale:
+                    reasoning_list.append(final_rationale)
+                for rf in final_risk_flags:
+                    reasoning_list.append(f"Risk flag: {rf}")
+
+                log_event(
+                    db=db,
+                    event_type="bookkeeping_completed",
+                    source_type="journal_entry",
+                    source_id=je_uuid,
+                    actor_type="agent",
+                    actor_name="BookkeepingAgent",
+                    input_snapshot={
+                        "document_id": str(doc.id),
+                        "extraction_id": str(extraction.id),
+                    },
+                    output_snapshot={
+                        "decision": decision_str,
+                        "reasoning": reasoning_list,
+                        "journal_entry_id": str(saved_journal_id),
+                        "status": "review_required" if needs_review else "draft",
+                        "is_balanced": final_state.get("is_balanced", True),
+                    },
+                    confidence_score=final_confidence,
+                    rationale=final_rationale,
+                    document_id=doc.id,
+                )
+                db.commit()
 
         yield f"data: {json.dumps({'stage': 'completed', 'percentage': 100, 'status': final_status, 'confidence_score': final_confidence, 'vendor_name': vendor, 'total_amount': tot_amount, 'currency': curr, 'message': f'🎉 Document \"{fname}\" processing completed successfully!'})}\n\n"
 

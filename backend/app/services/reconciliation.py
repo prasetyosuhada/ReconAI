@@ -328,6 +328,16 @@ def stream_reconciliation_workflow(
                         matched_je_rec = db.query(JournalEntry).filter(JournalEntry.id == matched_je_id).first()
                         doc_id_to_pass = matched_je_rec.document_id if matched_je_rec else None
 
+                        reasoning_items = []
+                        if best_match.rationale:
+                            reasoning_items.append(best_match.rationale)
+                        if best_match.amount_score is not None:
+                            reasoning_items.append(f"Amount match score: {int(best_match.amount_score * 100)}%")
+                        if best_match.date_score is not None:
+                            reasoning_items.append(f"Date match score: {int(best_match.date_score * 100)}%")
+                        if best_match.vendor_score is not None:
+                            reasoning_items.append(f"Vendor match score: {int(best_match.vendor_score * 100)}%")
+
                         log_event(
                             db=db,
                             event_type="reconciliation_match_proposed",
@@ -340,10 +350,13 @@ def stream_reconciliation_workflow(
                                 "je_id": str(matched_je_id),
                             },
                             output_snapshot={
+                                "decision": "matched" if is_high_conf else "proposed_match",
+                                "reasoning": reasoning_items,
                                 "status": match_status,
                                 "confidence_score": conf,
                             },
                             confidence_score=conf,
+                            rationale=best_match.rationale,
                             document_id=doc_id_to_pass,
                         )
                         db.commit()

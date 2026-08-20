@@ -266,6 +266,22 @@ def _continue_document_to_bookkeeping(
 
     doc.status = next_status
 
+    decision_str = "Bookkeeping classified"
+    if proposed_journal and isinstance(proposed_journal, list):
+        debit_lines = [
+            f"COA: {l.get('account_code')} - {l.get('account_name', '')}".strip(" -")
+            for l in proposed_journal
+            if float(l.get("debit_amount", 0.0) or 0.0) > 0
+        ]
+        if debit_lines:
+            decision_str = debit_lines[0]
+
+    reasoning_list = []
+    if final_rationale:
+        reasoning_list.append(final_rationale)
+    for rf in final_risk_flags:
+        reasoning_list.append(f"Risk flag: {rf}")
+
     log_event(
         db=db,
         event_type="bookkeeping_continued_after_extraction_review",
@@ -275,6 +291,8 @@ def _continue_document_to_bookkeeping(
         actor_name="BookkeepingAgent",
         input_snapshot={"review_item_id": str(item.id)},
         output_snapshot={
+            "decision": decision_str,
+            "reasoning": reasoning_list,
             "status": next_status,
             "journal_entry_id": str(saved_journal_id) if saved_journal_id else None,
             "needs_review": needs_review,

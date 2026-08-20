@@ -65,6 +65,7 @@ class DocumentIntakeState(TypedDict, total=False):
     confidence_score: float
     rationale: str
     warnings: Annotated[list[str], operator.add]
+    low_confidence_fields: list[str]
     status: str  # uploaded, extracting, extraction_review_required, extracted, failed
     needs_review: bool
     review_id: str | None
@@ -110,6 +111,7 @@ class BookkeepingState(TypedDict, total=False):
     confidence_score: float
     rationale: str
     warnings: Annotated[list[str], operator.add]
+    low_confidence_fields: list[str]
     status: str  # draft, bookkeeping_review_required, ready_to_post, posted, rejected
     needs_review: bool
     review_id: str | None

@@ -93,9 +93,14 @@ def run_document_intake_agent(
         )
         result = response.result
         warnings = list(response.warnings or [])
+        low_confidence_fields = list(response.low_confidence_fields or [])
 
         # Heuristic 1: Check missing essential fields
         if not result.vendor_name or not result.total_amount:
+            if not result.vendor_name and "vendor_name" not in low_confidence_fields:
+                low_confidence_fields.append("vendor_name")
+            if result.total_amount is None and "total_amount" not in low_confidence_fields:
+                low_confidence_fields.append("total_amount")
             if "Vendor name or total amount is missing." not in warnings:
                 warnings.append("Vendor name or total amount is missing.")
             status = "needs_review"
@@ -113,6 +118,8 @@ def run_document_intake_agent(
             expected_total = round(result.subtotal_amount + result.tax_amount, 2)
             actual_total = round(result.total_amount, 2)
             if abs(expected_total - actual_total) > 0.05:
+                if "tax_amount" not in low_confidence_fields:
+                    low_confidence_fields.append("tax_amount")
                 math_warning = (
                     f"Subtotal ({result.subtotal_amount}) + Tax "
                     f"({result.tax_amount}) = {expected_total}, "
@@ -129,6 +136,7 @@ def run_document_intake_agent(
             confidence_score=confidence,
             rationale=response.rationale,
             warnings=warnings,
+            low_confidence_fields=low_confidence_fields,
             result=result,
         )
 

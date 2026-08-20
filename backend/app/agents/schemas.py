@@ -76,6 +76,10 @@ class DocumentIntakeResponse(BaseModel):
     warnings: list[str] = Field(
         default_factory=list, description="Ambiguity or missing field warnings"
     )
+    low_confidence_fields: list[str] = Field(
+        default_factory=list,
+        description="List of extracted field names with low confidence or ambiguity",
+    )
     result: DocumentExtractionResult = Field(
         ..., description="Extracted document payload"
     )

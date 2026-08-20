@@ -190,6 +190,7 @@ def document_intake_node(state: DocumentIntakeState) -> DocumentIntakeState:
         "confidence_score": response.confidence_score,
         "rationale": response.rationale,
         "warnings": response.warnings,
+        "low_confidence_fields": response.low_confidence_fields,
         "status": new_status,
         "needs_review": next_step == "extraction_review_required",
     }
