@@ -8,7 +8,6 @@ from app.agents.bookkeeping import run_bookkeeping_agent
 from app.agents.reconciliation import run_reconciliation_agent
 from app.db.session import SessionLocal
 from app.models.adjustment_suggestion import AdjustmentSuggestion
-from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.journal import JournalEntry
 from app.models.reconciliation import (
@@ -18,6 +17,7 @@ from app.models.reconciliation import (
 )
 from app.models.review import ReviewItem
 from app.services.accounting import find_exact_reconciliation_matches
+from app.services.audit_service import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +231,12 @@ def stream_reconciliation_workflow(
                 tx.status = "matched"
                 matched_count += 1
 
-                audit = AuditEvent(
+                # Resolve document_id from matched JournalEntry
+                matched_je_rec = db.query(JournalEntry).filter(JournalEntry.id == matched_je_id).first()
+                doc_id_to_pass = matched_je_rec.document_id if matched_je_rec else None
+
+                log_event(
+                    db=db,
                     event_type="reconciliation_match_accepted",
                     source_type="reconciliation_match",
                     source_id=match.id,
@@ -245,8 +250,9 @@ def stream_reconciliation_workflow(
                         "match_type": "exact",
                         "confidence_score": 1.00,
                     },
+                    confidence_score=1.00,
+                    document_id=doc_id_to_pass,
                 )
-                db.add(audit)
                 db.commit()
 
                 yield f"data: {json.dumps({'stage': 'exact_match_found', 'tx_id': str(tx.id), 'matched_je_id': str(matched_je_id), 'confidence': 1.0, 'matched_count': matched_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'✓ Exact Match (100%) for {tx.description} with #JE-{str(matched_je_id)[:8]}'})}\n\n"
@@ -318,19 +324,28 @@ def stream_reconciliation_workflow(
                             )
                             db.add(review)
 
-                        audit = AuditEvent(
+                        # Resolve document_id from matched JournalEntry
+                        matched_je_rec = db.query(JournalEntry).filter(JournalEntry.id == matched_je_id).first()
+                        doc_id_to_pass = matched_je_rec.document_id if matched_je_rec else None
+
+                        log_event(
+                            db=db,
                             event_type="reconciliation_match_proposed",
                             source_type="reconciliation_match",
                             source_id=match.id,
                             actor_type="agent",
                             actor_name="ReconciliationAgent",
-                            input_snapshot={"tx_id": str(tx.id)},
+                            input_snapshot={
+                                "tx_id": str(tx.id),
+                                "je_id": str(matched_je_id),
+                            },
                             output_snapshot={
                                 "status": match_status,
                                 "confidence_score": conf,
                             },
+                            confidence_score=conf,
+                            document_id=doc_id_to_pass,
                         )
-                        db.add(audit)
                         db.commit()
 
                         if is_high_conf:

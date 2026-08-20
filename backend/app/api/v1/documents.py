@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentExtraction
 from app.schemas.document import (
     DocumentDetailResponse,
@@ -29,6 +28,7 @@ from app.schemas.document import (
     DocumentListResponse,
     DocumentResponse,
 )
+from app.services.audit_service import log_event
 from app.services.document_processing import (
     process_document_background,
     stream_document_processing,
@@ -310,7 +310,8 @@ async def upload_document(
     db.add(doc_record)
 
     # Record Audit Event
-    audit_record = AuditEvent(
+    log_event(
+        db=db,
         event_type="document_uploaded",
         source_type="document",
         source_id=doc_uuid,
@@ -326,8 +327,8 @@ async def upload_document(
             "status": "uploaded",
             "stored_file_path": str(stored_path.resolve()),
         },
+        document_id=doc_uuid,
     )
-    db.add(audit_record)
     db.commit()
     db.refresh(doc_record)
 

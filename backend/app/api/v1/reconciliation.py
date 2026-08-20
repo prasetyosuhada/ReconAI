@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.db.session import get_db
 from app.models.adjustment_suggestion import AdjustmentSuggestion
-from app.models.audit import AuditEvent
 from app.models.journal import JournalEntry
 from app.models.reconciliation import (
     BankStatementImport,
@@ -26,6 +25,7 @@ from app.models.reconciliation import (
     ReconciliationMatch,
 )
 from app.models.review import ReviewItem
+from app.services.audit_service import log_event
 from app.schemas.reconciliation import (
     AdjustmentSuggestionRequest,
     AdjustmentSuggestionResponse,
@@ -349,16 +349,25 @@ def accept_reconciliation_match(
             rev_item.resolution_note = action_req.resolution_note if action_req else "Approved in Reconciliation View."
 
     note = action_req.resolution_note if action_req else None
-    audit = AuditEvent(
+    matched_je_rec = (
+        db.query(JournalEntry).filter(JournalEntry.id == match.journal_entry_id).first()
+        if match.journal_entry_id
+        else None
+    )
+    doc_id_to_pass = matched_je_rec.document_id if matched_je_rec else None
+
+    log_event(
+        db=db,
         event_type="reconciliation_match_accepted",
         source_type="reconciliation_match",
         source_id=match.id,
         actor_type="human",
         actor_name="api_user",
+        human_action="accepted",
         input_snapshot={"resolution_note": note},
         output_snapshot={"status": "accepted"},
+        document_id=doc_id_to_pass,
     )
-    db.add(audit)
     db.commit()
 
     return MatchActionResponse(
@@ -440,16 +449,25 @@ def reject_reconciliation_match(
                 )
 
     note = action_req.resolution_note if action_req else None
-    audit = AuditEvent(
+    matched_je_rec = (
+        db.query(JournalEntry).filter(JournalEntry.id == match.journal_entry_id).first()
+        if match.journal_entry_id
+        else None
+    )
+    doc_id_to_pass = matched_je_rec.document_id if matched_je_rec else None
+
+    log_event(
+        db=db,
         event_type="reconciliation_match_rejected",
         source_type="reconciliation_match",
         source_id=match.id,
         actor_type="human",
         actor_name="api_user",
+        human_action="rejected",
         input_snapshot={"resolution_note": note},
         output_snapshot={"status": "rejected"},
+        document_id=doc_id_to_pass,
     )
-    db.add(audit)
     db.commit()
 
     return MatchActionResponse(
@@ -634,20 +652,24 @@ def manual_match_transaction(
 
     tx.status = "matched"
 
-    audit = AuditEvent(
+    doc_id_to_pass = je.document_id if je else None
+
+    log_event(
+        db=db,
         event_type="reconciliation_match_manual",
         source_type="reconciliation_match",
         source_id=match_record.id,
         actor_type="human",
         actor_name="api_user",
+        human_action="manual_match",
         input_snapshot={
             "bank_transaction_id": str(tx.id),
             "journal_entry_id": str(je.id),
             "note": req.resolution_note,
         },
         output_snapshot={"status": "accepted", "match_type": "manual"},
+        document_id=doc_id_to_pass,
     )
-    db.add(audit)
     db.commit()
 
     return MatchActionResponse(
@@ -829,7 +851,8 @@ def create_and_post_adjustment_entry(
         r.resolved_at = datetime.now(UTC)
 
     # 6. Audit Trail
-    audit = AuditEvent(
+    log_event(
+        db=db,
         event_type="reconciliation_adjustment_created",
         source_type="journal_entry",
         source_id=je_id,
@@ -845,7 +868,6 @@ def create_and_post_adjustment_entry(
             "status": "posted",
         },
     )
-    db.add(audit)
     db.commit()
 
     total_deb = sum(float(l.get("debit_amount", 0.0)) for l in lines_data)

@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.agents.orchestrator import bookkeeping_node
 from app.db.session import get_db
-from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry, JournalEntryLine
 from app.models.review import ReviewItem
+from app.services.audit_service import log_event
 from app.schemas.review import (
     ReviewApproveRequest,
     ReviewApproveResponse,
@@ -266,7 +266,8 @@ def _continue_document_to_bookkeeping(
 
     doc.status = next_status
 
-    audit = AuditEvent(
+    log_event(
+        db=db,
         event_type="bookkeeping_continued_after_extraction_review",
         source_type="document",
         source_id=doc.id,
@@ -280,8 +281,8 @@ def _continue_document_to_bookkeeping(
         },
         confidence_score=final_confidence,
         rationale=final_rationale,
+        document_id=doc.id,
     )
-    db.add(audit)
     return next_status
 
 
@@ -498,20 +499,31 @@ def approve_review_item(
             next_workflow_status = "approved"
 
 
+    # Resolve document_id if available from source entity or payload
+    doc_id_to_pass = None
+    if item.source_type == "document":
+        doc_id_to_pass = item.source_id
+    elif item.source_type == "journal_entry":
+        je_rec = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        if je_rec and je_rec.document_id:
+            doc_id_to_pass = je_rec.document_id
+
     # Audit Trail Event
-    audit = AuditEvent(
+    log_event(
+        db=db,
         event_type="review_item_approved",
         source_type="review_item",
         source_id=item.id,
         actor_type="human",
         actor_name="human_user",
+        human_action="approved",
         input_snapshot={"resolution_note": resolution_note},
         output_snapshot={
             "status": "approved",
             "next_workflow_status": next_workflow_status,
         },
+        document_id=doc_id_to_pass,
     )
-    db.add(audit)
     db.commit()
 
     return ReviewApproveResponse(
@@ -627,13 +639,24 @@ def edit_review_item(
             )
         next_workflow_status = "posted"
 
+    # Resolve document_id if available
+    doc_id_to_pass = None
+    if item.source_type == "document":
+        doc_id_to_pass = item.source_id
+    elif item.source_type == "journal_entry":
+        je_rec = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        if je_rec and je_rec.document_id:
+            doc_id_to_pass = je_rec.document_id
+
     # Audit Event
-    audit = AuditEvent(
+    log_event(
+        db=db,
         event_type="review_item_edited",
         source_type="review_item",
         source_id=item.id,
         actor_type="human",
         actor_name="human_user",
+        human_action="edited",
         input_snapshot={
             "edited_payload": req.edited_payload,
             "resolution_note": req.resolution_note,
@@ -642,8 +665,8 @@ def edit_review_item(
             "status": "edited",
             "next_workflow_status": next_workflow_status,
         },
+        document_id=doc_id_to_pass,
     )
-    db.add(audit)
     db.commit()
 
     return ReviewEditResponse(
@@ -730,17 +753,28 @@ def reject_review_item(
 
 
 
+    # Resolve document_id if available
+    doc_id_to_pass = None
+    if item.source_type == "document":
+        doc_id_to_pass = item.source_id
+    elif item.source_type == "journal_entry":
+        je_rec = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        if je_rec and je_rec.document_id:
+            doc_id_to_pass = je_rec.document_id
+
     # Audit Event
-    audit = AuditEvent(
+    log_event(
+        db=db,
         event_type="review_item_rejected",
         source_type="review_item",
         source_id=item.id,
         actor_type="human",
         actor_name="human_user",
+        human_action="rejected",
         input_snapshot={"resolution_note": resolution_note},
         output_snapshot={"status": "rejected"},
+        document_id=doc_id_to_pass,
     )
-    db.add(audit)
     db.commit()
 
     return ReviewRejectResponse(

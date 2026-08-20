@@ -13,6 +13,7 @@ from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
 from app.services.accounting import save_journal_entry_safely
+from app.services.audit_service import log_event
 from app.services.document_extraction import extract_document_content
 
 logger = logging.getLogger(__name__)
@@ -396,7 +397,8 @@ def stream_document_processing(
             .first()
         )
         if not existing_audit:
-            audit = AuditEvent(
+            log_event(
+                db=db,
                 event_type="extraction_completed",
                 source_type="document",
                 source_id=doc.id,
@@ -418,8 +420,8 @@ def stream_document_processing(
                 },
                 confidence_score=final_confidence,
                 rationale=final_rationale,
+                document_id=doc.id,
             )
-            db.add(audit)
             db.commit()
 
         yield f"data: {json.dumps({'stage': 'completed', 'percentage': 100, 'status': final_status, 'confidence_score': final_confidence, 'vendor_name': vendor, 'total_amount': tot_amount, 'currency': curr, 'message': f'🎉 Document \"{fname}\" processing completed successfully!'})}\n\n"

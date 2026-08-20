@@ -21,8 +21,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.audit import AuditEvent
 from app.models.reconciliation import BankStatementImport, BankTransaction
+from app.services.audit_service import log_event
 from app.schemas.bank import (
     BankStatementImportListResponse,
     BankStatementImportResponse,
@@ -198,7 +198,8 @@ async def upload_bank_statement_csv(
     db.add_all(tx_objects)
 
     # Audit Trail Event
-    audit = AuditEvent(
+    log_event(
+        db=db,
         event_type="bank_statement_imported",
         source_type="bank_statement_import",
         source_id=import_uuid,
@@ -210,7 +211,6 @@ async def upload_bank_statement_csv(
         },
         output_snapshot={"status": "imported", "row_count": len(tx_objects)},
     )
-    db.add(audit)
     db.commit()
 
     self_tx_link = f"{settings.API_V1_STR}/bank-statements/{import_uuid}/transactions"
