@@ -13,7 +13,7 @@ export const GeneralLedgerView: React.FC<GeneralLedgerViewProps> = ({ onNavigate
   const [entries, setEntries] = useState<JournalEntryResponse[]>([])
   const [trialBalance, setTrialBalance] = useState<TrialBalanceResponse | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
-  const [statusFilter, setStatusFilter] = useState<string>('posted')
+  const [statusFilter, setStatusFilter] = useState<string>('')
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
 
   const loadData = async () => {

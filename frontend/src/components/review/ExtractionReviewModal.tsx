@@ -312,29 +312,58 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
   }
 
   const handleExtractionFieldChange = (field: keyof ExtractionDraftPayload, value: string) => {
-    setExtractionDraft((draft) => ({ ...draft, [field]: value }))
+    setExtractionDraft((draft) => {
+      const next = { ...draft, [field]: value }
+      if (field === 'subtotal_amount' || field === 'tax_amount') {
+        const sub = parseFloat(field === 'subtotal_amount' ? value : next.subtotal_amount) || 0
+        const tax = parseFloat(field === 'tax_amount' ? value : next.tax_amount) || 0
+        next.total_amount = String(sub + tax)
+      }
+      return next
+    })
   }
 
   const handleExtractionLineChange = (index: number, field: string, value: string) => {
     setExtractionDraft((draft) => {
       const updatedLines = [...draft.line_items]
-      updatedLines[index] = {
-        ...updatedLines[index],
-        [field]:
-          field === 'quantity' || field === 'unit_price' || field === 'amount'
-            ? value === ''
-              ? null
-              : Number(value)
-            : value,
+      const currentRow = { ...updatedLines[index] }
+
+      if (field === 'quantity') {
+        const qty = value === '' ? null : Number(value)
+        currentRow.quantity = qty
+        const unitPrice = Number(currentRow.unit_price) || 0
+        currentRow.amount = (Number(qty) || 0) * unitPrice
+      } else if (field === 'unit_price') {
+        const up = value === '' ? null : Number(value)
+        currentRow.unit_price = up
+        const qty = Number(currentRow.quantity) || 0
+        currentRow.amount = qty * (Number(up) || 0)
+      } else if (field === 'description') {
+        currentRow.description = value
+        currentRow.name = value
+      } else {
+        currentRow[field] = value
       }
-      return { ...draft, line_items: updatedLines }
+
+      updatedLines[index] = currentRow
+
+      // Recalculate Subtotal from all line amounts
+      const newSubtotal = updatedLines.reduce((acc, row) => acc + (Number(row.amount) || 0), 0)
+      const currentTax = parseFloat(draft.tax_amount) || 0
+      const newTotal = newSubtotal + currentTax
+
+      return {
+        ...draft,
+        line_items: updatedLines,
+        subtotal_amount: String(newSubtotal),
+        total_amount: String(newTotal),
+      }
     })
   }
 
   const handleAddExtractionLine = () => {
-    setExtractionDraft((draft) => ({
-      ...draft,
-      line_items: [
+    setExtractionDraft((draft) => {
+      const updatedLines = [
         ...draft.line_items,
         {
           description: '',
@@ -342,15 +371,27 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
           unit_price: 0,
           amount: 0,
         },
-      ],
-    }))
+      ]
+      return {
+        ...draft,
+        line_items: updatedLines,
+      }
+    })
   }
 
   const handleRemoveExtractionLine = (index: number) => {
-    setExtractionDraft((draft) => ({
-      ...draft,
-      line_items: draft.line_items.filter((_, i) => i !== index),
-    }))
+    setExtractionDraft((draft) => {
+      const updatedLines = draft.line_items.filter((_, i) => i !== index)
+      const newSubtotal = updatedLines.reduce((acc, row) => acc + (Number(row.amount) || 0), 0)
+      const currentTax = parseFloat(draft.tax_amount) || 0
+      const newTotal = newSubtotal + currentTax
+      return {
+        ...draft,
+        line_items: updatedLines,
+        subtotal_amount: String(newSubtotal),
+        total_amount: String(newTotal),
+      }
+    })
   }
 
   const handleApproveAsIs = async () => {
@@ -719,10 +760,17 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                 <div className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
                   {isEditing && isExtractionReview ? (
                     <div className="divide-y divide-slate-800/80">
+                      <div className="hidden sm:grid grid-cols-[minmax(0,1.5fr)_70px_110px_110px_36px] gap-2 px-4 py-2 bg-slate-950 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                        <span>Description</span>
+                        <span>Qty</span>
+                        <span>Unit Price</span>
+                        <span className="text-right">Amount (Auto)</span>
+                        <span className="text-center">Action</span>
+                      </div>
                       {extractionDraft.line_items.map((line, index) => (
                         <div
                           key={`editable-line-${index}`}
-                          className="px-4 py-3 grid grid-cols-1 sm:grid-cols-[minmax(0,1.5fr)_70px_110px_110px_36px] gap-2"
+                          className="px-4 py-3 grid grid-cols-1 sm:grid-cols-[minmax(0,1.5fr)_70px_110px_110px_36px] gap-2 items-center"
                         >
                           <input
                             type="text"
@@ -755,13 +803,12 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                           />
                           <input
                             type="number"
-                            step="any"
-                            value={line.amount ?? ''}
-                            onChange={(e) =>
-                              handleExtractionLineChange(index, 'amount', e.target.value)
-                            }
+                            readOnly
+                            disabled
+                            value={line.amount ?? ((Number(line.quantity) || 0) * (Number(line.unit_price) || 0))}
                             placeholder="Amount"
-                            className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                            className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-slate-300 text-right cursor-not-allowed"
+                            title="Calculated automatically: Qty × Unit Price"
                           />
                           <button
                             type="button"
@@ -850,14 +897,22 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   )}
                 </div>
                 <div className="border-t border-slate-700 pt-3 flex items-center justify-between">
-                  <span className="font-bold text-white uppercase tracking-wide">Total</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-white uppercase tracking-wide">Total</span>
+                    {isEditing && isExtractionReview && (
+                      <span className="text-[10px] font-mono text-emerald-400/80 bg-emerald-950/40 border border-emerald-500/30 px-1.5 py-0.5 rounded">
+                        Subtotal + Tax
+                      </span>
+                    )}
+                  </div>
                   {isEditing && isExtractionReview ? (
                     <input
                       type="number"
-                      step="any"
+                      readOnly
+                      disabled
                       value={extractionDraft.total_amount}
-                      onChange={(e) => handleExtractionFieldChange('total_amount', e.target.value)}
-                      className="w-40 px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-right font-mono text-lg font-bold text-emerald-300 focus:outline-none focus:border-indigo-500"
+                      className="w-40 px-3 py-1.5 bg-slate-950 border border-emerald-500/40 rounded-lg text-right font-mono text-lg font-bold text-emerald-300 cursor-not-allowed"
+                      title="Calculated automatically: Subtotal + Tax"
                     />
                   ) : (
                     <span className="font-mono text-lg font-bold text-emerald-300">

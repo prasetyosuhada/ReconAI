@@ -539,7 +539,7 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
           {isBalanced ? (
             <span className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold">
               <CheckCircle2 className="w-4 h-4" />
-              Balanced - Debit = Credit
+              Balanced (Debit = Credit)
             </span>
           ) : (
             <span className="flex items-center gap-1.5 text-xs text-rose-400 font-semibold">
