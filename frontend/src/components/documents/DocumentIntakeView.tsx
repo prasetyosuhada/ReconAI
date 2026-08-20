@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { DropzoneUpload } from './DropzoneUpload'
 import { DocumentList } from './DocumentList'
 import { DocumentLiveStreamCard } from './DocumentLiveStreamCard'
+import { notifyReviewQueueUpdated } from '../../services/api'
 
 interface DocumentIntakeViewProps {
   onSelectDocument?: (docId: string) => void
@@ -21,6 +22,7 @@ export const DocumentIntakeView: React.FC<DocumentIntakeViewProps> = ({ onSelect
 
   const handleStreamCompleted = () => {
     setRefreshTrigger((prev) => prev + 1)
+    notifyReviewQueueUpdated()
   }
 
   return (

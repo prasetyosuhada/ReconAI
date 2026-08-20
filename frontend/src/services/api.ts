@@ -585,7 +585,9 @@ export async function runReconciliationWorkflow(
     throw new Error(err.detail || 'Failed to run reconciliation workflow')
   }
 
-  return response.json()
+  const result = await response.json()
+  notifyReviewQueueUpdated()
+  return result
 }
 
 export interface SuggestedJournalLine {

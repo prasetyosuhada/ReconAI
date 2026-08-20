@@ -727,7 +727,11 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                         <div>
                           <span className="text-slate-500 block text-[11px]">Ledger Entry ID</span>
                           <span className="font-semibold text-slate-200 font-mono">
-                            #JE-{selectedMatch.journal_entry.id.substring(0, 8)}
+                            {selectedMatch.journal_entry?.id
+                              ? `#JE-${selectedMatch.journal_entry.id.substring(0, 8)}`
+                              : selectedMatch.journal_entry_id
+                                ? `#JE-${selectedMatch.journal_entry_id.substring(0, 8)}`
+                                : 'N/A'}
                           </span>
                         </div>
                         <div>
@@ -735,7 +739,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                             Ledger Entry Date
                           </span>
                           <span className="font-semibold text-slate-200 font-mono">
-                            {formatCardDate(selectedMatch.journal_entry.entry_date)}
+                            {formatCardDate(selectedMatch.journal_entry?.entry_date || '')}
                           </span>
                         </div>
                         <div className="col-span-2 border-t border-slate-800 pt-2">
@@ -743,7 +747,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                             Journal Description
                           </span>
                           <span className="font-semibold text-slate-100">
-                            {selectedMatch.journal_entry.description}
+                            {selectedMatch.journal_entry?.description || 'Matched General Ledger Entry'}
                           </span>
                         </div>
                       </div>
@@ -835,13 +839,17 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                           Candidate Journal ID
                         </span>
                         <span className="font-semibold text-slate-200 font-mono">
-                          #JE-{selectedMatch.journal_entry.id.substring(0, 8)}
+                          {selectedMatch.journal_entry?.id
+                            ? `#JE-${selectedMatch.journal_entry.id.substring(0, 8)}`
+                            : selectedMatch.journal_entry_id
+                              ? `#JE-${selectedMatch.journal_entry_id.substring(0, 8)}`
+                              : 'N/A'}
                         </span>
                       </div>
                       <div>
                         <span className="text-slate-500 block text-[11px]">Ledger Entry Date</span>
                         <span className="font-semibold text-slate-200 font-mono">
-                          {formatCardDate(selectedMatch.journal_entry.entry_date)}
+                          {formatCardDate(selectedMatch.journal_entry?.entry_date || '')}
                         </span>
                       </div>
                       <div className="col-span-2 border-t border-slate-800 pt-2">
@@ -849,7 +857,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                           Journal Description
                         </span>
                         <span className="font-semibold text-slate-100">
-                          {selectedMatch.journal_entry.description}
+                          {selectedMatch.journal_entry?.description || 'Proposed Candidate Journal Entry'}
                         </span>
                       </div>
                     </div>

@@ -23,6 +23,7 @@ import {
   fetchChartOfAccounts,
   fetchJournalEntries,
   fetchReconciliationMatches,
+  notifyReviewQueueUpdated,
   rejectReconciliationMatch,
 } from '../../services/api'
 
@@ -278,6 +279,8 @@ export const ReconciliationView: React.FC = () => {
     }
     // Refresh imports list so the import status (matched/partially_matched) is updated
     refreshImports(setImports)
+    // Dispatch event to update sidebar / dashboard review queue badge
+    notifyReviewQueueUpdated()
   }
 
   return (
@@ -298,6 +301,7 @@ export const ReconciliationView: React.FC = () => {
         onRunSuccess={() => {
           if (activeImportId) loadData(activeImportId)
           refreshImports(setImports)
+          notifyReviewQueueUpdated()
         }}
       />
 
