@@ -12,10 +12,13 @@ import {
   HelpCircle,
   Info,
   Loader2,
+  Plus,
   PlusCircle,
+  RotateCcw,
   Search,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Undo2,
   X,
 } from 'lucide-react'
@@ -25,9 +28,11 @@ import type {
   ChartOfAccountResponse,
   JournalEntryResponse,
   ReconciliationMatchResponse,
+  SuggestedJournalLine,
 } from '../../services/api'
 import {
   createAdjustmentJournalEntry,
+  fetchChartOfAccounts,
   manualMatchReconciliation,
   suggestAdjustmentJournal,
 } from '../../services/api'
@@ -77,6 +82,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
   matches,
   glOnlyEntries = [],
   postedJournalEntries = [],
+  chartOfAccounts = [],
   activeFilter,
   loading,
   actionLoading = false,
@@ -112,19 +118,202 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
   const [isPostingJE, setIsPostingJE] = useState<boolean>(false)
   const lastFetchedTxId = useRef<string | null>(null)
 
+  // Editable form state for Create Adjusting Journal Entry Modal
+  const [entryDate, setEntryDate] = useState<string>('')
+  const [entryDescription, setEntryDescription] = useState<string>('')
+  const [journalLines, setJournalLines] = useState<SuggestedJournalLine[]>([])
+  const [dbCOA, setDbCOA] = useState<ChartOfAccountResponse[]>(chartOfAccounts || [])
+
+  // Keep dbCOA in sync with prop from DB, or fetch directly from DB table `chart_of_accounts`
+  useEffect(() => {
+    if (chartOfAccounts && chartOfAccounts.length > 0) {
+      setDbCOA(chartOfAccounts)
+    } else {
+      fetchChartOfAccounts()
+        .then((res) => {
+          if (res.items && res.items.length > 0) {
+            setDbCOA(res.items)
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to fetch COA from database:', err)
+        })
+    }
+  }, [chartOfAccounts])
+
   const showToast = (msg: string) => {
     setCustomToast(msg)
     setTimeout(() => setCustomToast(null), 3000)
   }
 
-  const handleSaveAndPostJournalEntry = async () => {
+  // Open modal with prefilled lines (from AI suggestion if available, otherwise balanced default 2 lines from DB COA)
+  const openCreateAdjustmentModal = () => {
     if (!selectedTx) return
+
+    setEntryDate(selectedTx.transaction_date || new Date().toISOString().split('T')[0])
+    setEntryDescription(selectedTx.description || 'Adjusting Journal Entry')
+
+    if (suggestion?.suggested_lines && suggestion.suggested_lines.length >= 2) {
+      setJournalLines(
+        suggestion.suggested_lines.map((l) => ({
+          account_code: l.account_code,
+          account_name: l.account_name,
+          description: l.description || selectedTx.description,
+          debit_amount: l.debit_amount || 0,
+          credit_amount: l.credit_amount || 0,
+        }))
+      )
+    } else {
+      const rawAmt = Math.abs(selectedTx.amount)
+      const bankAcct =
+        dbCOA.find((c) => c.account_code === '1010') ||
+        dbCOA.find((c) => c.account_type === 'asset') || {
+          account_code: '1010',
+          account_name: 'Bank Account',
+        }
+      const expenseAcct =
+        dbCOA.find((c) => c.account_code === '5900') ||
+        dbCOA.find((c) => c.account_type === 'expense') || {
+          account_code: '5900',
+          account_name: 'Miscellaneous Expense',
+        }
+      const revenueAcct =
+        dbCOA.find((c) => c.account_code === '4000') ||
+        dbCOA.find((c) => c.account_type === 'revenue') || {
+          account_code: '4000',
+          account_name: 'Sales Revenue',
+        }
+
+      if (selectedTx.amount < 0) {
+        // Outflow: Debit Expense, Credit Bank
+        setJournalLines([
+          {
+            account_code: expenseAcct.account_code,
+            account_name: expenseAcct.account_name,
+            description: selectedTx.description,
+            debit_amount: rawAmt,
+            credit_amount: 0,
+          },
+          {
+            account_code: bankAcct.account_code,
+            account_name: bankAcct.account_name,
+            description: 'Bank Outflow',
+            debit_amount: 0,
+            credit_amount: rawAmt,
+          },
+        ])
+      } else {
+        // Inflow: Debit Bank, Credit Revenue
+        setJournalLines([
+          {
+            account_code: bankAcct.account_code,
+            account_name: bankAcct.account_name,
+            description: 'Bank Inflow',
+            debit_amount: rawAmt,
+            credit_amount: 0,
+          },
+          {
+            account_code: revenueAcct.account_code,
+            account_name: revenueAcct.account_name,
+            description: selectedTx.description,
+            debit_amount: 0,
+            credit_amount: rawAmt,
+          },
+        ])
+      }
+    }
+
+    setShowCreateJEModal(true)
+  }
+
+  const resetToAISuggestion = () => {
+    if (!suggestion?.suggested_lines || suggestion.suggested_lines.length < 2) return
+    setJournalLines(
+      suggestion.suggested_lines.map((l) => ({
+        account_code: l.account_code,
+        account_name: l.account_name,
+        description: l.description || selectedTx?.description || '',
+        debit_amount: l.debit_amount || 0,
+        credit_amount: l.credit_amount || 0,
+      }))
+    )
+    if (selectedTx?.description) {
+      setEntryDescription(selectedTx.description)
+    }
+  }
+
+  const handleLineAccountChange = (index: number, newAccountCode: string) => {
+    const foundCoa = dbCOA.find((c: ChartOfAccountResponse) => c.account_code === newAccountCode)
+    const newName = foundCoa ? foundCoa.account_name : 'Custom Account'
+    setJournalLines((prev) =>
+      prev.map((line, idx) =>
+        idx === index
+          ? { ...line, account_code: newAccountCode, account_name: newName }
+          : line
+      )
+    )
+  }
+
+  const handleLineFieldChange = (
+    index: number,
+    field: 'description' | 'debit_amount' | 'credit_amount',
+    val: string | number
+  ) => {
+    setJournalLines((prev) =>
+      prev.map((line, idx) => {
+        if (idx !== index) return line
+        if (field === 'debit_amount') {
+          const num = typeof val === 'number' ? val : parseFloat(val) || 0
+          return { ...line, debit_amount: num, credit_amount: num > 0 ? 0 : line.credit_amount }
+        }
+        if (field === 'credit_amount') {
+          const num = typeof val === 'number' ? val : parseFloat(val) || 0
+          return { ...line, credit_amount: num, debit_amount: num > 0 ? 0 : line.debit_amount }
+        }
+        return { ...line, description: String(val) }
+      })
+    )
+  }
+
+  const handleAddLine = () => {
+    const defaultExpense =
+      dbCOA.find((c) => c.account_type === 'expense') ||
+      dbCOA[0] || {
+        account_code: '5900',
+        account_name: 'Miscellaneous Expense',
+      }
+    setJournalLines((prev) => [
+      ...prev,
+      {
+        account_code: defaultExpense.account_code,
+        account_name: defaultExpense.account_name,
+        description: '',
+        debit_amount: 0,
+        credit_amount: 0,
+      },
+    ])
+  }
+
+  const handleRemoveLine = (index: number) => {
+    if (journalLines.length <= 2) return
+    setJournalLines((prev) => prev.filter((_, idx) => idx !== index))
+  }
+
+  // Real-time double-entry calculations
+  const totalDebit = journalLines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
+  const totalCredit = journalLines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0)
+  const imbalance = Math.abs(totalDebit - totalCredit)
+  const isBalanced = imbalance < 0.01 && totalDebit > 0
+
+  const handleSaveAndPostJournalEntry = async () => {
+    if (!selectedTx || !isBalanced) return
     setIsPostingJE(true)
     try {
       const res = await createAdjustmentJournalEntry({
         bank_transaction_id: selectedTx.id,
-        lines: suggestion?.suggested_lines,
-        description: selectedTx.description,
+        entry_date: entryDate || selectedTx.transaction_date,
+        description: entryDescription || selectedTx.description,
+        lines: journalLines,
       })
       showToast(
         `✓ Adjusting Journal Entry #JE-${res.journal_entry_id.substring(0, 8)} posted to General Ledger!`
@@ -659,7 +848,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
 
                           <button
                             type="button"
-                            onClick={() => setShowCreateJEModal(true)}
+                            onClick={openCreateAdjustmentModal}
                             className="w-full py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md shadow-purple-600/20 cursor-pointer"
                           >
                             <PlusCircle className="w-4 h-4" /> Review &amp; Create Journal Entry
@@ -682,7 +871,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                           </button>
                           <button
                             type="button"
-                            onClick={() => setShowCreateJEModal(true)}
+                            onClick={openCreateAdjustmentModal}
                             className="px-3.5 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
                           >
                             <PlusCircle className="w-3.5 h-3.5" /> Create Journal Entry
@@ -1101,118 +1290,293 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
         </div>
       )}
 
-      {/* Modal: Quick Create Journal Entry from Unmatched Bank Transaction */}
+      {/* Modal: Interactive Create / Edit Adjusting Journal Entry from Unmatched Bank Mutation */}
       {showCreateJEModal && selectedTx && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 w-full max-w-xl rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <PlusCircle className="w-4 h-4 text-purple-400" />
-                  Create Journal Entry from Bank Mutation
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Review double-entry journal lines before posting.
-                </p>
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-700/80 w-full max-w-3xl rounded-2xl p-6 shadow-2xl space-y-5 my-auto max-h-[92vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                  <PlusCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-white tracking-wide">
+                      Create Adjusting Journal Entry
+                    </h3>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30 uppercase tracking-wider">
+                      Manual / AI-Assisted
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Customize double-entry accounts, amounts, or use AI prefilled recommendation before posting.
+                  </p>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowCreateJEModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+
+              <div className="flex items-center gap-2">
+                {suggestion?.suggested_lines && suggestion.suggested_lines.length >= 2 && (
+                  <button
+                    type="button"
+                    onClick={resetToAISuggestion}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-purple-300 border border-purple-500/30 text-[11px] font-medium transition-colors flex items-center gap-1.5 cursor-pointer"
+                    title="Reset lines back to AI suggestion"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-purple-400" />
+                    Reset to AI Suggestion
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowCreateJEModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-3 bg-slate-950/60 p-4 rounded-xl border border-slate-800 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <span className="text-slate-400 text-[11px] block">Entry Date</span>
-                  <span className="font-semibold text-white font-mono">
-                    {formatCardDate(selectedTx.transaction_date)}
+            {/* Scrollable Body */}
+            <div className="space-y-4 overflow-y-auto flex-1 pr-1">
+              {/* Bank Transaction Reference Box */}
+              <div className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400 font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-blue-400" /> Source Bank Mutation
                   </span>
+                  <span className="font-mono text-slate-500">Ref: {selectedTx.reference_number || 'N/A'}</span>
                 </div>
-                <div>
-                  <span className="text-slate-400 text-[11px] block">Amount</span>
-                  <span className="font-bold text-emerald-400 font-mono">
-                    {formatCardAmount(Math.abs(selectedTx.amount))}
-                  </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">Bank Description</span>
+                    <span className="font-semibold text-white">{selectedTx.description}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">Transaction Date</span>
+                    <span className="font-mono text-slate-300 font-medium">{formatCardDate(selectedTx.transaction_date)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">Mutation Amount</span>
+                    <span className={`font-mono font-bold ${selectedTx.amount < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                      {formatCardAmount(selectedTx.amount, selectedTx.currency)}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <span className="text-slate-400 text-[11px] block">Memo / Description</span>
-                <span className="font-semibold text-white">{selectedTx.description}</span>
+              {/* Journal Header Inputs */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[11px] font-semibold text-slate-400 block mb-1">
+                    Entry Date <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={entryDate}
+                    onChange={(e) => setEntryDate(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition-colors"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="text-[11px] font-semibold text-slate-400 block mb-1">
+                    Journal Description / Memo <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={entryDescription}
+                    onChange={(e) => setEntryDescription(e.target.value)}
+                    placeholder="Enter journal description..."
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-white text-xs focus:outline-none focus:border-purple-500 transition-colors"
+                  />
+                </div>
               </div>
 
-              {/* Proposed Double-Entry Lines – from BookkeepingAgent */}
-              <div className="border-t border-slate-800 pt-3 space-y-2">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                  Proposed Double-Entry Lines
-                </span>
-                <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5">
-                  {suggestion?.suggested_lines && suggestion.suggested_lines.length > 0 ? (
-                    suggestion.suggested_lines.map((line, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-xs">
-                        <span className="text-slate-300 font-medium">
-                          [{line.debit_amount > 0 ? 'DR' : 'CR'}] {line.account_code} •{' '}
-                          {line.account_name}
-                        </span>
-                        <span className="font-mono font-bold text-emerald-400">
-                          {formatCardAmount(
-                            line.debit_amount > 0 ? line.debit_amount : line.credit_amount,
-                            suggestion.currency
-                          )}
-                        </span>
-                      </div>
-                    ))
+              {/* Interactive Double-Entry Lines Table */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <BookOpen className="w-3.5 h-3.5 text-purple-400" />
+                    Double-Entry Journal Lines
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleAddLine}
+                    className="px-2.5 py-1 rounded-lg bg-purple-950/60 hover:bg-purple-900/80 border border-purple-500/40 text-purple-300 text-[11px] font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-purple-400" />
+                    Add Line
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-slate-800 overflow-hidden bg-slate-950/60">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 bg-slate-900/80 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        <th className="py-2 px-3 w-5/12">Account (COA)</th>
+                        <th className="py-2 px-2 w-3/12">Line Memo</th>
+                        <th className="py-2 px-2 text-right w-2/12">Debit (IDR)</th>
+                        <th className="py-2 px-2 text-right w-2/12">Credit (IDR)</th>
+                        <th className="py-2 px-2 text-center w-8"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 text-xs">
+                      {journalLines.map((line, idx) => (
+                        <tr key={idx} className="hover:bg-slate-900/40 transition-colors">
+                          {/* Account Dropdown */}
+                          <td className="py-2 px-3">
+                            <select
+                              value={line.account_code}
+                              onChange={(e) => handleLineAccountChange(idx, e.target.value)}
+                              className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-purple-500 transition-colors"
+                            >
+                              {dbCOA.map((coa: ChartOfAccountResponse) => (
+                                <option key={coa.account_code} value={coa.account_code}>
+                                  [{coa.account_code}] {coa.account_name} ({coa.account_type})
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+
+                          {/* Line Memo */}
+                          <td className="py-2 px-2">
+                            <input
+                              type="text"
+                              value={line.description || ''}
+                              onChange={(e) => handleLineFieldChange(idx, 'description', e.target.value)}
+                              placeholder="Line description"
+                              className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-purple-500 transition-colors"
+                            />
+                          </td>
+
+                          {/* Debit Amount */}
+                          <td className="py-2 px-2 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              value={line.debit_amount || ''}
+                              onChange={(e) => handleLineFieldChange(idx, 'debit_amount', e.target.value)}
+                              placeholder="0"
+                              className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-emerald-400 font-mono font-semibold text-right text-xs focus:outline-none focus:border-purple-500 transition-colors"
+                            />
+                          </td>
+
+                          {/* Credit Amount */}
+                          <td className="py-2 px-2 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              value={line.credit_amount || ''}
+                              onChange={(e) => handleLineFieldChange(idx, 'credit_amount', e.target.value)}
+                              placeholder="0"
+                              className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 font-mono font-semibold text-right text-xs focus:outline-none focus:border-purple-500 transition-colors"
+                            />
+                          </td>
+
+                          {/* Remove Row */}
+                          <td className="py-2 px-2 text-center">
+                            <button
+                              type="button"
+                              disabled={journalLines.length <= 2}
+                              onClick={() => handleRemoveLine(idx)}
+                              className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800 disabled:opacity-30 disabled:hover:text-slate-500 disabled:hover:bg-transparent transition-colors cursor-pointer"
+                              title={journalLines.length <= 2 ? 'Minimum 2 lines required' : 'Remove line'}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t border-slate-800 bg-slate-900/90 text-xs font-mono font-bold">
+                        <td colSpan={2} className="py-2.5 px-3 text-slate-400 text-right">
+                          Total:
+                        </td>
+                        <td className="py-2.5 px-2 text-right text-emerald-400 font-semibold">
+                          {formatCardAmount(totalDebit)}
+                        </td>
+                        <td className="py-2.5 px-2 text-right text-slate-200 font-semibold">
+                          {formatCardAmount(totalCredit)}
+                        </td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+
+              {/* Real-time Balanced Verification Banner */}
+              <div
+                className={`p-3 rounded-xl border flex items-center justify-between text-xs transition-colors ${
+                  isBalanced
+                    ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-300'
+                    : 'bg-rose-950/30 border-rose-500/40 text-rose-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 font-medium">
+                  {isBalanced ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>Balanced! Double-entry mathematical equality verified (Debits == Credits).</span>
+                    </>
                   ) : (
                     <>
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-300 font-medium">
-                          [DR] 6105 • Bank Charges Expense
-                        </span>
-                        <span className="font-mono font-bold text-emerald-400">
-                          {formatCardAmount(Math.abs(selectedTx.amount))}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-400 font-medium">[CR] 1101 • Cash at Bank</span>
-                        <span className="font-mono font-bold text-slate-300">
-                          {formatCardAmount(Math.abs(selectedTx.amount))}
-                        </span>
-                      </div>
+                      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>
+                        Unbalanced Journal Entry — Difference: <strong>{formatCardAmount(imbalance)}</strong>. Debits must equal Credits to post.
+                      </span>
                     </>
+                  )}
+                </div>
+                <div className="font-mono font-bold text-xs shrink-0">
+                  {isBalanced ? (
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      Diff: Rp 0
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                      Diff: {formatCardAmount(imbalance)}
+                    </span>
                   )}
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                type="button"
-                disabled={isPostingJE}
-                onClick={() => setShowCreateJEModal(false)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isPostingJE}
-                onClick={handleSaveAndPostJournalEntry}
-                className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-semibold text-xs transition-colors shadow-md shadow-purple-600/20 flex items-center gap-1.5 cursor-pointer"
-              >
-                {isPostingJE ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Posting to Ledger...
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="w-4 h-4" /> Save &amp; Post Journal Entry
-                  </>
-                )}
-              </button>
+            {/* Modal Footer Actions */}
+            <div className="flex items-center justify-between border-t border-slate-800 pt-3 shrink-0">
+              <div className="text-[11px] text-slate-400">
+                {journalLines.length} double-entry lines
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={isPostingJE}
+                  onClick={() => setShowCreateJEModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isPostingJE || !isBalanced}
+                  onClick={handleSaveAndPostJournalEntry}
+                  className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-xs transition-colors shadow-md shadow-purple-600/20 flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isPostingJE ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Posting to Ledger...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" /> Save &amp; Post Journal Entry
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
