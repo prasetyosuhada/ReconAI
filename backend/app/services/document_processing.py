@@ -245,6 +245,7 @@ def stream_document_processing(
             or final_state.get("journal_lines")
         )
         saved_journal_id = None
+        save_errors: list[str] = []
         journal_desc = f"Journal for {fname} ({vendor})"
         journal_entry_date = (
             _parse_date(final_state.get("transaction_date")) or date.today()
@@ -279,6 +280,8 @@ def stream_document_processing(
             save_res = save_journal_entry_safely(journal_data, db_session=db)
             if save_res.success:
                 saved_journal_id = save_res.journal_entry_id
+            else:
+                save_errors = save_res.errors
 
         # 3. Handle Human-in-the-Loop Review Queue (idempotent check)
         review_item_created = False
@@ -430,61 +433,110 @@ def stream_document_processing(
             )
             db.commit()
 
-        # 5. Audit Trail Event: bookkeeping_completed (if bookkeeping produced a journal entry)
-        if saved_journal_id:
-            je_uuid = (
-                uuid.UUID(saved_journal_id)
-                if isinstance(saved_journal_id, str)
-                else saved_journal_id
-            )
-            existing_bk_audit = (
-                db.query(AuditEvent)
-                .filter(
-                    AuditEvent.event_type == "bookkeeping_completed",
-                    AuditEvent.source_id == je_uuid,
+        # 5. Audit Trail Event: bookkeeping_completed (if bookkeeping was executed)
+        bookkeeping_attempted = (
+            "bookkeeping" in final_state
+            or proposed_journal is not None
+            or bool(save_errors)
+            or final_status in ("ready_to_post", "bookkeeping_review_required")
+        )
+        if bookkeeping_attempted:
+            if saved_journal_id:
+                je_uuid = (
+                    uuid.UUID(saved_journal_id)
+                    if isinstance(saved_journal_id, str)
+                    else saved_journal_id
                 )
-                .first()
-            )
-            if not existing_bk_audit:
-                decision_str = "Bookkeeping classified"
-                if proposed_journal and isinstance(proposed_journal, list):
-                    debit_lines = [
-                        f"COA: {l.get('account_code')} - {l.get('account_name', '')}".strip(" -")
-                        for l in proposed_journal
-                        if float(l.get("debit_amount", 0.0) or 0.0) > 0
-                    ]
-                    if debit_lines:
-                        decision_str = debit_lines[0]
-
-                reasoning_list = []
-                if final_rationale:
-                    reasoning_list.append(final_rationale)
-                for rf in final_risk_flags:
-                    reasoning_list.append(f"Risk flag: {rf}")
-
-                log_event(
-                    db=db,
-                    event_type="bookkeeping_completed",
-                    source_type="journal_entry",
-                    source_id=je_uuid,
-                    actor_type="agent",
-                    actor_name="BookkeepingAgent",
-                    input_snapshot={
-                        "document_id": str(doc.id),
-                        "extraction_id": str(extraction.id),
-                    },
-                    output_snapshot={
-                        "decision": decision_str,
-                        "reasoning": reasoning_list,
-                        "journal_entry_id": str(saved_journal_id),
-                        "status": "review_required" if needs_review else "draft",
-                        "is_balanced": final_state.get("is_balanced", True),
-                    },
-                    confidence_score=final_confidence,
-                    rationale=final_rationale,
-                    document_id=doc.id,
+                existing_bk_audit = (
+                    db.query(AuditEvent)
+                    .filter(
+                        AuditEvent.event_type == "bookkeeping_completed",
+                        AuditEvent.source_id == je_uuid,
+                    )
+                    .first()
                 )
-                db.commit()
+                if not existing_bk_audit:
+                    decision_str = "Bookkeeping classified"
+                    if proposed_journal and isinstance(proposed_journal, list):
+                        debit_lines = [
+                            f"COA: {l.get('account_code')} - {l.get('account_name', '')}".strip(" -")
+                            for l in proposed_journal
+                            if float(l.get("debit_amount", 0.0) or 0.0) > 0
+                        ]
+                        if debit_lines:
+                            decision_str = debit_lines[0]
+
+                    reasoning_list = []
+                    if final_rationale:
+                        reasoning_list.append(final_rationale)
+                    for rf in final_risk_flags:
+                        reasoning_list.append(f"Risk flag: {rf}")
+
+                    log_event(
+                        db=db,
+                        event_type="bookkeeping_completed",
+                        source_type="journal_entry",
+                        source_id=je_uuid,
+                        actor_type="agent",
+                        actor_name="BookkeepingAgent",
+                        input_snapshot={
+                            "document_id": str(doc.id),
+                            "extraction_id": str(extraction.id),
+                        },
+                        output_snapshot={
+                            "decision": decision_str,
+                            "reasoning": reasoning_list,
+                            "journal_entry_id": str(saved_journal_id),
+                            "status": "review_required" if needs_review else "draft",
+                            "is_balanced": final_state.get("is_balanced", True),
+                        },
+                        confidence_score=final_confidence,
+                        rationale=final_rationale,
+                        document_id=doc.id,
+                    )
+                    db.commit()
+            else:
+                # Failure case: Bookkeeping ran but journal could not be validated or saved
+                existing_bk_fail_audit = (
+                    db.query(AuditEvent)
+                    .filter(
+                        AuditEvent.event_type == "bookkeeping_completed",
+                        AuditEvent.source_id == doc.id,
+                    )
+                    .first()
+                )
+                if not existing_bk_fail_audit:
+                    fail_reasoning = list(save_errors) if save_errors else []
+                    if not fail_reasoning:
+                        if final_state.get("error"):
+                            fail_reasoning.append(str(final_state["error"]))
+                        elif not final_state.get("is_balanced", True):
+                            fail_reasoning.append("Journal entry double-entry balance validation failed.")
+                        else:
+                            fail_reasoning.append("Bookkeeping agent failed to produce a valid journal entry.")
+
+                    log_event(
+                        db=db,
+                        event_type="bookkeeping_completed",
+                        source_type="document",
+                        source_id=doc.id,
+                        actor_type="agent",
+                        actor_name="BookkeepingAgent",
+                        input_snapshot={
+                            "document_id": str(doc.id),
+                            "extraction_id": str(extraction.id),
+                        },
+                        output_snapshot={
+                            "decision": "failed",
+                            "reasoning": fail_reasoning,
+                            "status": "failed",
+                            "journal_entry_id": None,
+                        },
+                        confidence_score=final_confidence,
+                        rationale=final_rationale or "Bookkeeping classification failed validation.",
+                        document_id=doc.id,
+                    )
+                    db.commit()
 
         yield f"data: {json.dumps({'stage': 'completed', 'percentage': 100, 'status': final_status, 'confidence_score': final_confidence, 'vendor_name': vendor, 'total_amount': tot_amount, 'currency': curr, 'message': f'🎉 Document \"{fname}\" processing completed successfully!'})}\n\n"
 
