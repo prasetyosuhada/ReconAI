@@ -62,7 +62,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
   onResolved,
 }) => {
   const [detailItem, setDetailItem] = useState<ReviewItemResponse | null>(item)
-  const [_loadingDetail, setLoadingDetail] = useState<boolean>(false)
+  const [loadingDetail, setLoadingDetail] = useState<boolean>(true)
   const [bankTxRecord, setBankTxRecord] = useState<BankTransactionResponse | null>(null)
   const [candidateJE, setCandidateJE] = useState<JournalEntryResponse | null>(null)
   const [loadingCandidate, setLoadingCandidate] = useState<boolean>(false)
@@ -130,7 +130,12 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
     payload.journal_entry_id ||
     payload.proposed_je_id ||
     null
-  const isFuzzyMatch = Boolean(proposedJEId)
+  // For reconciliation review items in Review Queue, treat as candidate match by default while loading
+  const isFuzzyMatch =
+    Boolean(proposedJEId) ||
+    loadingDetail ||
+    activeItem?.review_type === 'reconciliation' ||
+    Boolean(activeItem?.title?.toLowerCase().includes('match'))
 
   const confidenceScore = Math.round(
     Number(activeItem?.confidence_score ?? payload.confidence_score ?? 0.8) * 100
@@ -148,6 +153,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
   useEffect(() => {
     let ignore = false
     setDetailItem(item)
+    setLoadingDetail(true)
     setErrorMsg(null)
     setSuccessMsg(null)
     setShowRejectInput(false)
@@ -155,9 +161,11 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
     setCandidateJE(null)
     setBankTxRecord(null)
 
-    if (!item?.id) return
+    if (!item?.id) {
+      setLoadingDetail(false)
+      return
+    }
 
-    setLoadingDetail(true)
     fetchReviewItemDetail(item.id)
       .then((res) => {
         if (!ignore) {
@@ -210,7 +218,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
   // For fuzzy match items, no COA suggestion needed (they have a candidate GL entry already).
   // Suggestion will be present in DB after: (1) Run Recon Engine, or (2) Confirm Rejection.
   useEffect(() => {
-    if (isFuzzyMatch || !bankTxId) return
+    if (isFuzzyMatch || loadingDetail || !bankTxId) return
 
     setSuggestionLoading(true)
     setSuggestionError(null)
@@ -427,10 +435,10 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
                   )}
                 </div>
 
-                {loadingCandidate ? (
-                  <div className="py-6 flex items-center justify-center gap-2 text-xs text-slate-400">
-                    <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-                    <span>Loading candidate ledger entry...</span>
+                {loadingDetail || loadingCandidate ? (
+                  <div className="py-8 flex flex-col items-center justify-center gap-2 text-xs text-slate-400">
+                    <Loader2 className="w-5 h-5 animate-spin text-indigo-400" />
+                    <span>Loading proposed GL entry...</span>
                   </div>
                 ) : candidateJE ? (
                   <div className="space-y-2">

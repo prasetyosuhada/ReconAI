@@ -139,6 +139,16 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
     }
   }
 
+  const handleUnmatch = async (matchId: string) => {
+    if (!onRejectMatch) return
+    try {
+      await onRejectMatch(matchId)
+      showToast('✓ Transaction unmatched. BookkeepingAgent classified COA suggestion for Bank Only tab.')
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Failed to unmatch transaction.')
+    }
+  }
+
   // Toggle Outstanding state for Bank mutations or GL entries
   const toggleOutstandingTx = (txId: string) => {
     setOutstandingTxIds((prev) => {
@@ -752,6 +762,14 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                         </div>
                       </div>
 
+                      {/* Live Loading Feedback while BookkeepingAgent generates suggestion */}
+                      {actionLoading && (
+                        <div className="p-3 rounded-xl bg-purple-950/40 border border-purple-500/30 text-purple-200 text-xs flex items-center gap-2.5 animate-pulse">
+                          <Loader2 className="w-4 h-4 animate-spin text-purple-400 shrink-0" />
+                          <span>Unmatching transaction and invoking BookkeepingAgent to generate COA suggestions…</span>
+                        </div>
+                      )}
+
                       {/* Verification Confirmation & Action */}
                       <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
                         <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold">
@@ -767,11 +785,21 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                             <button
                               type="button"
                               disabled={actionLoading}
-                              onClick={() => onRejectMatch(selectedMatch.id)}
-                              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-rose-300 text-xs font-semibold transition-colors cursor-pointer"
-                              title="Undo match / Unmatch"
+                              onClick={() => handleUnmatch(selectedMatch.id)}
+                              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-slate-600 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
+                              title="Unmatch / Undo Match"
                             >
-                              <Undo2 className="w-3.5 h-3.5" />
+                              {actionLoading ? (
+                                <>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" />
+                                  <span className="text-[11px] text-purple-300">Unmatching…</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Undo2 className="w-3.5 h-3.5" />
+                                  <span className="text-[12px]">Unmatch</span>
+                                </>
+                              )}
                             </button>
                           )}
                         </div>
@@ -926,10 +954,17 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                         <button
                           type="button"
                           disabled={actionLoading}
-                          onClick={() => onRejectMatch?.(selectedMatch.id)}
-                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                          onClick={() => handleUnmatch(selectedMatch.id)}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-600 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
                         >
-                          Mark Unmatched
+                          {actionLoading ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" />
+                              <span className="text-[11px] text-purple-300">Unmatching…</span>
+                            </>
+                          ) : (
+                            'Mark Unmatched'
+                          )}
                         </button>
                         <button
                           type="button"
