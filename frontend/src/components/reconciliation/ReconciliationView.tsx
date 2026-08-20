@@ -180,7 +180,10 @@ export const ReconciliationView: React.FC = () => {
     const isMatched = match?.status === 'accepted' || match?.status === 'matched'
     const isProposed = match?.status === 'proposed'
     const isUnmatched =
-      !match || match.status === 'unmatched' || match.match_rule_type === 'unmatched'
+      !match ||
+      match.status === 'unmatched' ||
+      match.status === 'rejected' ||
+      match.match_rule_type === 'unmatched'
 
     if (activeFilter === 'matched' && !isMatched) return false
     if (activeFilter === 'needs_review' && !isProposed) return false
