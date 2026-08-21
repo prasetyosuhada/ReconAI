@@ -426,6 +426,9 @@ def stream_document_processing(
                         str(saved_journal_id) if saved_journal_id else None
                     ),
                     "review_item_created": review_item_created,
+                    "low_confidence_fields": final_state.get(
+                        "low_confidence_fields", []
+                    ),
                 },
                 confidence_score=final_confidence,
                 rationale=final_rationale,

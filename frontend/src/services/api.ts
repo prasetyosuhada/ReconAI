@@ -279,6 +279,8 @@ export interface AuditEventResponse {
   actor_type: string // agent, human, system
   actor_name: string
   confidence_score?: number
+  rationale?: string
+  human_action?: string
   input_snapshot?: Record<string, any>
   output_snapshot?: Record<string, any>
   created_at: string
