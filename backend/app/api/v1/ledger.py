@@ -22,7 +22,9 @@ from app.schemas.ledger import (
     TrialBalanceAccountBalance,
     TrialBalanceResponse,
 )
+from app.models.document import Document
 from app.services.accounting import post_journal_entry_to_ledger
+from app.services.audit_service import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +223,30 @@ def post_journal_entry(
         if post_res.posted_at
         else datetime.now(UTC)
     )
+
+    if entry.document_id:
+        doc = db.query(Document).filter(Document.id == entry.document_id).first()
+        if doc:
+            doc.status = "posted"
+
+    log_event(
+        db=db,
+        event_type="journal_entry_posted",
+        source_type="journal_entry",
+        source_id=entry.id,
+        actor_type="human",
+        actor_name="api_user",
+        input_snapshot={"journal_entry_id": str(entry.id)},
+        output_snapshot={
+            "status": "posted",
+            "journal_entry_id": str(entry.id),
+            "gl_period": entry.entry_date.strftime("%Y-%m") if entry.entry_date else None,
+            "document_id": str(entry.document_id) if entry.document_id else None,
+        },
+        rationale="Journal entry posted to general ledger.",
+        document_id=entry.document_id,
+    )
+    db.commit()
 
     return PostJournalEntryResponse(
         id=entry.id,

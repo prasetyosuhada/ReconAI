@@ -17,9 +17,10 @@ import { AuditEventInspectorModal } from './AuditEventInspectorModal'
 
 interface AuditTimelineProps {
   events: AuditEventResponse[]
+  highlightedEventId?: string | null
 }
 
-export const AuditTimeline: React.FC<AuditTimelineProps> = ({ events }) => {
+export const AuditTimeline: React.FC<AuditTimelineProps> = ({ events, highlightedEventId }) => {
   const [selectedEvent, setSelectedEvent] = useState<AuditEventResponse | null>(null)
   const [inspectorTab, setInspectorTab] = useState<'formatted' | 'raw'>('formatted')
 
@@ -116,15 +117,29 @@ export const AuditTimeline: React.FC<AuditTimelineProps> = ({ events }) => {
             ? Math.round(Number(evt.confidence_score) * 100)
             : null
 
+        const isHighlighted = highlightedEventId === evt.id
+
         return (
-          <div key={evt.id} className="relative group">
+          <div key={evt.id} id={`audit-event-${evt.id}`} className="relative group scroll-mt-24">
             {/* Timeline Dot Icon */}
-            <div className="absolute -left-[35px] top-1.5 p-2 rounded-full bg-slate-900 border border-slate-700 group-hover:border-indigo-500 transition-colors shadow-lg">
+            <div
+              className={`absolute -left-[35px] top-1.5 p-2 rounded-full bg-slate-900 border transition-all shadow-lg ${
+                isHighlighted
+                  ? 'border-indigo-400 bg-indigo-950/80 scale-110 shadow-indigo-500/30'
+                  : 'border-slate-700 group-hover:border-indigo-500'
+              }`}
+            >
               {getEventIcon(evt.event_type, evt.actor_type)}
             </div>
 
             {/* Event Content Card */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/70 border border-slate-800/90 hover:border-slate-700/80 transition-all space-y-3.5 shadow-md backdrop-blur-sm">
+            <div
+              className={`p-4 sm:p-5 rounded-2xl border transition-all space-y-3.5 shadow-md backdrop-blur-sm ${
+                isHighlighted
+                  ? 'bg-indigo-950/40 border-indigo-500/70 ring-2 ring-indigo-500/50 shadow-indigo-500/15'
+                  : 'bg-slate-900/70 border-slate-800/90 hover:border-slate-700/80'
+              }`}
+            >
               {/* Header row: Event Title + Two-Line Actor Badge + Timestamp */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2.5">

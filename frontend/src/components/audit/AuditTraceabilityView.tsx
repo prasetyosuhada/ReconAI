@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { AlertCircle, FileText, Filter, History, Loader2, RefreshCw, Search } from 'lucide-react'
 import { AuditTimeline } from './AuditTimeline'
+import { AuditStatusStrip } from './AuditStatusStrip'
 import type {
   AuditEventResponse,
   DocumentAuditTraceabilityResponse,
@@ -19,6 +20,7 @@ export const AuditTraceabilityView: React.FC = () => {
   const [allEvents, setAllEvents] = useState<AuditEventResponse[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+  const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null)
 
   const [actorFilter, setActorFilter] = useState<string>('')
   const [eventTypeFilter, setEventTypeFilter] = useState<string>('')
@@ -75,6 +77,17 @@ export const AuditTraceabilityView: React.FC = () => {
     return true
   })
 
+  const handleSelectTransitionEvent = (eventId: string) => {
+    setHighlightedEventId(eventId)
+    const el = document.getElementById(`audit-event-${eventId}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+    setTimeout(() => {
+      setHighlightedEventId((prev) => (prev === eventId ? null : prev))
+    }, 3000)
+  }
+
   return (
     <div className="space-y-6">
       {/* Header & Filter Controls Card */}
@@ -99,7 +112,7 @@ export const AuditTraceabilityView: React.FC = () => {
             type="button"
             onClick={loadAuditData}
             disabled={loading}
-            className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/60 text-slate-300 hover:text-white transition-all disabled:opacity-50"
+            className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/60 text-slate-300 hover:text-white transition-all disabled:opacity-50 cursor-pointer"
             title="Refresh audit timeline"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -191,6 +204,15 @@ export const AuditTraceabilityView: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Status Transition History Strip (§5.4) */}
+        {selectedDocId && displayedEvents.length > 0 && (
+          <AuditStatusStrip
+            events={displayedEvents}
+            onSelectEvent={handleSelectTransitionEvent}
+            activeEventId={highlightedEventId}
+          />
+        )}
       </div>
 
       {/* Main Timeline Card */}
@@ -216,7 +238,7 @@ export const AuditTraceabilityView: React.FC = () => {
             </p>
           </div>
         ) : (
-          <AuditTimeline events={filteredEvents} />
+          <AuditTimeline events={filteredEvents} highlightedEventId={highlightedEventId} />
         )}
       </div>
     </div>
