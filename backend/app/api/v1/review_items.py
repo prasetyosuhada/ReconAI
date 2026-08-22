@@ -739,6 +739,7 @@ def edit_review_item(
         input_snapshot={
             "edited_payload": req.edited_payload,
             "resolution_note": req.resolution_note,
+            "review_type": item.review_type,
         },
         output_snapshot={
             "status": "edited",

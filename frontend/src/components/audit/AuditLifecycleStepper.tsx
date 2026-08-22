@@ -1,10 +1,7 @@
-import React, { useState } from 'react'
+import React from 'react'
 import {
   ArrowLeftRight,
-  ChevronDown,
-  ChevronUp,
   Clock,
-  CornerDownRight,
   FileText,
   ShieldCheck,
   Sparkles,
@@ -14,19 +11,17 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import type { AuditEventResponse } from '../../services/api'
 
-export type StageStatus = 'completed' | 'failed' | 'in_progress' | 'skipped' | 'not_reached'
+export type StageStatus = 'completed' | 'needs_review' | 'failed' | 'skipped' | 'not_reached'
 
-export interface ReviewSubStep {
-  id: string
-  label: string
-  status: 'approved' | 'edited' | 'rejected' | 'pending'
+export interface ReviewedInfo {
+  reviewer: string
+  action: 'approved' | 'edited' | 'reviewed' | 'matched'
   timestamp: string
   eventId: string
-  actorName: string
 }
 
 export interface LifecycleStage {
-  key: 'upload' | 'intake' | 'bookkeeping' | 'review' | 'posted' | 'reconciliation'
+  key: 'upload' | 'intake' | 'bookkeeping' | 'posted' | 'reconciliation'
   label: string
   subtitle: string
   icon: LucideIcon
@@ -34,7 +29,7 @@ export interface LifecycleStage {
   durationText: string
   timestamp?: string
   eventId?: string
-  subSteps?: ReviewSubStep[]
+  reviewedInfo?: ReviewedInfo
 }
 
 function formatDuration(startIso?: string, endIso?: string): string {
@@ -55,122 +50,207 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   )
 
-  // Helper getters
+  // 1. Stage anchor events
   const uploadEvt = sorted.find((e) => e.event_type === 'document_uploaded')
   const intakeEvt = sorted.find((e) => e.event_type === 'extraction_completed')
-  const bookkeepingEvt = sorted.find((e) => e.event_type === 'bookkeeping_completed')
-  
-  const reviewEvts = sorted.filter((e) =>
-    e.event_type.startsWith('review_item_') ||
-    e.event_type === 'bookkeeping_continued_after_extraction_review'
+  const bookkeepingEvt = sorted.find(
+    (e) =>
+      e.event_type === 'bookkeeping_completed' ||
+      e.event_type === 'bookkeeping_continued_after_extraction_review'
   )
-
   const postedEvt = sorted.find((e) => e.event_type === 'journal_entry_posted')
-  const reconEvt = sorted.find((e) => e.event_type.startsWith('reconciliation_match_'))
+  const reconEvts = sorted.filter((e) => e.event_type.startsWith('reconciliation_match_'))
 
-  // 1. Stage 1: Upload
-  let uploadStatus: StageStatus = uploadEvt ? 'completed' : 'not_reached'
+  // Review events
+  const reviewEvts = sorted.filter(
+    (e) =>
+      e.event_type.startsWith('review_item_') ||
+      e.event_type === 'bookkeeping_continued_after_extraction_review'
+  )
 
-  // 2. Stage 2: Document Intake
+  const intakeTs = intakeEvt ? new Date(intakeEvt.created_at).getTime() : null
+  const bkTs = bookkeepingEvt ? new Date(bookkeepingEvt.created_at).getTime() : null
+
+  // Route review events to their owning stage
+  const getReviewStage = (
+    evt: AuditEventResponse
+  ): 'intake' | 'bookkeeping' | 'reconciliation' => {
+    const rType = evt.input_snapshot?.review_type
+    if (rType === 'extraction') return 'intake'
+    if (rType === 'bookkeeping') return 'bookkeeping'
+    if (rType === 'reconciliation') return 'reconciliation'
+
+    if (evt.event_type === 'bookkeeping_continued_after_extraction_review') return 'intake'
+    if (evt.source_type === 'document') return 'intake'
+    if (evt.source_type === 'journal_entry') return 'bookkeeping'
+    if (
+      evt.source_type === 'bank_transaction' ||
+      evt.source_type === 'reconciliation_match'
+    ) {
+      return 'reconciliation'
+    }
+
+    const t = new Date(evt.created_at).getTime()
+    if (bkTs !== null && t >= bkTs) return 'bookkeeping'
+    if (intakeTs !== null && t >= intakeTs) return 'intake'
+    return 'intake'
+  }
+
+  // --- 1. Stage: Upload ---
+  let uploadStatus: StageStatus = 'not_reached'
+  if (uploadEvt) {
+    const snap = uploadEvt.output_snapshot || {}
+    uploadStatus = snap.status === 'failed' ? 'failed' : 'completed'
+  }
+
+  // --- 2. Stage: Intake Agent ---
   let intakeStatus: StageStatus = 'not_reached'
+  let intakeReviewedInfo: ReviewedInfo | undefined = undefined
+  let intakeEventId = intakeEvt?.id
+  let intakeTimestamp = intakeEvt?.created_at
+
   if (intakeEvt) {
-    const snap = intakeEvt.output_snapshot || {}
-    intakeStatus = snap.status === 'failed' ? 'failed' : 'completed'
-  }
+    const intakeSnap = intakeEvt.output_snapshot || {}
+    const intakeReviews = reviewEvts.filter((e) => getReviewStage(e) === 'intake')
+    const hasIntakeReject = intakeReviews.some(
+      (e) => e.event_type === 'review_item_rejected'
+    )
+    const intakeResolveEvt = intakeReviews.find(
+      (e) =>
+        e.event_type === 'review_item_approved' ||
+        e.event_type === 'review_item_edited' ||
+        e.event_type === 'bookkeeping_continued_after_extraction_review'
+    )
 
-  // 3. Stage 3: AI Bookkeeping
-  let bkStatus: StageStatus = 'not_reached'
-  if (bookkeepingEvt) {
-    const snap = bookkeepingEvt.output_snapshot || {}
-    bkStatus =
-      snap.status === 'failed' || snap.decision === 'failed' ? 'failed' : 'completed'
-  }
-
-  // 4. Stage 4: Human Review (Sub-steps calculation)
-  const subSteps: ReviewSubStep[] = []
-  
-  // Extraction review sub-step
-  const extReview = reviewEvts.find(
-    (e) =>
-      e.source_type === 'document' ||
-      e.event_type === 'bookkeeping_continued_after_extraction_review' ||
-      (e.input_snapshot?.review_type === 'extraction')
-  )
-  if (extReview) {
-    let subStatus: 'approved' | 'edited' | 'rejected' | 'pending' = 'pending'
-    if (extReview.event_type === 'review_item_approved' || extReview.event_type === 'bookkeeping_continued_after_extraction_review') {
-      subStatus = 'approved'
-    } else if (extReview.event_type === 'review_item_edited') {
-      subStatus = 'edited'
-    } else if (extReview.event_type === 'review_item_rejected') {
-      subStatus = 'rejected'
-    }
-    subSteps.push({
-      id: `ext-${extReview.id}`,
-      label: 'Extraction Review',
-      status: subStatus,
-      timestamp: extReview.created_at,
-      eventId: extReview.id,
-      actorName: extReview.actor_name || 'Reviewer',
-    })
-  }
-
-  // Bookkeeping review sub-step
-  const bkReview = reviewEvts.find(
-    (e) =>
-      (e.source_type === 'journal_entry' && e.event_type.startsWith('review_item_')) ||
-      (e.input_snapshot?.review_type === 'bookkeeping') ||
-      (e.source_type === 'review_item' && e.id !== extReview?.id) ||
-      (e.source_type === 'review_item' && e.id !== extReview?.id)
-  )
-  if (bkReview && bkReview.id !== extReview?.id) {
-    let subStatus: 'approved' | 'edited' | 'rejected' | 'pending' = 'pending'
-    if (bkReview.event_type === 'review_item_approved') {
-      subStatus = 'approved'
-    } else if (bkReview.event_type === 'review_item_edited') {
-      subStatus = 'edited'
-    } else if (bkReview.event_type === 'review_item_rejected') {
-      subStatus = 'rejected'
-    }
-    subSteps.push({
-      id: `bk-${bkReview.id}`,
-      label: 'Bookkeeping Review',
-      status: subStatus,
-      timestamp: bkReview.created_at,
-      eventId: bkReview.id,
-      actorName: bkReview.actor_name || 'Reviewer',
-    })
-  }
-
-  let reviewStatus: StageStatus = 'not_reached'
-  if (subSteps.length > 0) {
-    if (subSteps.some((s) => s.status === 'rejected')) {
-      reviewStatus = 'failed'
-    } else if (subSteps.every((s) => s.status === 'approved' || s.status === 'edited')) {
-      reviewStatus = 'completed'
+    if (intakeSnap.status === 'failed' || hasIntakeReject) {
+      intakeStatus = 'failed'
     } else {
-      reviewStatus = 'in_progress'
+      const extractionFlagged =
+        intakeSnap.status === 'extraction_review_required' ||
+        (intakeSnap.needs_review === true && !bookkeepingEvt)
+
+      if (extractionFlagged && !intakeResolveEvt) {
+        intakeStatus = 'needs_review'
+      } else {
+        intakeStatus = 'completed'
+      }
+    }
+
+    if (intakeResolveEvt) {
+      intakeReviewedInfo = {
+        reviewer: intakeResolveEvt.actor_name || 'Human Reviewer',
+        action:
+          intakeResolveEvt.event_type === 'review_item_edited'
+            ? 'edited'
+            : 'approved',
+        timestamp: intakeResolveEvt.created_at,
+        eventId: intakeResolveEvt.id,
+      }
+      intakeTimestamp = intakeResolveEvt.created_at
     }
   }
 
-  // 5. Stage 5: GL Posted
+  // --- 3. Stage: Bookkeeping Agent ---
+  let bkStatus: StageStatus = 'not_reached'
+  let bkReviewedInfo: ReviewedInfo | undefined = undefined
+  let bkEventId = bookkeepingEvt?.id
+  let bkTimestamp = bookkeepingEvt?.created_at
+
+  if (bookkeepingEvt) {
+    const bkSnap = bookkeepingEvt.output_snapshot || {}
+    const bkReviews = reviewEvts.filter((e) => getReviewStage(e) === 'bookkeeping')
+    const hasBkReject = bkReviews.some(
+      (e) => e.event_type === 'review_item_rejected'
+    )
+    const bkResolveEvt = bkReviews.find(
+      (e) =>
+        e.event_type === 'review_item_approved' ||
+        e.event_type === 'review_item_edited'
+    )
+
+    if (
+      bkSnap.status === 'failed' ||
+      bkSnap.decision === 'failed' ||
+      hasBkReject
+    ) {
+      bkStatus = 'failed'
+    } else {
+      const intakeSnap = intakeEvt?.output_snapshot || {}
+      const bkFlagged =
+        bkSnap.needs_review === true ||
+        bkSnap.status === 'bookkeeping_review_required' ||
+        intakeSnap.status === 'bookkeeping_review_required'
+
+      if (bkFlagged && !bkResolveEvt) {
+        bkStatus = 'needs_review'
+      } else {
+        bkStatus = 'completed'
+      }
+    }
+
+    if (bkResolveEvt) {
+      bkReviewedInfo = {
+        reviewer: bkResolveEvt.actor_name || 'Human Reviewer',
+        action:
+          bkResolveEvt.event_type === 'review_item_edited'
+            ? 'edited'
+            : 'approved',
+        timestamp: bkResolveEvt.created_at,
+        eventId: bkResolveEvt.id,
+      }
+      bkTimestamp = bkResolveEvt.created_at
+    }
+  }
+
+  // --- 4. Stage: GL Posted ---
   let postedStatus: StageStatus = 'not_reached'
   if (postedEvt) {
-    postedStatus = 'completed'
+    const snap = postedEvt.output_snapshot || {}
+    postedStatus = snap.status === 'failed' ? 'failed' : 'completed'
   }
 
-  // 6. Stage 6: Bank Reconciliation
+  // --- 5. Stage: Reconciliation Agent ---
   let reconStatus: StageStatus = 'not_reached'
-  if (reconEvt) {
-    if (reconEvt.event_type === 'reconciliation_match_rejected') {
-      reconStatus = 'failed'
-    } else if (
-      reconEvt.event_type === 'reconciliation_match_accepted' ||
-      reconEvt.event_type === 'reconciliation_match_manual'
-    ) {
+  let reconReviewedInfo: ReviewedInfo | undefined = undefined
+  let reconEventId = reconEvts[reconEvts.length - 1]?.id
+  let reconTimestamp = reconEvts[reconEvts.length - 1]?.created_at
+
+  if (reconEvts.length > 0) {
+    const reconAccepted = reconEvts.find(
+      (e) =>
+        e.event_type === 'reconciliation_match_accepted' ||
+        e.event_type === 'reconciliation_match_manual'
+    )
+    const reconProposed = reconEvts.find(
+      (e) => e.event_type === 'reconciliation_match_proposed'
+    )
+    const reconRejected = reconEvts.find(
+      (e) => e.event_type === 'reconciliation_match_rejected'
+    )
+
+    if (reconAccepted) {
       reconStatus = 'completed'
-    } else {
-      reconStatus = 'in_progress'
+      reconEventId = reconAccepted.id
+      reconTimestamp = reconAccepted.created_at
+      if (
+        reconAccepted.actor_type === 'human' ||
+        reconAccepted.event_type === 'reconciliation_match_manual'
+      ) {
+        reconReviewedInfo = {
+          reviewer: reconAccepted.actor_name || 'Human Reviewer',
+          action: 'matched',
+          timestamp: reconAccepted.created_at,
+          eventId: reconAccepted.id,
+        }
+      }
+    } else if (reconRejected) {
+      reconStatus = 'failed'
+      reconEventId = reconRejected.id
+      reconTimestamp = reconRejected.created_at
+    } else if (reconProposed) {
+      reconStatus = 'needs_review'
+      reconEventId = reconProposed.id
+      reconTimestamp = reconProposed.created_at
     }
   }
 
@@ -182,7 +262,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     status: StageStatus
     timestamp?: string
     eventId?: string
-    subSteps?: ReviewSubStep[]
+    reviewedInfo?: ReviewedInfo
   }[] = [
     {
       key: 'upload',
@@ -195,31 +275,23 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     },
     {
       key: 'intake',
-      label: 'Document Intake',
-      subtitle: 'OCR & Entities',
+      label: 'Intake Agent',
+      subtitle: 'OCR & Extraction',
       icon: FileText,
       status: intakeStatus,
-      timestamp: intakeEvt?.created_at,
-      eventId: intakeEvt?.id,
+      timestamp: intakeTimestamp,
+      eventId: intakeEventId,
+      reviewedInfo: intakeReviewedInfo,
     },
     {
       key: 'bookkeeping',
-      label: 'AI Bookkeeping',
+      label: 'Bookkeeping Agent',
       subtitle: 'COA Proposal',
       icon: Sparkles,
       status: bkStatus,
-      timestamp: bookkeepingEvt?.created_at,
-      eventId: bookkeepingEvt?.id,
-    },
-    {
-      key: 'review',
-      label: 'Human Review',
-      subtitle: subSteps.length > 0 ? `${subSteps.length} Touchpoint(s)` : 'Zero Review',
-      icon: UserCheck,
-      status: reviewStatus,
-      timestamp: subSteps[subSteps.length - 1]?.timestamp,
-      eventId: subSteps[subSteps.length - 1]?.eventId,
-      subSteps: subSteps.length > 0 ? subSteps : undefined,
+      timestamp: bkTimestamp,
+      eventId: bkEventId,
+      reviewedInfo: bkReviewedInfo,
     },
     {
       key: 'posted',
@@ -232,16 +304,17 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     },
     {
       key: 'reconciliation',
-      label: 'Bank Reconciliation',
+      label: 'Reconciliation Agent',
       subtitle: 'Match & Verify',
       icon: ArrowLeftRight,
       status: reconStatus,
-      timestamp: reconEvt?.created_at,
-      eventId: reconEvt?.id,
+      timestamp: reconTimestamp,
+      eventId: reconEventId,
+      reviewedInfo: reconReviewedInfo,
     },
   ]
 
-  // Apply skipped vs not_reached logic & failure propagation
+  // Pipeline failure propagation & skipped detection
   let hasFailedPrior = false
 
   for (let i = 0; i < rawStages.length; i++) {
@@ -258,12 +331,16 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     }
 
     if (current.status === 'not_reached') {
-      // If any stage after this one has a completed/failed/in_progress event, mark as skipped
-      const hasLaterEvents = rawStages
+      const hasLaterActiveEvents = rawStages
         .slice(i + 1)
-        .some((s) => s.status === 'completed' || s.status === 'failed' || s.status === 'in_progress')
+        .some(
+          (s) =>
+            s.status === 'completed' ||
+            s.status === 'failed' ||
+            s.status === 'needs_review'
+        )
 
-      if (hasLaterEvents) {
+      if (hasLaterActiveEvents) {
         current.status = 'skipped'
       }
     }
@@ -277,11 +354,19 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     const stage = rawStages[i]
     let durationText = '—'
 
-    if (stage.status === 'completed' || stage.status === 'failed' || stage.status === 'in_progress') {
+    if (
+      stage.status === 'completed' ||
+      stage.status === 'failed' ||
+      stage.status === 'needs_review'
+    ) {
       if (i === 0) {
         durationText = '0s'
       } else if (stage.timestamp) {
-        durationText = formatDuration(previousTimestamp, stage.timestamp)
+        if (previousTimestamp) {
+          durationText = formatDuration(previousTimestamp, stage.timestamp)
+        } else if (uploadEvt?.created_at) {
+          durationText = formatDuration(uploadEvt.created_at, stage.timestamp)
+        }
       }
       if (stage.timestamp) {
         previousTimestamp = stage.timestamp
@@ -308,7 +393,6 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
   onSelectEvent,
   activeEventId,
 }) => {
-  const [expandedReview, setExpandedReview] = useState<boolean>(false)
   const stages = deriveLifecycleStages(events)
 
   if (stages.length === 0 || events.length === 0) return null
@@ -317,33 +401,43 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
     switch (status) {
       case 'completed':
         return {
-          container: 'bg-emerald-950/30 border-emerald-500/40 text-slate-100 hover:bg-emerald-950/50 shadow-emerald-500/10 cursor-pointer',
-          iconWrap: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40',
-          badge: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+          container:
+            'bg-emerald-950/30 border-emerald-500/40 text-slate-100 hover:bg-emerald-950/50 shadow-emerald-500/10 cursor-pointer',
+          iconWrap:
+            'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40',
+          badge:
+            'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono',
           badgeText: 'Completed',
           connector: 'bg-emerald-500/60',
         }
+      case 'needs_review':
+        return {
+          container:
+            'bg-amber-950/30 border-amber-500/60 text-slate-100 hover:bg-amber-950/50 shadow-amber-500/15 ring-1 ring-amber-500/40 cursor-pointer',
+          iconWrap:
+            'bg-amber-500/20 text-amber-400 border border-amber-500/40',
+          badge:
+            'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono',
+          badgeText: 'Needs Review',
+          connector: 'bg-amber-500/40',
+        }
       case 'failed':
         return {
-          container: 'bg-rose-950/30 border-rose-500/40 text-slate-100 hover:bg-rose-950/50 shadow-rose-500/10 cursor-pointer',
+          container:
+            'bg-rose-950/30 border-rose-500/40 text-slate-100 hover:bg-rose-950/50 shadow-rose-500/10 cursor-pointer',
           iconWrap: 'bg-rose-500/20 text-rose-400 border border-rose-500/40',
-          badge: 'bg-rose-500/20 text-rose-300 border border-rose-500/30',
+          badge:
+            'bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono',
           badgeText: 'Failed',
           connector: 'bg-rose-500/40',
         }
-      case 'in_progress':
-        return {
-          container: 'bg-amber-950/30 border-amber-500/40 text-slate-100 hover:bg-amber-950/50 shadow-amber-500/10 cursor-pointer',
-          iconWrap: 'bg-amber-500/20 text-amber-400 border border-amber-500/40',
-          badge: 'bg-amber-500/20 text-amber-300 border border-amber-500/30',
-          badgeText: 'In Progress',
-          connector: 'bg-amber-500/40',
-        }
       case 'skipped':
         return {
-          container: 'bg-slate-900/40 border-slate-700/60 border-dashed text-slate-400 opacity-75',
+          container:
+            'bg-slate-900/40 border-slate-700/60 border-dashed text-slate-400 opacity-75',
           iconWrap: 'bg-slate-800/80 text-slate-400 border border-slate-700',
-          badge: 'bg-slate-800/80 text-slate-400 border border-slate-700 border-dashed',
+          badge:
+            'bg-slate-800/80 text-slate-400 border border-slate-700 border-dashed font-mono',
           badgeText: 'Skipped',
           connector: 'bg-slate-700/60 border-dashed',
         }
@@ -351,7 +445,8 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
         return {
           container: 'bg-slate-950/40 border-slate-800 text-slate-500 opacity-50',
           iconWrap: 'bg-slate-900 text-slate-600 border border-slate-800',
-          badge: 'bg-slate-900 text-slate-500 border border-slate-800',
+          badge:
+            'bg-slate-900 text-slate-500 border border-slate-800 font-mono',
           badgeText: 'Not Reached',
           connector: 'bg-slate-800',
         }
@@ -368,24 +463,23 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
           </h3>
         </div>
         <span className="text-[10px] text-slate-400 font-mono">
-          Stage Duration & Traceability
+          5-Stage Agent Traceability
         </span>
       </div>
 
-      {/* 6-Stage Horizontal Stepper Container */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+      {/* 5-Stage Horizontal Stepper Container */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         {stages.map((stage, idx) => {
           const style = getStageStyles(stage.status)
           const Icon = stage.icon
-          const hasReviewSubsteps = stage.key === 'review' && stage.subSteps && stage.subSteps.length > 0
           const isSelected = activeEventId === stage.eventId
 
           return (
             <div
               key={stage.key}
-              className={`relative p-3 rounded-xl border flex flex-col justify-between transition-all select-none ${style.container} ${
-                isSelected ? 'ring-2 ring-indigo-500 scale-[1.02]' : ''
-              }`}
+              className={`relative p-3.5 rounded-xl border flex flex-col justify-between transition-all select-none ${
+                style.container
+              } ${isSelected ? 'ring-2 ring-indigo-500 scale-[1.02]' : ''}`}
               onClick={() => {
                 if (stage.eventId && onSelectEvent) {
                   onSelectEvent(stage.eventId)
@@ -395,16 +489,24 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
               {/* Top Row: Icon + Status Badge */}
               <div className="flex items-center justify-between gap-1.5 mb-2">
                 <div className={`p-1.5 rounded-lg shrink-0 ${style.iconWrap}`}>
-                  <Icon className="w-3.5 h-3.5" />
+                  <Icon className="w-4 h-4" />
                 </div>
 
-                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider font-mono shrink-0 ${style.badge}`}>
+                <span
+                  className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider shrink-0 flex items-center gap-1 ${style.badge}`}
+                >
+                  {stage.status === 'needs_review' && (
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
+                    </span>
+                  )}
                   {style.badgeText}
                 </span>
               </div>
 
-              {/* Middle: Stage Number + Name */}
-              <div className="space-y-0.5">
+              {/* Middle: Stage Number + Name + Subtitle */}
+              <div className="space-y-1">
                 <span className="text-[10px] font-mono font-bold text-slate-400 block">
                   0{idx + 1}.
                 </span>
@@ -414,90 +516,48 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
                 <p className="text-[10px] text-slate-400 truncate">
                   {stage.subtitle}
                 </p>
+
+                {/* Step 3: Reviewed Indicator Badge */}
+                {stage.reviewedInfo && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (stage.reviewedInfo?.eventId && onSelectEvent) {
+                        onSelectEvent(stage.reviewedInfo.eventId)
+                      }
+                    }}
+                    className="mt-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-500/30 hover:border-indigo-400 transition-all cursor-pointer shadow-sm w-fit"
+                    title={`Reviewed by ${stage.reviewedInfo.reviewer} (${stage.reviewedInfo.action}) at ${new Date(
+                      stage.reviewedInfo.timestamp
+                    ).toLocaleTimeString()}`}
+                  >
+                    <UserCheck className="w-2.5 h-2.5 text-indigo-400 shrink-0" />
+                    <span>Reviewed</span>
+                    <span className="text-slate-400 font-normal truncate max-w-[65px]">
+                      • {stage.reviewedInfo.reviewer}
+                    </span>
+                  </button>
+                )}
               </div>
 
-              {/* Bottom: Duration & Expand trigger if review */}
+              {/* Bottom: Duration & Hint */}
               <div className="pt-2 mt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono">
                 <span className="text-slate-400 flex items-center gap-1">
                   <Clock className="w-2.5 h-2.5 text-slate-500" />
                   {stage.durationText}
                 </span>
 
-                {hasReviewSubsteps && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setExpandedReview(!expandedReview)
-                    }}
-                    className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 transition-colors flex items-center gap-0.5 text-[9px] cursor-pointer"
-                    title="Toggle review sub-steps"
-                  >
-                    <span>Sub-steps</span>
-                    {expandedReview ? (
-                      <ChevronUp className="w-2.5 h-2.5" />
-                    ) : (
-                      <ChevronDown className="w-2.5 h-2.5" />
-                    )}
-                  </button>
+                {stage.status === 'needs_review' && (
+                  <span className="text-[9px] font-semibold text-amber-400 animate-pulse">
+                    Action Required
+                  </span>
                 )}
               </div>
             </div>
           )
         })}
       </div>
-
-      {/* Expandable Human Review Sub-steps Panel */}
-      {expandedReview && stages.find((s) => s.key === 'review')?.subSteps && (
-        <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2 animate-fade-in">
-          <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block font-mono">
-            Human Review Touchpoints Detail:
-          </span>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {stages
-              .find((s) => s.key === 'review')
-              ?.subSteps?.map((sub) => {
-                const isSubSelected = activeEventId === sub.eventId
-                return (
-                  <button
-                    key={sub.id}
-                    type="button"
-                    onClick={() => onSelectEvent?.(sub.eventId)}
-                    className={`p-2.5 rounded-lg border flex items-center justify-between text-left transition-all cursor-pointer ${
-                      sub.status === 'rejected'
-                        ? 'bg-rose-500/10 border-rose-500/30 hover:bg-rose-500/20'
-                        : 'bg-slate-900 border-slate-800 hover:bg-slate-800/80 hover:border-slate-700'
-                    } ${isSubSelected ? 'ring-2 ring-indigo-500' : ''}`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <CornerDownRight className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                      <div className="min-w-0">
-                        <span className="text-xs font-semibold text-slate-200 block truncate">
-                          {sub.label}
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-mono block">
-                          by {sub.actorName} • {new Date(sub.timestamp).toLocaleTimeString()}
-                        </span>
-                      </div>
-                    </div>
-
-                    <span
-                      className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase font-mono tracking-wider shrink-0 ${
-                        sub.status === 'rejected'
-                          ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                          : sub.status === 'edited'
-                            ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                      }`}
-                    >
-                      {sub.status}
-                    </span>
-                  </button>
-                )
-              })}
-          </div>
-        </div>
-      )}
     </div>
   )
 }
