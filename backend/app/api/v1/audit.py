@@ -61,7 +61,17 @@ def get_document_audit_log(
     je_uuids = [je.id for je in jes]
 
     # Query audit events related to document or its journal entries
-    conditions = [AuditEvent.source_id == doc_uuid]
+    # Matches any of:
+    # 1. source_id == document_id (e.g. document_uploaded, extraction_completed)
+    # 2. source_id IN (journal_entry_ids for this document) (e.g. bookkeeping_completed, journal_entry_posted)
+    # 3. input_snapshot->>'document_id' == document_id (e.g. review_item_approved/edited/rejected, reconciliation_match_*)
+    # 4. output_snapshot->>'document_id' == document_id
+    doc_id_str = str(doc_uuid)
+    conditions = [
+        AuditEvent.source_id == doc_uuid,
+        AuditEvent.input_snapshot["document_id"].astext == doc_id_str,
+        AuditEvent.output_snapshot["document_id"].astext == doc_id_str,
+    ]
     if je_uuids:
         conditions.append(AuditEvent.source_id.in_(je_uuids))
 

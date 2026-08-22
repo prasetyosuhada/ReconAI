@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { AlertCircle, FileText, Filter, History, Loader2, RefreshCw, Search } from 'lucide-react'
 import { AuditTimeline } from './AuditTimeline'
 import { AuditStatusStrip } from './AuditStatusStrip'
+import { AuditLifecycleStepper } from './AuditLifecycleStepper'
 import type {
   AuditEventResponse,
   DocumentAuditTraceabilityResponse,
@@ -203,6 +204,15 @@ export const AuditTraceabilityView: React.FC = () => {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Accounting Pipeline Lifecycle Stepper (§5.1) */}
+        {selectedDocId && displayedEvents.length > 0 && (
+          <AuditLifecycleStepper
+            events={displayedEvents}
+            onSelectEvent={handleSelectTransitionEvent}
+            activeEventId={highlightedEventId}
+          />
         )}
 
         {/* Status Transition History Strip (§5.4) */}

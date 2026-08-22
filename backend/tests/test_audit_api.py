@@ -1,7 +1,9 @@
 import uuid
+from datetime import date
 
 from app.models.audit import AuditEvent
 from app.models.document import Document
+from app.models.journal import JournalEntry
 
 
 def test_get_document_audit_log_not_found(client):
@@ -52,6 +54,98 @@ def test_get_document_audit_log_success(client, db_session):
     assert len(data["timeline"]) == 2
     assert data["timeline"][0]["event_type"] == "document_uploaded"
     assert data["timeline"][1]["event_type"] == "extraction_completed"
+
+
+def test_get_document_audit_log_includes_snapshot_document_id(client, db_session):
+    """Verify audit-log endpoint includes review_item and reconciliation events via snapshot document_id."""
+    doc_id = uuid.uuid4()
+    doc_str = str(doc_id)
+    doc = Document(
+        id=doc_id,
+        original_filename="invoice_05_starbucks_meeting.pdf",
+        stored_file_path="/storage/uploads/invoice_05_starbucks_meeting.pdf",
+        mime_type="application/pdf",
+        file_size_bytes=2048,
+        status="posted",
+    )
+
+    je_id = uuid.uuid4()
+    je = JournalEntry(
+        id=je_id,
+        document_id=doc_id,
+        entry_date=date.today(),
+        description="Starbucks meeting expense",
+        status="posted",
+    )
+
+    # 1. Document event (source_id == doc_id)
+    evt_upload = AuditEvent(
+        id=uuid.uuid4(),
+        event_type="document_uploaded",
+        source_type="document",
+        source_id=doc_id,
+        actor_type="human",
+        actor_name="Accountant",
+    )
+    # 2. Journal Entry event (source_id == je_id)
+    evt_je_posted = AuditEvent(
+        id=uuid.uuid4(),
+        event_type="journal_entry_posted",
+        source_type="journal_entry",
+        source_id=je_id,
+        actor_type="human",
+        actor_name="Accountant",
+    )
+    # 3. Review item event (source_id == review_item_id, document_id in input_snapshot)
+    review_item_id = uuid.uuid4()
+    evt_review = AuditEvent(
+        id=uuid.uuid4(),
+        event_type="review_item_approved",
+        source_type="review_item",
+        source_id=review_item_id,
+        actor_type="human",
+        actor_name="Reviewer",
+        human_action="approved",
+        input_snapshot={"document_id": doc_str, "review_item_id": str(review_item_id)},
+    )
+    # 4. Reconciliation match event (source_id == match_id, document_id in output_snapshot)
+    match_id = uuid.uuid4()
+    evt_recon = AuditEvent(
+        id=uuid.uuid4(),
+        event_type="reconciliation_match_accepted",
+        source_type="reconciliation_match",
+        source_id=match_id,
+        actor_type="human",
+        actor_name="Auditor",
+        human_action="accepted",
+        output_snapshot={"document_id": doc_str, "match_id": str(match_id)},
+    )
+    # 5. Unrelated document event (different document_id)
+    unrelated_doc_id = uuid.uuid4()
+    evt_unrelated = AuditEvent(
+        id=uuid.uuid4(),
+        event_type="review_item_approved",
+        source_type="review_item",
+        source_id=uuid.uuid4(),
+        actor_type="human",
+        actor_name="Other",
+        input_snapshot={"document_id": str(unrelated_doc_id)},
+    )
+
+    db_session.add_all([doc, je, evt_upload, evt_je_posted, evt_review, evt_recon, evt_unrelated])
+    db_session.commit()
+
+    response = client.get(f"/api/v1/audit-log/{doc_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["document_id"] == doc_str
+
+    event_types = [e["event_type"] for e in data["timeline"]]
+    assert len(event_types) == 4
+    assert "document_uploaded" in event_types
+    assert "journal_entry_posted" in event_types
+    assert "review_item_approved" in event_types
+    assert "reconciliation_match_accepted" in event_types
 
 
 def test_list_audit_events(client, db_session):

@@ -176,14 +176,24 @@ def test_approve_review_item_success(client, db_session):
     assert data["status"] == "approved"
     assert data["next_workflow_status"] == "posted"
 
-    # Verify JournalEntry is posted
+    # Verify JournalEntry is posted and document is posted
     db_session.refresh(je)
+    db_session.refresh(doc)
     assert je.status == "posted"
+    assert doc.status == "posted"
 
-    # Verify AuditEvent created
+    # Verify AuditEvents created
     audit = db_session.query(AuditEvent).filter(AuditEvent.source_id == item_id).first()
     assert audit is not None
     assert audit.event_type == "review_item_approved"
+
+    posted_audit = db_session.query(AuditEvent).filter(
+        AuditEvent.source_id == je.id,
+        AuditEvent.event_type == "journal_entry_posted",
+    ).first()
+    assert posted_audit is not None
+    assert posted_audit.output_snapshot["status"] == "posted"
+    assert posted_audit.output_snapshot["document_id"] == str(doc_id)
 
 
 def test_edit_review_item_success(client, db_session):
@@ -248,8 +258,19 @@ def test_edit_review_item_success(client, db_session):
 
     # Verify lines replaced and entry posted
     db_session.refresh(je)
+    db_session.refresh(doc)
     assert je.status == "posted"
+    assert doc.status == "posted"
     assert len(je.lines) == 2
+
+    # Verify journal_entry_posted audit event created
+    posted_audit = db_session.query(AuditEvent).filter(
+        AuditEvent.source_id == je.id,
+        AuditEvent.event_type == "journal_entry_posted",
+    ).first()
+    assert posted_audit is not None
+    assert posted_audit.output_snapshot["status"] == "posted"
+    assert posted_audit.output_snapshot["document_id"] == str(doc_id)
 
 
 @patch("app.api.v1.review_items.bookkeeping_node")

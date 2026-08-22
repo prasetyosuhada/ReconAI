@@ -481,6 +481,23 @@ def approve_review_item(
                 next_workflow_status = "posted"
                 if doc:
                     doc.status = "posted"
+                log_event(
+                    db=db,
+                    event_type="journal_entry_posted",
+                    source_type="journal_entry",
+                    source_id=je.id,
+                    actor_type="human",
+                    actor_name="human_user",
+                    input_snapshot={"triggered_by": "review_item_approved"},
+                    output_snapshot={
+                        "status": "posted",
+                        "journal_entry_id": str(je.id),
+                        "gl_period": je.entry_date.strftime("%Y-%m") if je.entry_date else None,
+                        "document_id": str(item.source_id),
+                    },
+                    rationale="Journal entry posted automatically after bookkeeping review approval.",
+                    document_id=item.source_id,
+                )
             elif doc:
                 doc.status = "approved"
                 next_workflow_status = "approved"
@@ -497,6 +514,28 @@ def approve_review_item(
                     detail=f"Posting failed: {'; '.join(post_res.errors)}",
                 )
             next_workflow_status = "posted"
+            _je_doc_id = getattr(je, "document_id", None)
+            if _je_doc_id:
+                doc = db.query(Document).filter(Document.id == _je_doc_id).first()
+                if doc:
+                    doc.status = "posted"
+            log_event(
+                db=db,
+                event_type="journal_entry_posted",
+                source_type="journal_entry",
+                source_id=je.id,
+                actor_type="human",
+                actor_name="human_user",
+                input_snapshot={"triggered_by": "review_item_approved"},
+                output_snapshot={
+                    "status": "posted",
+                    "journal_entry_id": str(je.id),
+                    "gl_period": je.entry_date.strftime("%Y-%m") if je.entry_date else None,
+                    "document_id": str(_je_doc_id) if _je_doc_id else None,
+                },
+                rationale="Journal entry posted automatically after bookkeeping review approval.",
+                document_id=_je_doc_id,
+            )
 
     elif item.source_type == "bank_transaction":
         from app.models.reconciliation import BankTransaction, ReconciliationMatch
@@ -535,7 +574,7 @@ def approve_review_item(
         actor_type="human",
         actor_name="human_user",
         human_action="approved",
-        input_snapshot={"resolution_note": resolution_note},
+        input_snapshot={"resolution_note": resolution_note, "review_type": item.review_type},
         output_snapshot={
             "status": "approved",
             "next_workflow_status": next_workflow_status,
@@ -656,6 +695,28 @@ def edit_review_item(
                 detail=f"Posting failed: {'; '.join(post_res.errors)}",
             )
         next_workflow_status = "posted"
+        _edit_je_doc_id = getattr(je, "document_id", None)
+        if _edit_je_doc_id:
+            doc = db.query(Document).filter(Document.id == _edit_je_doc_id).first()
+            if doc:
+                doc.status = "posted"
+        log_event(
+            db=db,
+            event_type="journal_entry_posted",
+            source_type="journal_entry",
+            source_id=je.id,
+            actor_type="human",
+            actor_name="human_user",
+            input_snapshot={"triggered_by": "review_item_edited"},
+            output_snapshot={
+                "status": "posted",
+                "journal_entry_id": str(je.id),
+                "gl_period": je.entry_date.strftime("%Y-%m") if je.entry_date else None,
+                "document_id": str(_edit_je_doc_id) if _edit_je_doc_id else None,
+            },
+            rationale="Journal entry posted automatically after bookkeeping review edit and approval.",
+            document_id=_edit_je_doc_id,
+        )
 
     # Resolve document_id if available
     doc_id_to_pass = None
@@ -789,7 +850,7 @@ def reject_review_item(
         actor_type="human",
         actor_name="human_user",
         human_action="rejected",
-        input_snapshot={"resolution_note": resolution_note},
+        input_snapshot={"resolution_note": resolution_note, "review_type": item.review_type},
         output_snapshot={"status": "rejected"},
         document_id=doc_id_to_pass,
     )
