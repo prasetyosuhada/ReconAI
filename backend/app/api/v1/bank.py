@@ -16,7 +16,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import func
+from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -252,6 +252,96 @@ def list_bank_statement_imports(
     )
 
     return BankStatementImportListResponse(
+        items=items,
+        total=total_count,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/transactions",
+    response_model=BankTransactionListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List all bank transactions with search",
+)
+@bank_router.get(
+    "/transactions",
+    response_model=BankTransactionListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List all bank transactions with search",
+)
+def list_all_bank_transactions(
+    search: str | None = Query(
+        None, description="Search description, reference number, #TX-ID, or amount"
+    ),
+    status_filter: str | None = Query(
+        None,
+        alias="status",
+        description="Filter by transaction status (imported, matched, unmatched)",
+    ),
+    bank_statement_import_id: str | None = Query(
+        None, description="Filter by bank statement import UUID"
+    ),
+    limit: int = Query(50, ge=1, le=250, description="Pagination limit"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    db: Session = Depends(get_db),
+) -> BankTransactionListResponse:
+    """Fetch paginated bank transactions across all imports with optional search."""
+    query = db.query(BankTransaction)
+
+    if bank_statement_import_id:
+        try:
+            imp_uuid = uuid.UUID(bank_statement_import_id)
+            query = query.filter(BankTransaction.bank_statement_import_id == imp_uuid)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid bank_statement_import_id UUID format.",
+            ) from None
+
+    if status_filter:
+        query = query.filter(BankTransaction.status == status_filter)
+
+    if search and search.strip():
+        s_clean = search.strip()
+        term = f"%{s_clean}%"
+        search_conds = [
+            BankTransaction.description.ilike(term),
+            BankTransaction.reference_number.ilike(term),
+        ]
+        # Match TX ID or prefix like #TX-1234abcd
+        id_part = (
+            s_clean.replace("#TX-", "")
+            .replace("TX-", "")
+            .replace("#", "")
+            .strip()
+        )
+        if id_part:
+            search_conds.append(cast(BankTransaction.id, String).ilike(f"%{id_part}%"))
+
+        # Check numeric amount match
+        amt_str = s_clean.replace(",", "").replace(".", "")
+        if amt_str.replace("-", "").isdigit():
+            try:
+                amt_val = float(s_clean.replace(",", ""))
+                search_conds.append(BankTransaction.amount == amt_val)
+            except ValueError:
+                pass
+
+        query = query.filter(or_(*search_conds))
+
+    total_count = query.with_entities(func.count(BankTransaction.id)).scalar() or 0
+    items = (
+        query.order_by(
+            BankTransaction.transaction_date.desc(), BankTransaction.created_at.desc()
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    return BankTransactionListResponse(
         items=items,
         total=total_count,
         limit=limit,

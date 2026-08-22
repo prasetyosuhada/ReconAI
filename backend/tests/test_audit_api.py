@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 from app.models.audit import AuditEvent
 from app.models.document import Document
@@ -187,3 +187,67 @@ def test_get_audit_event_detail(client, db_session):
     assert data["id"] == str(event_id)
     assert data["event_type"] == "journal_entry_posted"
     assert data["input_snapshot"]["posted_by"] == "api_user"
+
+
+def test_list_audit_events_with_search_and_date_filters(client, db_session):
+    now = datetime.now()
+    audit = AuditEvent(
+        id=uuid.uuid4(),
+        event_type="extraction_completed",
+        source_type="document",
+        source_id=uuid.uuid4(),
+        actor_type="agent",
+        actor_name="IntakeAgentSpecial",
+        rationale="Extracted invoice with high precision",
+        created_at=now,
+    )
+    db_session.add(audit)
+    db_session.commit()
+
+    # Search by actor_name
+    res = client.get("/api/v1/audit-events?search=IntakeAgentSpecial")
+    assert res.status_code == 200
+    assert any(i["actor_name"] == "IntakeAgentSpecial" for i in res.json()["items"])
+
+    # Search by rationale
+    res_rat = client.get("/api/v1/audit-events?search=high precision")
+    assert res_rat.status_code == 200
+    assert any("high precision" in (i["rationale"] or "") for i in res_rat.json()["items"])
+
+    # Filter by date
+    today_str = now.strftime("%Y-%m-%d")
+    res_date = client.get(f"/api/v1/audit-events?start_date={today_str}")
+    assert res_date.status_code == 200
+    assert len(res_date.json()["items"]) >= 1
+
+
+def test_cross_entity_audit_trace_endpoints(client, db_session):
+    je_id = uuid.uuid4()
+    audit_je = AuditEvent(
+        id=uuid.uuid4(),
+        event_type="journal_entry_suggested",
+        source_type="journal_entry",
+        source_id=je_id,
+        actor_type="agent",
+        actor_name="BookkeepingAgent",
+        output_snapshot={"journal_entry_id": str(je_id)},
+    )
+    db_session.add(audit_je)
+
+    # Add a standalone JE without document
+    je = JournalEntry(
+        id=je_id,
+        entry_date=date(2026, 8, 22),
+        description="Manual Adjusting Entry",
+        status="posted",
+        source_type="manual",
+    )
+    db_session.add(je)
+    db_session.commit()
+
+    res = client.get(f"/api/v1/audit-log/journal-entry/{je_id}")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["resolved_entity_type"] == "journal_entry"
+    assert len(data["timeline"]) >= 1
+

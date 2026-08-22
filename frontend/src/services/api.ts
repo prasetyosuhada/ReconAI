@@ -294,11 +294,13 @@ export interface AuditEventListResponse {
 }
 
 export interface DocumentAuditTraceabilityResponse {
-  document_id: string
-  filename: string
-  current_status: string
-  uploaded_at: string
+  document_id?: string | null
+  filename?: string | null
+  current_status?: string | null
+  uploaded_at?: string | null
   timeline: AuditEventResponse[]
+  resolved_entity_type?: 'document' | 'journal_entry' | 'bank_transaction' | string | null
+  resolved_entity_id?: string | null
 }
 
 export async function uploadDocument(file: File): Promise<DocumentUploadResponse> {
@@ -453,12 +455,14 @@ export async function rejectReviewItem(
 export async function fetchJournalEntries(params?: {
   status?: string
   document_id?: string
+  search?: string
   limit?: number
   offset?: number
 }): Promise<JournalEntryListResponse> {
   const query = new URLSearchParams()
   if (params?.status) query.append('status', params.status)
   if (params?.document_id) query.append('document_id', params.document_id)
+  if (params?.search) query.append('search', params.search)
   if (params?.limit) query.append('limit', params.limit.toString())
   if (params?.offset) query.append('offset', params.offset.toString())
 
@@ -564,11 +568,36 @@ export async function uploadBankStatementCSV(file: File): Promise<BankStatementI
 }
 
 export async function fetchBankTransactions(
-  importId: string
+  params?:
+    | string
+    | {
+        search?: string
+        status?: string
+        bank_statement_import_id?: string
+        limit?: number
+        offset?: number
+      }
 ): Promise<BankTransactionListResponse> {
-  const response = await fetch(`${API_BASE_URL}/bank-statements/${importId}/transactions`)
+  if (typeof params === 'string') {
+    const response = await fetch(`${API_BASE_URL}/bank-statements/${params}/transactions`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch transactions for import ${params}`)
+    }
+    return response.json()
+  }
+
+  const query = new URLSearchParams()
+  if (params?.search) query.append('search', params.search)
+  if (params?.status) query.append('status', params.status)
+  if (params?.bank_statement_import_id)
+    query.append('bank_statement_import_id', params.bank_statement_import_id)
+  if (params?.limit) query.append('limit', params.limit.toString())
+  if (params?.offset) query.append('offset', params.offset.toString())
+
+  const url = `${API_BASE_URL}/bank-statements/transactions${query.toString() ? `?${query.toString()}` : ''}`
+  const response = await fetch(url)
   if (!response.ok) {
-    throw new Error(`Failed to fetch transactions for import ${importId}`)
+    throw new Error('Failed to fetch bank transactions')
   }
   return response.json()
 }
@@ -784,6 +813,9 @@ export async function fetchAuditEvents(params?: {
   source_id?: string
   event_type?: string
   actor_type?: string
+  start_date?: string
+  end_date?: string
+  search?: string
   limit?: number
   offset?: number
 }): Promise<AuditEventListResponse> {
@@ -792,6 +824,9 @@ export async function fetchAuditEvents(params?: {
   if (params?.source_id) query.append('source_id', params.source_id)
   if (params?.event_type) query.append('event_type', params.event_type)
   if (params?.actor_type) query.append('actor_type', params.actor_type)
+  if (params?.start_date) query.append('start_date', params.start_date)
+  if (params?.end_date) query.append('end_date', params.end_date)
+  if (params?.search) query.append('search', params.search)
   if (params?.limit) query.append('limit', params.limit.toString())
   if (params?.offset) query.append('offset', params.offset.toString())
 
@@ -811,6 +846,26 @@ export async function fetchDocumentAuditTraceability(
   const response = await fetch(`${API_BASE_URL}/audit-log/${documentId}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch audit log for document ${documentId}`)
+  }
+  return response.json()
+}
+
+export async function fetchJournalEntryAuditTraceability(
+  journalEntryId: string
+): Promise<DocumentAuditTraceabilityResponse> {
+  const response = await fetch(`${API_BASE_URL}/audit-log/journal-entry/${journalEntryId}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch audit log for journal entry ${journalEntryId}`)
+  }
+  return response.json()
+}
+
+export async function fetchBankTransactionAuditTraceability(
+  bankTransactionId: string
+): Promise<DocumentAuditTraceabilityResponse> {
+  const response = await fetch(`${API_BASE_URL}/audit-log/bank-transaction/${bankTransactionId}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch audit log for bank transaction ${bankTransactionId}`)
   }
   return response.json()
 }

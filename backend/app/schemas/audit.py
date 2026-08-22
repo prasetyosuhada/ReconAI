@@ -40,12 +40,18 @@ class AuditEventListResponse(BaseModel):
 
 
 class DocumentAuditTraceabilityResponse(BaseModel):
-    """Full end-to-end traceability response for a single document."""
+    """Full end-to-end traceability response for a document or resolved entity."""
 
-    document_id: uuid.UUID
-    filename: str
-    current_status: str
-    uploaded_at: datetime
+    document_id: uuid.UUID | None = None
+    filename: str | None = None
+    current_status: str | None = None
+    uploaded_at: datetime | None = None
     timeline: list[AuditEventResponse] = Field(
         default_factory=list, description="Chronological list of audit events"
+    )
+    resolved_entity_type: str | None = Field(
+        None, description="Resolved entity type: document, journal_entry, bank_transaction"
+    )
+    resolved_entity_id: uuid.UUID | None = Field(
+        None, description="UUID of the resolved entity"
     )

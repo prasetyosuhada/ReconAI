@@ -139,3 +139,51 @@ def test_get_single_bank_transaction(client, db_session):
     assert data["id"] == str(tx_id)
     assert data["description"] == "Hosting Service"
     assert data["amount"] == -500000.0
+
+
+def test_list_all_bank_transactions_with_search(client, db_session):
+    imp_id = uuid.uuid4()
+    imp = BankStatementImport(
+        id=imp_id,
+        original_filename="global_tx.csv",
+        status="imported",
+        row_count=2,
+    )
+    tx1 = BankTransaction(
+        id=uuid.uuid4(),
+        bank_statement_import_id=imp_id,
+        transaction_date=date(2026, 8, 15),
+        description="PT Vendor Utama Invoice Payment",
+        amount=-1250000.0,
+        currency="IDR",
+        reference_number="REF-VENDOR-99",
+        status="imported",
+    )
+    tx2 = BankTransaction(
+        id=uuid.uuid4(),
+        bank_statement_import_id=imp_id,
+        transaction_date=date(2026, 8, 16),
+        description="Client Retainer Fee",
+        amount=7500000.0,
+        currency="IDR",
+        reference_number="REF-CLIENT-01",
+        status="matched",
+    )
+    db_session.add_all([imp, tx1, tx2])
+    db_session.commit()
+
+    # Search by description
+    res_desc = client.get("/api/v1/bank/transactions?search=Vendor")
+    assert res_desc.status_code == 200
+    assert any("Vendor" in item["description"] for item in res_desc.json()["items"])
+
+    # Search by reference number
+    res_ref = client.get("/api/v1/bank/transactions?search=REF-CLIENT-01")
+    assert res_ref.status_code == 200
+    assert len(res_ref.json()["items"]) == 1
+
+    # Filter by status
+    res_stat = client.get("/api/v1/bank/transactions?status=matched")
+    assert res_stat.status_code == 200
+    assert all(item["status"] == "matched" for item in res_stat.json()["items"])
+

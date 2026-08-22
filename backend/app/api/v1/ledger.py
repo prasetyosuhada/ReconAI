@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import String, Text, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -118,12 +118,17 @@ def list_journal_entries(
         description="Filter by status e.g. draft, review_required, approved, posted",
     ),
     document_id: str | None = Query(None, description="Filter by source document UUID"),
+    search: str | None = Query(
+        None, description="Search description, entry date, #JE-ID, or linked document filename"
+    ),
     limit: int = Query(50, ge=1, le=250, description="Pagination limit"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     db: Session = Depends(get_db),
 ) -> JournalEntryListResponse:
-    """Fetch paginated journal entries from the general ledger."""
-    query = db.query(JournalEntry)
+    """Fetch paginated journal entries from the general ledger with optional search."""
+    query = db.query(JournalEntry).outerjoin(
+        Document, JournalEntry.document_id == Document.id
+    )
 
     if status_filter:
         query = query.filter(JournalEntry.status == status_filter)
@@ -137,6 +142,34 @@ def list_journal_entries(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid document UUID format.",
             ) from None
+
+    if search and search.strip():
+        s_clean = search.strip()
+        term = f"%{s_clean}%"
+        search_conds = [
+            JournalEntry.description.ilike(term),
+            Document.original_filename.ilike(term),
+        ]
+        # Match JE ID or prefix like #JE-1234abcd
+        id_part = (
+            s_clean.replace("#JE-", "")
+            .replace("JE-", "")
+            .replace("#", "")
+            .strip()
+        )
+        if id_part:
+            search_conds.append(cast(JournalEntry.id, String).ilike(f"%{id_part}%"))
+
+        # Try parsing as date
+        for d_fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+            try:
+                parsed_d = datetime.strptime(s_clean, d_fmt).date()
+                search_conds.append(JournalEntry.entry_date == parsed_d)
+                break
+            except ValueError:
+                pass
+
+        query = query.filter(or_(*search_conds))
 
     total_count = query.with_entities(func.count(JournalEntry.id)).scalar() or 0
 
