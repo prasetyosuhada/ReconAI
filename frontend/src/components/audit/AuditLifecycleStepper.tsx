@@ -11,7 +11,13 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import type { AuditEventResponse } from '../../services/api'
 
-export type StageStatus = 'completed' | 'needs_review' | 'failed' | 'skipped' | 'not_reached'
+export type StageStatus =
+  | 'completed'
+  | 'needs_review'
+  | 'rejected'
+  | 'failed'
+  | 'skipped'
+  | 'not_reached'
 
 export interface ReviewedInfo {
   reviewer: string
@@ -122,8 +128,10 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
         e.event_type === 'bookkeeping_continued_after_extraction_review'
     )
 
-    if (intakeSnap.status === 'failed' || hasIntakeReject) {
+    if (intakeSnap.status === 'failed') {
       intakeStatus = 'failed'
+    } else if (hasIntakeReject) {
+      intakeStatus = 'rejected'
     } else {
       const extractionFlagged =
         intakeSnap.status === 'extraction_review_required' ||
@@ -168,12 +176,10 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
         e.event_type === 'review_item_edited'
     )
 
-    if (
-      bkSnap.status === 'failed' ||
-      bkSnap.decision === 'failed' ||
-      hasBkReject
-    ) {
+    if (bkSnap.status === 'failed' || bkSnap.decision === 'failed') {
       bkStatus = 'failed'
+    } else if (hasBkReject) {
+      bkStatus = 'rejected'
     } else {
       const intakeSnap = intakeEvt?.output_snapshot || {}
       const bkFlagged =
@@ -244,7 +250,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
         }
       }
     } else if (reconRejected) {
-      reconStatus = 'failed'
+      reconStatus = 'rejected'
       reconEventId = reconRejected.id
       reconTimestamp = reconRejected.created_at
     } else if (reconProposed) {
@@ -314,19 +320,19 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     },
   ]
 
-  // Pipeline failure propagation & skipped detection
-  let hasFailedPrior = false
+  // Pipeline failure/rejection propagation & skipped detection
+  let hasStoppedPrior = false
 
   for (let i = 0; i < rawStages.length; i++) {
     const current = rawStages[i]
 
-    if (hasFailedPrior) {
+    if (hasStoppedPrior) {
       current.status = 'not_reached'
       continue
     }
 
-    if (current.status === 'failed') {
-      hasFailedPrior = true
+    if (current.status === 'failed' || current.status === 'rejected') {
+      hasStoppedPrior = true
       continue
     }
 
@@ -337,6 +343,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
           (s) =>
             s.status === 'completed' ||
             s.status === 'failed' ||
+            s.status === 'rejected' ||
             s.status === 'needs_review'
         )
 
@@ -357,6 +364,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     if (
       stage.status === 'completed' ||
       stage.status === 'failed' ||
+      stage.status === 'rejected' ||
       stage.status === 'needs_review'
     ) {
       if (i === 0) {
@@ -421,15 +429,25 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
           badgeText: 'Needs Review',
           connector: 'bg-amber-500/40',
         }
-      case 'failed':
+      case 'rejected':
         return {
           container:
             'bg-rose-950/30 border-rose-500/40 text-slate-100 hover:bg-rose-950/50 shadow-rose-500/10 cursor-pointer',
           iconWrap: 'bg-rose-500/20 text-rose-400 border border-rose-500/40',
           badge:
             'bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono',
-          badgeText: 'Failed',
+          badgeText: 'Rejected',
           connector: 'bg-rose-500/40',
+        }
+      case 'failed':
+        return {
+          container:
+            'bg-red-950/40 border-red-600/50 text-slate-100 hover:bg-red-950/60 shadow-red-500/10 cursor-pointer',
+          iconWrap: 'bg-red-500/20 text-red-400 border border-red-500/40',
+          badge:
+            'bg-red-500/20 text-red-300 border border-red-500/30 font-mono',
+          badgeText: 'Failed',
+          connector: 'bg-red-500/40',
         }
       case 'skipped':
         return {

@@ -1,6 +1,7 @@
 """Shared Audit Logging Service for ReconAI."""
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -22,11 +23,16 @@ def log_event(
     confidence_score: float | None = None,
     human_action: str | None = None,
     document_id: uuid.UUID | str | None = None,
+    created_at: datetime | None = None,
 ) -> AuditEvent:
     """Create and persist an AuditEvent record in a centralized, consistent manner.
 
     Preserves the existing AuditEvent model columns and attaches document_id to
     snapshots for cross-entity resolution if provided.
+
+    Pass ``created_at`` explicitly when ordering matters within a single DB
+    transaction (e.g. to guarantee review_item_approved sorts before any
+    downstream pipeline events that are logged in the same request).
     """
     # Ensure document_id is attached into snapshots if provided and snapshot is a dict
     if document_id is not None:
@@ -51,5 +57,7 @@ def log_event(
         confidence_score=confidence_score,
         human_action=human_action,
     )
+    if created_at is not None:
+        audit_event.created_at = created_at
     db.add(audit_event)
     return audit_event

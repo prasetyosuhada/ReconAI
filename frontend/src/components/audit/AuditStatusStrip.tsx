@@ -2,7 +2,9 @@ import React from 'react'
 import {
   ArrowRight,
   CheckCircle2,
+  Edit3,
   History,
+  XCircle,
 } from 'lucide-react'
 import type { AuditEventResponse } from '../../services/api'
 
@@ -30,6 +32,8 @@ export function formatStatusLabel(status: string): string {
       return 'Bookkeeping Review Required'
     case 'ready_to_post':
       return 'Ready to Post'
+    case 'edited':
+      return 'Edited'
     case 'approved':
       return 'Approved'
     case 'posted':
@@ -55,6 +59,12 @@ export function getStatusTone(status: string) {
         dot: 'bg-emerald-400',
         badgeText: 'text-emerald-400',
       }
+    case 'edited':
+      return {
+        pill: 'bg-blue-500/15 text-blue-300 border-blue-500/35 hover:bg-blue-500/25',
+        dot: 'bg-blue-400',
+        badgeText: 'text-blue-400',
+      }
     case 'ready_to_post':
       return {
         pill: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/35 hover:bg-indigo-500/25',
@@ -69,11 +79,16 @@ export function getStatusTone(status: string) {
         badgeText: 'text-amber-400',
       }
     case 'rejected':
-    case 'failed':
       return {
-        pill: 'bg-rose-500/15 text-rose-300 border-rose-500/35 hover:bg-rose-500/25',
+        pill: 'bg-rose-500/15 text-rose-300 border-rose-500/40 hover:bg-rose-500/25',
         dot: 'bg-rose-400',
         badgeText: 'text-rose-400',
+      }
+    case 'failed':
+      return {
+        pill: 'bg-red-500/20 text-red-300 border-red-500/40 hover:bg-red-500/30',
+        dot: 'bg-red-400',
+        badgeText: 'text-red-400',
       }
     default:
       return {
@@ -95,14 +110,26 @@ export function deriveStatusTransitions(events: AuditEventResponse[]): StatusTra
   for (const evt of sorted) {
     const isDocSource = evt.source_type === 'document'
     const isPosted = evt.event_type === 'journal_entry_posted'
+    const isRejected =
+      evt.event_type === 'review_item_rejected' ||
+      evt.event_type === 'reconciliation_match_rejected'
+    const isReviewAction =
+      evt.event_type === 'review_item_approved' ||
+      evt.event_type === 'review_item_edited'
 
-    if (!isDocSource && !isPosted) continue
+    if (!isDocSource && !isPosted && !isRejected && !isReviewAction) continue
 
     const outSnap = evt.output_snapshot || {}
     let statusCandidate: string | null = null
 
     if (isPosted) {
       statusCandidate = 'posted'
+    } else if (isRejected) {
+      statusCandidate = 'rejected'
+    } else if (evt.event_type === 'review_item_edited') {
+      statusCandidate = 'edited'
+    } else if (evt.event_type === 'review_item_approved') {
+      statusCandidate = 'approved'
     } else if (outSnap.next_workflow_status) {
       statusCandidate = String(outSnap.next_workflow_status)
     } else if (outSnap.status) {
@@ -176,15 +203,25 @@ export const AuditStatusStrip: React.FC<AuditStatusStripProps> = ({
                   isSelected
                     ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-950 scale-105'
                     : isLatest
-                      ? 'border-emerald-500/50 shadow-emerald-500/10'
+                      ? node.rawStatus === 'rejected'
+                        ? 'border-rose-500/60 shadow-rose-500/10'
+                        : node.rawStatus === 'edited'
+                          ? 'border-blue-500/60 shadow-blue-500/10'
+                          : 'border-emerald-500/50 shadow-emerald-500/10'
                       : ''
                 }`}
                 title={`Event: ${node.eventType} by ${node.actorName} at ${new Date(node.timestamp).toLocaleTimeString()}`}
               >
                 <span className={`w-2 h-2 rounded-full ${tone.dot} ${isLatest ? 'animate-pulse' : ''}`} />
                 <span>{node.label}</span>
-                {isLatest && node.rawStatus === 'posted' && (
+                {isLatest && (node.rawStatus === 'posted' || node.rawStatus === 'approved') && (
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                )}
+                {isLatest && node.rawStatus === 'edited' && (
+                  <Edit3 className="w-3.5 h-3.5 text-blue-400" />
+                )}
+                {isLatest && node.rawStatus === 'rejected' && (
+                  <XCircle className="w-3.5 h-3.5 text-rose-400" />
                 )}
               </button>
 

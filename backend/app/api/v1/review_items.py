@@ -449,6 +449,40 @@ def approve_review_item(
     item.resolved_by = "human_user"
     item.resolved_at = now_utc
 
+    # Resolve document_id up-front (needed for the audit event logged below)
+    doc_id_to_pass = None
+    if item.source_type == "document":
+        doc_id_to_pass = item.source_id
+    elif item.source_type == "journal_entry":
+        je_rec = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        if je_rec and je_rec.document_id:
+            doc_id_to_pass = je_rec.document_id
+
+    # --- Log the human action FIRST so it sorts before any downstream agent events ---
+    # _continue_document_to_bookkeeping (called below for extraction reviews) logs its
+    # own audit event within the same transaction. Both events can end up with identical
+    # microsecond timestamps, so we must write the human-action event before the agent
+    # event to guarantee the correct ordering in the audit trail.
+    log_event(
+        db=db,
+        event_type="review_item_approved",
+        source_type="review_item",
+        source_id=item.id,
+        actor_type="human",
+        actor_name="human_user",
+        human_action="approved",
+        input_snapshot={"resolution_note": resolution_note, "review_type": item.review_type},
+        output_snapshot={
+            "status": "approved",
+            # next_workflow_status will be determined by the workflow branch below;
+            # we set a preliminary value here — the strip reads it from the event_type,
+            # not from this field, so the exact value doesn't affect rendering.
+            "next_workflow_status": "approved",
+        },
+        document_id=doc_id_to_pass,
+        created_at=now_utc,
+    )
+
     next_workflow_status = "approved"
 
     # Advance workflow based on source entity
@@ -555,32 +589,6 @@ def approve_review_item(
         elif tx:
             next_workflow_status = "approved"
 
-
-    # Resolve document_id if available from source entity or payload
-    doc_id_to_pass = None
-    if item.source_type == "document":
-        doc_id_to_pass = item.source_id
-    elif item.source_type == "journal_entry":
-        je_rec = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
-        if je_rec and je_rec.document_id:
-            doc_id_to_pass = je_rec.document_id
-
-    # Audit Trail Event
-    log_event(
-        db=db,
-        event_type="review_item_approved",
-        source_type="review_item",
-        source_id=item.id,
-        actor_type="human",
-        actor_name="human_user",
-        human_action="approved",
-        input_snapshot={"resolution_note": resolution_note, "review_type": item.review_type},
-        output_snapshot={
-            "status": "approved",
-            "next_workflow_status": next_workflow_status,
-        },
-        document_id=doc_id_to_pass,
-    )
     db.commit()
 
     return ReviewApproveResponse(
@@ -618,6 +626,37 @@ def edit_review_item(
     item.resolution_note = req.resolution_note
     item.resolved_by = "human_user"
     item.resolved_at = now_utc
+
+    # Resolve document_id up-front (needed for the audit event logged below)
+    doc_id_to_pass_edit: uuid.UUID | None = None
+    if item.source_type == "document":
+        doc_id_to_pass_edit = item.source_id
+    elif item.source_type == "journal_entry":
+        _je_edit = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        if _je_edit and _je_edit.document_id:
+            doc_id_to_pass_edit = _je_edit.document_id
+
+    # --- Log the human action FIRST (same ordering fix as approve endpoint) ---
+    log_event(
+        db=db,
+        event_type="review_item_edited",
+        source_type="review_item",
+        source_id=item.id,
+        actor_type="human",
+        actor_name="human_user",
+        human_action="edited",
+        input_snapshot={
+            "edited_payload": req.edited_payload,
+            "resolution_note": req.resolution_note,
+            "review_type": item.review_type,
+        },
+        output_snapshot={
+            "status": "edited",
+            "next_workflow_status": "edited",
+        },
+        document_id=doc_id_to_pass_edit,
+        created_at=now_utc,
+    )
 
     next_workflow_status = "edited"
 
@@ -718,35 +757,6 @@ def edit_review_item(
             document_id=_edit_je_doc_id,
         )
 
-    # Resolve document_id if available
-    doc_id_to_pass = None
-    if item.source_type == "document":
-        doc_id_to_pass = item.source_id
-    elif item.source_type == "journal_entry":
-        je_rec = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
-        if je_rec and je_rec.document_id:
-            doc_id_to_pass = je_rec.document_id
-
-    # Audit Event
-    log_event(
-        db=db,
-        event_type="review_item_edited",
-        source_type="review_item",
-        source_id=item.id,
-        actor_type="human",
-        actor_name="human_user",
-        human_action="edited",
-        input_snapshot={
-            "edited_payload": req.edited_payload,
-            "resolution_note": req.resolution_note,
-            "review_type": item.review_type,
-        },
-        output_snapshot={
-            "status": "edited",
-            "next_workflow_status": next_workflow_status,
-        },
-        document_id=doc_id_to_pass,
-    )
     db.commit()
 
     return ReviewEditResponse(
