@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { AuditEventResponse } from '../../services/api'
+import { getActorMeta } from './AuditTimeline'
 
 export type StageStatus =
   | 'completed'
@@ -32,7 +33,8 @@ export interface LifecycleStage {
   subtitle: string
   icon: LucideIcon
   status: StageStatus
-  durationText: string
+  durationText?: string
+  actorType?: string
   timestamp?: string
   eventId?: string
   reviewedInfo?: ReviewedInfo
@@ -221,6 +223,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
   let reconEventId = reconEvts[reconEvts.length - 1]?.id
   let reconTimestamp = reconEvts[reconEvts.length - 1]?.created_at
 
+  let reconActorType = 'agent'
   if (reconEvts.length > 0) {
     const reconAccepted = reconEvts.find(
       (e) =>
@@ -233,6 +236,16 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     const reconRejected = reconEvts.find(
       (e) => e.event_type === 'reconciliation_match_rejected'
     )
+
+    if (reconAccepted?.actor_type) {
+      reconActorType = reconAccepted.actor_type
+    } else if (reconRejected?.actor_type) {
+      reconActorType = reconRejected.actor_type
+    } else if (reconProposed?.actor_type) {
+      reconActorType = reconProposed.actor_type
+    } else if (reconEvts[reconEvts.length - 1]?.actor_type) {
+      reconActorType = reconEvts[reconEvts.length - 1].actor_type
+    }
 
     if (reconAccepted) {
       reconStatus = 'completed'
@@ -266,6 +279,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     subtitle: string
     icon: LucideIcon
     status: StageStatus
+    actorType: string
     timestamp?: string
     eventId?: string
     reviewedInfo?: ReviewedInfo
@@ -276,6 +290,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
       subtitle: 'File Ingest',
       icon: UploadCloud,
       status: uploadStatus,
+      actorType: uploadEvt?.actor_type || 'human',
       timestamp: uploadEvt?.created_at,
       eventId: uploadEvt?.id,
     },
@@ -285,6 +300,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
       subtitle: 'OCR & Extraction',
       icon: FileText,
       status: intakeStatus,
+      actorType: intakeEvt?.actor_type || 'agent',
       timestamp: intakeTimestamp,
       eventId: intakeEventId,
       reviewedInfo: intakeReviewedInfo,
@@ -295,6 +311,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
       subtitle: 'COA Proposal',
       icon: Sparkles,
       status: bkStatus,
+      actorType: bookkeepingEvt?.actor_type || 'agent',
       timestamp: bkTimestamp,
       eventId: bkEventId,
       reviewedInfo: bkReviewedInfo,
@@ -305,6 +322,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
       subtitle: 'Ledger Entry',
       icon: ShieldCheck,
       status: postedStatus,
+      actorType: postedEvt?.actor_type || 'human',
       timestamp: postedEvt?.created_at,
       eventId: postedEvt?.id,
     },
@@ -314,6 +332,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
       subtitle: 'Match & Verify',
       icon: ArrowLeftRight,
       status: reconStatus,
+      actorType: reconActorType,
       timestamp: reconTimestamp,
       eventId: reconEventId,
       reviewedInfo: reconReviewedInfo,
@@ -359,7 +378,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
 
   for (let i = 0; i < rawStages.length; i++) {
     const stage = rawStages[i]
-    let durationText = '—'
+    let durationText: string | undefined = undefined
 
     if (
       stage.status === 'completed' ||
@@ -367,15 +386,23 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
       stage.status === 'rejected' ||
       stage.status === 'needs_review'
     ) {
-      if (i === 0) {
+      if (stage.key === 'upload') {
         durationText = '0s'
-      } else if (stage.timestamp) {
-        if (previousTimestamp) {
-          durationText = formatDuration(previousTimestamp, stage.timestamp)
-        } else if (uploadEvt?.created_at) {
-          durationText = formatDuration(uploadEvt.created_at, stage.timestamp)
+      } else if (stage.key === 'intake' || stage.key === 'bookkeeping') {
+        let dur = '—'
+        if (stage.timestamp) {
+          if (previousTimestamp) {
+            dur = formatDuration(previousTimestamp, stage.timestamp)
+          } else if (uploadEvt?.created_at) {
+            dur = formatDuration(uploadEvt.created_at, stage.timestamp)
+          }
         }
+        durationText = dur !== '—' ? `Processing: ${dur}` : undefined
+      } else {
+        // Stage 4 'posted' and Stage 5 'reconciliation': duration removed as per spec
+        durationText = undefined
       }
+
       if (stage.timestamp) {
         previousTimestamp = stage.timestamp
       }
@@ -481,7 +508,7 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
           </h3>
         </div>
         <span className="text-[10px] text-slate-400 font-mono">
-          5-Stage Agent Traceability
+          Document Lifecycle & Traceability
         </span>
       </div>
 
@@ -523,11 +550,26 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
                 </span>
               </div>
 
-              {/* Middle: Stage Number + Name + Subtitle */}
+              {/* Middle: Stage Number + Actor Tag + Name + Subtitle */}
               <div className="space-y-1">
-                <span className="text-[10px] font-mono font-bold text-slate-400 block">
-                  0{idx + 1}.
-                </span>
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[10px] font-mono font-bold text-slate-400 block">
+                    0{idx + 1}.
+                  </span>
+                  {stage.actorType && (() => {
+                    const meta = getActorMeta(stage.actorType)
+                    const ActorIcon = meta.Icon
+                    return (
+                      <span
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${meta.badgeClass}`}
+                        title={`Actor: ${meta.label}`}
+                      >
+                        <ActorIcon className={`w-2.5 h-2.5 ${meta.textClass}`} />
+                        {meta.label}
+                      </span>
+                    )
+                  })()}
+                </div>
                 <p className="text-xs font-bold leading-tight truncate text-slate-100">
                   {stage.label}
                 </p>
@@ -560,11 +602,15 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
               </div>
 
               {/* Bottom: Duration & Hint */}
-              <div className="pt-2 mt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono">
-                <span className="text-slate-400 flex items-center gap-1">
-                  <Clock className="w-2.5 h-2.5 text-slate-500" />
-                  {stage.durationText}
-                </span>
+              <div className="pt-2 mt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono min-h-[20px]">
+                {stage.durationText ? (
+                  <span className="text-slate-400 flex items-center gap-1">
+                    <Clock className="w-2.5 h-2.5 text-slate-500" />
+                    {stage.durationText}
+                  </span>
+                ) : (
+                  <span />
+                )}
 
                 {stage.status === 'needs_review' && (
                   <span className="text-[9px] font-semibold text-amber-400 animate-pulse">

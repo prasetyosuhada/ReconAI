@@ -22,6 +22,34 @@ interface AuditTimelineProps {
   onSelectBankTransaction?: (bankTransactionId: string) => void
 }
 
+export function getActorMeta(actorType?: string) {
+  switch (actorType?.toLowerCase()) {
+    case 'agent':
+      return {
+        label: 'AI AGENT',
+        badgeClass:
+          'bg-purple-500/10 border border-purple-500/25 text-purple-300',
+        textClass: 'text-purple-400',
+        Icon: Sparkles,
+      }
+    case 'human':
+      return {
+        label: 'HUMAN',
+        badgeClass:
+          'bg-amber-500/10 border border-amber-500/25 text-amber-300',
+        textClass: 'text-amber-400',
+        Icon: UserCheck,
+      }
+    default:
+      return {
+        label: 'SYSTEM',
+        badgeClass: 'bg-slate-800/80 border border-slate-700 text-slate-300',
+        textClass: 'text-slate-400',
+        Icon: Layers,
+      }
+  }
+}
+
 export const AuditTimeline: React.FC<AuditTimelineProps> = ({
   events,
   highlightedEventId,
@@ -60,50 +88,32 @@ export const AuditTimeline: React.FC<AuditTimelineProps> = ({
   }
 
   const renderTwoLineActorBadge = (actorType: string, actorName: string) => {
-    switch (actorType?.toLowerCase()) {
-      case 'agent':
-        return (
-          <div className="px-2.5 py-1 rounded-lg bg-purple-500/10 border border-purple-500/25 text-purple-300 flex items-center gap-1.5 shrink-0">
-            <Sparkles className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-            <div className="text-left leading-none">
-              <span className="text-[9px] font-bold tracking-wider text-purple-400 uppercase block">
-                AI AGENT
-              </span>
-              <span className="text-[11px] font-semibold text-slate-200 block mt-0.5 max-w-[130px] sm:max-w-[180px] truncate">
-                {actorName || 'BookkeepingAgent'}
-              </span>
-            </div>
-          </div>
-        )
-      case 'human':
-        return (
-          <div className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300 flex items-center gap-1.5 shrink-0">
-            <UserCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <div className="text-left leading-none">
-              <span className="text-[9px] font-bold tracking-wider text-amber-400 uppercase block">
-                HUMAN
-              </span>
-              <span className="text-[11px] font-semibold text-slate-200 block mt-0.5 max-w-[130px] sm:max-w-[180px] truncate">
-                {actorName || 'human_user'}
-              </span>
-            </div>
-          </div>
-        )
-      default:
-        return (
-          <div className="px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700 text-slate-300 flex items-center gap-1.5 shrink-0">
-            <Layers className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <div className="text-left leading-none">
-              <span className="text-[9px] font-bold tracking-wider text-slate-400 uppercase block">
-                SYSTEM
-              </span>
-              <span className="text-[11px] font-semibold text-slate-200 block mt-0.5 max-w-[130px] sm:max-w-[180px] truncate">
-                {actorName || 'System'}
-              </span>
-            </div>
-          </div>
-        )
-    }
+    const meta = getActorMeta(actorType)
+    const ActorIcon = meta.Icon
+    const fallbackName =
+      actorType?.toLowerCase() === 'agent'
+        ? 'BookkeepingAgent'
+        : actorType?.toLowerCase() === 'human'
+          ? 'human_user'
+          : 'System'
+
+    return (
+      <div
+        className={`px-2.5 py-1 rounded-lg ${meta.badgeClass} flex items-center gap-1.5 shrink-0`}
+      >
+        <ActorIcon className={`w-3.5 h-3.5 ${meta.textClass} shrink-0`} />
+        <div className="text-left leading-none">
+          <span
+            className={`text-[9px] font-bold tracking-wider ${meta.textClass} uppercase block`}
+          >
+            {meta.label}
+          </span>
+          <span className="text-[11px] font-semibold text-slate-200 block mt-0.5 max-w-[130px] sm:max-w-[180px] truncate">
+            {actorName || fallbackName}
+          </span>
+        </div>
+      </div>
+    )
   }
 
   return (
