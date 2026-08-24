@@ -37,6 +37,23 @@ import {
 
 type TraceMode = 'document' | 'journal_entry' | 'bank_transaction' | 'global'
 
+const formatDateInput = (d: Date): string => {
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const getDefaultStartDate = (): string => {
+  const d = new Date()
+  d.setDate(d.getDate() - 7)
+  return formatDateInput(d)
+}
+
+const getDefaultEndDate = (): string => {
+  return formatDateInput(new Date())
+}
+
 export const AuditTraceabilityView: React.FC = () => {
   const [traceMode, setTraceMode] = useState<TraceMode>('document')
 
@@ -64,16 +81,28 @@ export const AuditTraceabilityView: React.FC = () => {
   const [startDateFilter, setStartDateFilter] = useState<string>('')
   const [endDateFilter, setEndDateFilter] = useState<string>('')
   const [globalSearch, setGlobalSearch] = useState<string>('')
+  const [hasInitializedGlobalDates, setHasInitializedGlobalDates] = useState<boolean>(false)
 
   // Trace result data
   const [docAudit, setDocAudit] = useState<DocumentAuditTraceabilityResponse | null>(null)
   const [globalEvents, setGlobalEvents] = useState<AuditEventResponse[]>([])
+  const [globalTotal, setGlobalTotal] = useState<number>(0)
+  const [loadingMore, setLoadingMore] = useState<boolean>(false)
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
   const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null)
 
   const journalDropdownRef = useRef<HTMLDivElement>(null)
   const bankDropdownRef = useRef<HTMLDivElement>(null)
+
+  // Default date range for Global mode on initial entry
+  useEffect(() => {
+    if (traceMode === 'global' && !startDateFilter && !endDateFilter && !hasInitializedGlobalDates) {
+      setStartDateFilter(getDefaultStartDate())
+      setEndDateFilter(getDefaultEndDate())
+      setHasInitializedGlobalDates(true)
+    }
+  }, [traceMode, startDateFilter, endDateFilter, hasInitializedGlobalDates])
 
   // Close typeahead dropdowns when clicking outside
   useEffect(() => {
@@ -152,6 +181,7 @@ export const AuditTraceabilityView: React.FC = () => {
           setDocAudit(null)
           const res = await fetchAuditEvents({ limit: 50 })
           setGlobalEvents(res.items)
+          setGlobalTotal(res.total)
         }
       } else if (traceMode === 'journal_entry') {
         if (selectedJournalEntry) {
@@ -175,14 +205,40 @@ export const AuditTraceabilityView: React.FC = () => {
           start_date: startDateFilter || undefined,
           end_date: endDateFilter || undefined,
           search: globalSearch || undefined,
-          limit: 100,
+          limit: 20,
+          offset: 0,
         })
         setGlobalEvents(res.items)
+        setGlobalTotal(res.total)
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to fetch audit log')
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Incremental "Load More" pagination handler for Global Events
+  const handleLoadMoreGlobal = async () => {
+    if (loadingMore || globalEvents.length >= globalTotal) return
+    setLoadingMore(true)
+    const nextOffset = globalEvents.length
+    try {
+      const res = await fetchAuditEvents({
+        actor_type: actorFilter || undefined,
+        event_type: eventTypeFilter || undefined,
+        start_date: startDateFilter || undefined,
+        end_date: endDateFilter || undefined,
+        search: globalSearch || undefined,
+        limit: 20,
+        offset: nextOffset,
+      })
+      setGlobalEvents((prev) => [...prev, ...res.items])
+      setGlobalTotal(res.total)
+    } catch (err: unknown) {
+      console.error('Failed to load more audit events:', err)
+    } finally {
+      setLoadingMore(false)
     }
   }
 
@@ -204,13 +260,19 @@ export const AuditTraceabilityView: React.FC = () => {
   const displayedEvents =
     traceMode === 'global' ? globalEvents : docAudit ? docAudit.timeline || [] : []
 
-  // Client-side filtering on displayed events (if local filters apply)
-  const filteredEvents = displayedEvents.filter((evt) => {
-    if (actorFilter && evt.actor_type.toLowerCase() !== actorFilter.toLowerCase()) return false
-    if (eventTypeFilter && !evt.event_type.toLowerCase().includes(eventTypeFilter.toLowerCase()))
-      return false
-    return true
-  })
+  // Client-side filtering on displayed events (only needed for entity trace modes)
+  const filteredEvents =
+    traceMode === 'global'
+      ? globalEvents
+      : displayedEvents.filter((evt) => {
+          if (actorFilter && evt.actor_type.toLowerCase() !== actorFilter.toLowerCase()) return false
+          if (
+            eventTypeFilter &&
+            !evt.event_type.toLowerCase().includes(eventTypeFilter.toLowerCase())
+          )
+            return false
+          return true
+        })
 
   // Handle stepping into an event from Stepper or Strip
   const handleSelectTransitionEvent = (eventId: string) => {
@@ -771,20 +833,74 @@ export const AuditTraceabilityView: React.FC = () => {
             <p className="text-xs">Building chronological audit timeline...</p>
           </div>
         ) : filteredEvents.length === 0 ? (
-          <div className="py-16 text-center text-slate-400 space-y-2 bg-slate-900/40 rounded-xl border border-slate-800">
-            <History className="w-10 h-10 text-slate-600 mx-auto" />
-            <p className="text-sm font-semibold text-slate-300">No Audit Events Found</p>
-            <p className="text-xs text-slate-500">
-              No audit records match your current trace mode and filter criteria.
-            </p>
-          </div>
+          traceMode === 'global' && (startDateFilter || endDateFilter) ? (
+            <div className="py-16 text-center text-slate-400 space-y-3 bg-slate-900/40 rounded-xl border border-slate-800 p-6">
+              <History className="w-10 h-10 text-slate-600 mx-auto" />
+              <div>
+                <p className="text-sm font-semibold text-slate-200">No Audit Events in Selected Date Range</p>
+                <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto leading-relaxed">
+                  No events found between <span className="font-mono text-slate-300">{startDateFilter || 'earliest'}</span> and{' '}
+                  <span className="font-mono text-slate-300">{endDateFilter || 'today'}</span>. Try clearing or widening the date filters above to view earlier audit records.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setStartDateFilter('')
+                  setEndDateFilter('')
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-indigo-300 text-xs font-semibold transition-all hover:scale-105 active:scale-95 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Clear Date Filter (View All Time)
+              </button>
+            </div>
+          ) : (
+            <div className="py-16 text-center text-slate-400 space-y-2 bg-slate-900/40 rounded-xl border border-slate-800">
+              <History className="w-10 h-10 text-slate-600 mx-auto" />
+              <p className="text-sm font-semibold text-slate-300">No Audit Events Found</p>
+              <p className="text-xs text-slate-500">
+                No audit records match your current trace mode and filter criteria.
+              </p>
+            </div>
+          )
         ) : (
-          <AuditTimeline
-            events={filteredEvents}
-            highlightedEventId={highlightedEventId}
-            onSelectJournalEntry={handleJumpToJournalEntry}
-            onSelectBankTransaction={handleJumpToBankTx}
-          />
+          <>
+            <AuditTimeline
+              events={filteredEvents}
+              highlightedEventId={highlightedEventId}
+              onSelectJournalEntry={handleJumpToJournalEntry}
+              onSelectBankTransaction={handleJumpToBankTx}
+            />
+
+            {/* Load More Pagination for Global Mode */}
+            {traceMode === 'global' && (
+              <div className="pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <span className="font-mono text-slate-400 text-[11px]">
+                  Showing <span className="font-semibold text-slate-200">{globalEvents.length}</span> of{' '}
+                  <span className="font-semibold text-indigo-300">{globalTotal}</span> audit events
+                </span>
+
+                {globalEvents.length < globalTotal ? (
+                  <button
+                    type="button"
+                    onClick={handleLoadMoreGlobal}
+                    disabled={loadingMore}
+                    className="px-4 py-2 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 hover:border-indigo-500/50 text-slate-200 hover:text-white text-xs font-semibold shadow-md transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {loadingMore ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                    ) : (
+                      <RefreshCw className="w-3.5 h-3.5 text-indigo-400" />
+                    )}
+                    <span>{loadingMore ? 'Loading More Events...' : 'Load More Audit Events (+20)'}</span>
+                  </button>
+                ) : (
+                  <span className="text-xs text-slate-500 font-medium">All events loaded</span>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
