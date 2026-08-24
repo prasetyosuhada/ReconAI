@@ -40,7 +40,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
         }),
         fetchReviewItems({ status: 'pending', limit: 1 }),
         fetchReviewItems({ status: 'pending', priority: 'high', limit: 1 }),
-        fetchReviewItems({ status: 'posted', limit: 1 }),
+        fetchReviewItems({ resolved_today: true, limit: 1 }),
       ])
       setItems(res.items)
       setTotal(res.total)

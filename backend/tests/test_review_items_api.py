@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
 from app.models.audit import AuditEvent
@@ -453,7 +453,7 @@ def test_action_already_resolved_review_item(client, db_session):
 
 
 def test_review_queue_header_counts_independent_of_pagination(client, db_session):
-    """Confirm summary badge queries (pending, high priority, posted) are unpaginated & invariant across pages."""
+    """Confirm summary badge queries (pending, high priority, resolved_today) are unpaginated & invariant across pages."""
     # Create 15 pending items (5 high priority, 10 normal)
     for i in range(15):
         db_session.add(
@@ -468,7 +468,8 @@ def test_review_queue_header_counts_independent_of_pagination(client, db_session
                 summary="Needs review",
             )
         )
-    # Create 4 posted items
+    # Create 4 posted items: 3 resolved today, 1 resolved 5 days ago
+    now = datetime.now(UTC)
     for i in range(4):
         db_session.add(
             ReviewItem(
@@ -480,6 +481,7 @@ def test_review_queue_header_counts_independent_of_pagination(client, db_session
                 source_id=uuid.uuid4(),
                 title=f"Posted Item {i}",
                 summary="Already posted",
+                resolved_at=now if i < 3 else (now - timedelta(days=5)),
             )
         )
     db_session.commit()
@@ -492,11 +494,11 @@ def test_review_queue_header_counts_independent_of_pagination(client, db_session
     # Header queries on Page 1
     p1_pending = client.get("/api/v1/review-items?status=pending&limit=1").json()["total"]
     p1_high = client.get("/api/v1/review-items?status=pending&priority=high&limit=1").json()["total"]
-    p1_posted = client.get("/api/v1/review-items?status=posted&limit=1").json()["total"]
+    p1_resolved_today = client.get("/api/v1/review-items?resolved_today=true&limit=1").json()["total"]
 
     assert p1_pending == 15
     assert p1_high == 5
-    assert p1_posted == 4
+    assert p1_resolved_today == 3  # exactly the 3 resolved today, not the 4th from 5 days ago
 
     # --- Page 2 (offset=10, limit=10) ---
     p2_items_res = client.get("/api/v1/review-items?status=pending&limit=10&offset=10").json()
@@ -506,14 +508,14 @@ def test_review_queue_header_counts_independent_of_pagination(client, db_session
     # Header queries on Page 2
     p2_pending = client.get("/api/v1/review-items?status=pending&limit=1").json()["total"]
     p2_high = client.get("/api/v1/review-items?status=pending&priority=high&limit=1").json()["total"]
-    p2_posted = client.get("/api/v1/review-items?status=posted&limit=1").json()["total"]
+    p2_resolved_today = client.get("/api/v1/review-items?resolved_today=true&limit=1").json()["total"]
 
     assert p2_pending == 15
     assert p2_high == 5
-    assert p2_posted == 4
+    assert p2_resolved_today == 3
 
     # Assert 100% invariance between Page 1 and Page 2 header metrics
     assert p1_pending == p2_pending
     assert p1_high == p2_high
-    assert p1_posted == p2_posted
+    assert p1_resolved_today == p2_resolved_today
 

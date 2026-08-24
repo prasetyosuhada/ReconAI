@@ -356,6 +356,7 @@ export async function fetchReviewItems(params?: {
   review_type?: string
   priority?: string
   search?: string
+  resolved_today?: boolean
   limit?: number
   offset?: number
 }): Promise<ReviewItemListResponse> {
@@ -364,6 +365,7 @@ export async function fetchReviewItems(params?: {
   if (params?.review_type) query.append('review_type', params.review_type)
   if (params?.priority) query.append('priority', params.priority)
   if (params?.search) query.append('search', params.search)
+  if (params?.resolved_today !== undefined) query.append('resolved_today', String(params.resolved_today))
   if (params?.limit) query.append('limit', params.limit.toString())
   if (params?.offset) query.append('offset', params.offset.toString())
 

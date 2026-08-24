@@ -329,6 +329,10 @@ def list_review_items(
         None,
         description="Search title, summary, or ID",
     ),
+    resolved_today: bool = Query(
+        False,
+        description="Filter items resolved/approved/posted today",
+    ),
     limit: int = Query(50, ge=1, le=250, description="Pagination limit"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     db: Session = Depends(get_db),
@@ -353,6 +357,16 @@ def list_review_items(
                 ReviewItem.summary.ilike(term),
             )
         )
+
+    if resolved_today:
+        if not status_filter:
+            query = query.filter(ReviewItem.status.in_(["approved", "posted", "edited"]))
+        query = query.filter(ReviewItem.resolved_at.isnot(None))
+        today_date = datetime.now(UTC).date()
+        today_start = datetime.combine(today_date, datetime.min.time()).replace(
+            tzinfo=UTC
+        )
+        query = query.filter(ReviewItem.resolved_at >= today_start)
 
     total_count = query.with_entities(func.count(ReviewItem.id)).scalar() or 0
 
