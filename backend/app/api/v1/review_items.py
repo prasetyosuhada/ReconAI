@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.agents.orchestrator import bookkeeping_node
@@ -321,6 +321,14 @@ def list_review_items(
         None,
         description="Filter by type e.g. extraction, bookkeeping, reconciliation",
     ),
+    priority: str | None = Query(
+        None,
+        description="Filter by priority e.g. high, normal, low",
+    ),
+    search: str | None = Query(
+        None,
+        description="Search title, summary, or ID",
+    ),
     limit: int = Query(50, ge=1, le=250, description="Pagination limit"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     db: Session = Depends(get_db),
@@ -333,6 +341,18 @@ def list_review_items(
 
     if review_type:
         query = query.filter(ReviewItem.review_type == review_type)
+
+    if priority:
+        query = query.filter(ReviewItem.priority == priority)
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                ReviewItem.title.ilike(term),
+                ReviewItem.summary.ilike(term),
+            )
+        )
 
     total_count = query.with_entities(func.count(ReviewItem.id)).scalar() or 0
 

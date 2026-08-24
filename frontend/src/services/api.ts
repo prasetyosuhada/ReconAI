@@ -354,12 +354,16 @@ export async function fetchLatestDocumentExtraction(
 export async function fetchReviewItems(params?: {
   status?: string
   review_type?: string
+  priority?: string
+  search?: string
   limit?: number
   offset?: number
 }): Promise<ReviewItemListResponse> {
   const query = new URLSearchParams()
   if (params?.status) query.append('status', params.status)
   if (params?.review_type) query.append('review_type', params.review_type)
+  if (params?.priority) query.append('priority', params.priority)
+  if (params?.search) query.append('search', params.search)
   if (params?.limit) query.append('limit', params.limit.toString())
   if (params?.offset) query.append('offset', params.offset.toString())
 

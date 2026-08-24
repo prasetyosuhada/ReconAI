@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React from 'react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -11,41 +11,38 @@ import {
   Loader2,
   RefreshCw,
 } from 'lucide-react'
-import { fetchDocuments } from '../../services/api'
 import type { DocumentResponse } from '../../services/api'
+import { Pagination } from '../shared/Pagination'
 
 interface DocumentListProps {
-  refreshTrigger: number
+  documents: DocumentResponse[]
+  total: number
+  loading: boolean
+  error?: string | null
+  statusFilter: string
+  onStatusFilterChange: (status: string) => void
+  page: number
+  pageSize: number
+  onPageChange: (page: number) => void
+  onPageSizeChange: (pageSize: number) => void
+  onRefresh: () => void
   onSelectDocument?: (docId: string) => void
 }
 
-export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSelectDocument }) => {
-  const [documents, setDocuments] = useState<DocumentResponse[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState<string>('')
-
-  const loadDocuments = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetchDocuments({
-        status: statusFilter || undefined,
-        limit: 50,
-      })
-      setDocuments(res.items)
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to load documents'
-      setError(message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadDocuments()
-  }, [refreshTrigger, statusFilter])
-
+export const DocumentList: React.FC<DocumentListProps> = ({
+  documents,
+  total,
+  loading,
+  error,
+  statusFilter,
+  onStatusFilterChange,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+  onRefresh,
+  onSelectDocument,
+}) => {
   const getStatusBadge = (status: string) => {
     switch (status.toLowerCase()) {
       case 'uploaded':
@@ -123,7 +120,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
             <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => onStatusFilterChange(e.target.value)}
               className="w-full sm:w-auto pl-8 pr-8 py-1.5 bg-slate-900/80 border border-slate-700/60 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500/50 transition-all appearance-none cursor-pointer"
             >
               <option value="">All Statuses</option>
@@ -139,7 +136,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
           {/* Refresh Button */}
           <button
             type="button"
-            onClick={loadDocuments}
+            onClick={onRefresh}
             disabled={loading}
             className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/60 text-slate-300 hover:text-white transition-all disabled:opacity-50"
             title="Refresh document list"
@@ -251,6 +248,15 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Footer */}
+      <Pagination
+        currentPage={page}
+        pageSize={pageSize}
+        totalItems={total}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+      />
     </div>
   )
 }

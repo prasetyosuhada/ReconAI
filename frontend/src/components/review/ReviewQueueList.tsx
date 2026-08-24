@@ -17,9 +17,11 @@ import {
 } from 'lucide-react'
 import type { ReviewItemResponse } from '../../services/api'
 import { approveReviewItem, rejectReviewItem } from '../../services/api'
+import { Pagination } from '../shared/Pagination'
 
 interface ReviewQueueListProps {
   items: ReviewItemResponse[]
+  total: number
   loading: boolean
   onRefresh: () => void
   onInspectItem: (item: ReviewItemResponse) => void
@@ -27,10 +29,17 @@ interface ReviewQueueListProps {
   onStatusFilterChange: (status: string) => void
   typeFilter: string
   onTypeFilterChange: (type: string) => void
+  searchTerm: string
+  onSearchChange: (search: string) => void
+  page: number
+  pageSize: number
+  onPageChange: (page: number) => void
+  onPageSizeChange: (pageSize: number) => void
 }
 
 export const ReviewQueueList: React.FC<ReviewQueueListProps> = ({
   items,
+  total,
   loading,
   onRefresh,
   onInspectItem,
@@ -38,16 +47,14 @@ export const ReviewQueueList: React.FC<ReviewQueueListProps> = ({
   onStatusFilterChange,
   typeFilter,
   onTypeFilterChange,
+  searchTerm,
+  onSearchChange,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
 }) => {
-  const [searchTerm, setSearchTerm] = useState('')
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
-
-  const filteredItems = items.filter((item) => {
-    const matchesSearch =
-      item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.summary.toLowerCase().includes(searchTerm.toLowerCase())
-    return matchesSearch
-  })
 
   const handleQuickApprove = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
@@ -130,9 +137,9 @@ export const ReviewQueueList: React.FC<ReviewQueueListProps> = ({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
             <input
               type="text"
-              placeholder="Filter title or summary..."
+              placeholder="Search title, summary, ID..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => onSearchChange(e.target.value)}
               className="w-full pl-9 pr-3 py-1.5 bg-slate-900/80 border border-slate-700/60 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500/50 transition-all"
             />
           </div>
@@ -181,12 +188,12 @@ export const ReviewQueueList: React.FC<ReviewQueueListProps> = ({
       </div>
 
       {/* Items List */}
-      {loading && filteredItems.length === 0 ? (
+      {loading && items.length === 0 ? (
         <div className="py-16 text-center text-slate-400 space-y-2">
           <Loader2 className="w-8 h-8 animate-spin text-indigo-400 mx-auto" />
           <p className="text-xs">Loading review queue...</p>
         </div>
-      ) : filteredItems.length === 0 ? (
+      ) : items.length === 0 ? (
         <div className="py-16 text-center text-slate-400 space-y-2 bg-slate-900/30 rounded-2xl border border-slate-800/80">
           <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto" />
           <p className="text-sm font-semibold text-slate-200">Review Queue Clear!</p>
@@ -194,7 +201,7 @@ export const ReviewQueueList: React.FC<ReviewQueueListProps> = ({
         </div>
       ) : (
         <div className="space-y-3">
-          {filteredItems.map((item) => {
+          {items.map((item) => {
             const isPending = item.status === 'pending'
             const isActioning = actionLoadingId === item.id
             const confPercent = Math.round((item.confidence_score || 0) * 100)
@@ -316,6 +323,15 @@ export const ReviewQueueList: React.FC<ReviewQueueListProps> = ({
           })}
         </div>
       )}
+
+      {/* Pagination Footer */}
+      <Pagination
+        currentPage={page}
+        pageSize={pageSize}
+        totalItems={total}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+      />
     </div>
   )
 }

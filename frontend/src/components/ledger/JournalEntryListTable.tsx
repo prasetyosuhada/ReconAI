@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React from 'react'
 import {
   BookOpen,
   CheckCircle2,
@@ -10,33 +10,39 @@ import {
   Sparkles,
 } from 'lucide-react'
 import type { JournalEntryResponse } from '../../services/api'
+import { Pagination } from '../shared/Pagination'
 
 interface JournalEntryListTableProps {
   entries: JournalEntryResponse[]
+  total: number
   loading: boolean
   onRefresh: () => void
   onSelectEntry: (entryId: string) => void
   statusFilter: string
   onStatusFilterChange: (status: string) => void
+  searchTerm: string
+  onSearchChange: (search: string) => void
+  page: number
+  pageSize: number
+  onPageChange: (page: number) => void
+  onPageSizeChange: (pageSize: number) => void
 }
 
 export const JournalEntryListTable: React.FC<JournalEntryListTableProps> = ({
   entries,
+  total,
   loading,
   onRefresh,
   onSelectEntry,
   statusFilter,
   onStatusFilterChange,
+  searchTerm,
+  onSearchChange,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
 }) => {
-  const [searchTerm, setSearchTerm] = useState('')
-
-  const filteredEntries = entries.filter((e) => {
-    const matchesSearch =
-      e.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (e.agent_name && e.agent_name.toLowerCase().includes(searchTerm.toLowerCase()))
-    return matchesSearch
-  })
-
   const getStatusBadge = (status: string) => {
     switch (status.toLowerCase()) {
       case 'posted':
@@ -88,9 +94,9 @@ export const JournalEntryListTable: React.FC<JournalEntryListTableProps> = ({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
             <input
               type="text"
-              placeholder="Search description..."
+              placeholder="Search description, #JE-ID, date..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => onSearchChange(e.target.value)}
               className="w-full pl-9 pr-3 py-1.5 bg-slate-900/80 border border-slate-700/60 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500/50 transition-all"
             />
           </div>
@@ -165,7 +171,7 @@ export const JournalEntryListTable: React.FC<JournalEntryListTableProps> = ({
                   </td>
                 </tr>
               ))
-            ) : filteredEntries.length === 0 ? (
+            ) : entries.length === 0 ? (
               <tr>
                 <td colSpan={7} className="py-16 text-center text-slate-400 space-y-2">
                   <BookOpen className="w-10 h-10 text-slate-600 mx-auto" />
@@ -176,7 +182,7 @@ export const JournalEntryListTable: React.FC<JournalEntryListTableProps> = ({
                 </td>
               </tr>
             ) : (
-              filteredEntries.map((entry) => (
+              entries.map((entry) => (
                 <tr key={entry.id} className="hover:bg-slate-900/60 transition-colors">
                   <td className="py-3.5 px-4 font-mono text-slate-300 whitespace-nowrap">
                     {entry.entry_date}
@@ -219,6 +225,15 @@ export const JournalEntryListTable: React.FC<JournalEntryListTableProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Footer */}
+      <Pagination
+        currentPage={page}
+        pageSize={pageSize}
+        totalItems={total}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+      />
     </div>
   )
 }

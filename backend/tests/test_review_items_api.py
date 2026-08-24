@@ -57,6 +57,20 @@ def test_list_review_items_filtering(client, db_session):
     assert data["total"] == 1
     assert data["items"][0]["title"] == "Review Item Approved"
 
+    # Filter priority=high
+    response_prio = client.get("/api/v1/review-items?priority=high")
+    assert response_prio.status_code == 200
+    data_prio = response_prio.json()
+    assert data_prio["total"] == 1
+    assert data_prio["items"][0]["title"] == "Review Item Pending"
+
+    # Filter search term
+    response_search = client.get("/api/v1/review-items?search=Approved")
+    assert response_search.status_code == 200
+    data_search = response_search.json()
+    assert data_search["total"] == 1
+    assert data_search["items"][0]["title"] == "Review Item Approved"
+
 
 def test_get_review_item_detail_success(client, db_session):
     item_id = uuid.uuid4()
@@ -436,3 +450,70 @@ def test_action_already_resolved_review_item(client, db_session):
     response = client.post(f"/api/v1/review-items/{item_id}/approve")
     assert response.status_code == 400
     assert "already approved" in response.json()["detail"]
+
+
+def test_review_queue_header_counts_independent_of_pagination(client, db_session):
+    """Confirm summary badge queries (pending, high priority, posted) are unpaginated & invariant across pages."""
+    # Create 15 pending items (5 high priority, 10 normal)
+    for i in range(15):
+        db_session.add(
+            ReviewItem(
+                id=uuid.uuid4(),
+                review_type="bookkeeping",
+                status="pending",
+                priority="high" if i < 5 else "normal",
+                source_type="document",
+                source_id=uuid.uuid4(),
+                title=f"Pending Item {i}",
+                summary="Needs review",
+            )
+        )
+    # Create 4 posted items
+    for i in range(4):
+        db_session.add(
+            ReviewItem(
+                id=uuid.uuid4(),
+                review_type="extraction",
+                status="posted",
+                priority="normal",
+                source_type="document",
+                source_id=uuid.uuid4(),
+                title=f"Posted Item {i}",
+                summary="Already posted",
+            )
+        )
+    db_session.commit()
+
+    # --- Page 1 (offset=0, limit=10) ---
+    p1_items_res = client.get("/api/v1/review-items?status=pending&limit=10&offset=0").json()
+    assert len(p1_items_res["items"]) == 10
+    assert p1_items_res["total"] == 15
+
+    # Header queries on Page 1
+    p1_pending = client.get("/api/v1/review-items?status=pending&limit=1").json()["total"]
+    p1_high = client.get("/api/v1/review-items?status=pending&priority=high&limit=1").json()["total"]
+    p1_posted = client.get("/api/v1/review-items?status=posted&limit=1").json()["total"]
+
+    assert p1_pending == 15
+    assert p1_high == 5
+    assert p1_posted == 4
+
+    # --- Page 2 (offset=10, limit=10) ---
+    p2_items_res = client.get("/api/v1/review-items?status=pending&limit=10&offset=10").json()
+    assert len(p2_items_res["items"]) == 5
+    assert p2_items_res["total"] == 15
+
+    # Header queries on Page 2
+    p2_pending = client.get("/api/v1/review-items?status=pending&limit=1").json()["total"]
+    p2_high = client.get("/api/v1/review-items?status=pending&priority=high&limit=1").json()["total"]
+    p2_posted = client.get("/api/v1/review-items?status=posted&limit=1").json()["total"]
+
+    assert p2_pending == 15
+    assert p2_high == 5
+    assert p2_posted == 4
+
+    # Assert 100% invariance between Page 1 and Page 2 header metrics
+    assert p1_pending == p2_pending
+    assert p1_high == p2_high
+    assert p1_posted == p2_posted
+
