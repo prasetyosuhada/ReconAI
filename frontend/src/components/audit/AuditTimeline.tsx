@@ -288,23 +288,30 @@ export const AuditTimeline: React.FC<AuditTimelineProps> = ({
                 </button>
 
                 {/* Inline Jump Link: View in GL */}
-                {onSelectJournalEntry &&
-                  (evt.event_type === 'journal_entry_posted' ||
-                    evt.event_type === 'journal_entry_suggested') &&
-                  (outSnap.journal_entry_id ||
-                    (evt.source_type === 'journal_entry' ? evt.source_id : null)) && (
+                {(() => {
+                  if (!onSelectJournalEntry) return null
+                  const isJeEvent =
+                    evt.event_type === 'journal_entry_posted' ||
+                    evt.event_type === 'journal_entry_suggested'
+                  if (!isJeEvent) return null
+
+                  const snapInput =
+                    typeof evt.input_snapshot === 'object' && !Array.isArray(evt.input_snapshot)
+                      ? evt.input_snapshot
+                      : null
+                  const targetJeId =
+                    outSnap.journal_entry_id ||
+                    (evt.source_type === 'journal_entry' ? evt.source_id : null) ||
+                    snapInput?.journal_entry_id
+
+                  if (!targetJeId) return null
+
+                  return (
                     <>
                       <span className="text-slate-700">•</span>
                       <button
                         type="button"
-                        onClick={() =>
-                          onSelectJournalEntry(
-                            String(
-                              outSnap.journal_entry_id ||
-                                (evt.source_type === 'journal_entry' ? evt.source_id : '')
-                            )
-                          )
-                        }
+                        onClick={() => onSelectJournalEntry(String(targetJeId))}
                         className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition-colors cursor-pointer"
                         title="Trace by this Journal Entry"
                       >
@@ -312,34 +319,33 @@ export const AuditTimeline: React.FC<AuditTimelineProps> = ({
                         View in GL →
                       </button>
                     </>
-                  )}
+                  )
+                })()}
 
                 {/* Inline Jump Link: View Match */}
-                {onSelectBankTransaction &&
-                  evt.event_type.startsWith('reconciliation_match_') &&
-                  (outSnap.bank_transaction_id ||
+                {(() => {
+                  if (!onSelectBankTransaction) return null
+                  const isMatchEvent = evt.event_type.startsWith('reconciliation_match_')
+                  if (!isMatchEvent) return null
+
+                  const snapInput =
+                    typeof evt.input_snapshot === 'object' && !Array.isArray(evt.input_snapshot)
+                      ? evt.input_snapshot
+                      : null
+                  const targetTxId =
+                    outSnap.bank_transaction_id ||
                     (evt.source_type === 'bank_transaction' ? evt.source_id : null) ||
-                    (typeof evt.input_snapshot === 'object' && !Array.isArray(evt.input_snapshot)
-                      ? evt.input_snapshot?.bank_transaction_id || evt.input_snapshot?.tx_id
-                      : null)) && (
+                    snapInput?.bank_transaction_id ||
+                    snapInput?.tx_id
+
+                  if (!targetTxId) return null
+
+                  return (
                     <>
                       <span className="text-slate-700">•</span>
                       <button
                         type="button"
-                        onClick={() => {
-                          const snapObj =
-                            typeof evt.input_snapshot === 'object' && !Array.isArray(evt.input_snapshot)
-                              ? evt.input_snapshot
-                              : null
-                          const targetTxId =
-                            outSnap.bank_transaction_id ||
-                            (evt.source_type === 'bank_transaction' ? evt.source_id : '') ||
-                            snapObj?.bank_transaction_id ||
-                            snapObj?.tx_id
-                          if (targetTxId) {
-                            onSelectBankTransaction(String(targetTxId))
-                          }
-                        }}
+                        onClick={() => onSelectBankTransaction(String(targetTxId))}
                         className="text-xs font-semibold text-teal-400 hover:text-teal-300 flex items-center gap-1 transition-colors cursor-pointer"
                         title="Trace by this Bank Transaction"
                       >
@@ -347,7 +353,8 @@ export const AuditTimeline: React.FC<AuditTimelineProps> = ({
                         View Match →
                       </button>
                     </>
-                  )}
+                  )
+                })()}
               </div>
             </div>
           </div>

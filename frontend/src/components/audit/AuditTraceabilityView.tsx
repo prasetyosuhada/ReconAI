@@ -26,9 +26,11 @@ import type {
 import {
   fetchAuditEvents,
   fetchBankTransactions,
+  fetchBankTransactionDetail,
   fetchDocumentAuditTraceability,
   fetchDocuments,
   fetchJournalEntries,
+  fetchJournalEntryDetail,
   fetchJournalEntryAuditTraceability,
   fetchBankTransactionAuditTraceability,
 } from '../../services/api'
@@ -225,31 +227,45 @@ export const AuditTraceabilityView: React.FC = () => {
   // Inline Jump Handlers (Requirement 9)
   const handleJumpToJournalEntry = async (jeId: string) => {
     setTraceMode('journal_entry')
-    setJournalSearch(jeId)
-    setSelectedJournalEntry({
-      id: jeId,
-      description: `Journal Entry #${jeId.slice(0, 8)}`,
-      entry_date: '',
-      status: 'posted',
-      total_debit: 0,
-      total_credit: 0,
-      created_at: new Date().toISOString(),
-    })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    try {
+      const je = await fetchJournalEntryDetail(jeId)
+      setJournalSearch(je.description)
+      setSelectedJournalEntry(je)
+    } catch {
+      setJournalSearch(jeId)
+      setSelectedJournalEntry({
+        id: jeId,
+        description: `Journal Entry #${jeId.slice(0, 8)}`,
+        entry_date: '',
+        status: 'posted',
+        total_debit: 0,
+        total_credit: 0,
+        created_at: new Date().toISOString(),
+      })
+    }
   }
 
   const handleJumpToBankTx = async (txId: string) => {
     setTraceMode('bank_transaction')
-    setBankSearch(txId)
-    setSelectedBankTx({
-      id: txId,
-      bank_statement_import_id: '',
-      transaction_date: '',
-      description: `Bank Transaction #${txId.slice(0, 8)}`,
-      amount: 0,
-      currency: 'IDR',
-      status: 'matched',
-      created_at: new Date().toISOString(),
-    })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    try {
+      const tx = await fetchBankTransactionDetail(txId)
+      setBankSearch(tx.description)
+      setSelectedBankTx(tx)
+    } catch {
+      setBankSearch(txId)
+      setSelectedBankTx({
+        id: txId,
+        bank_statement_import_id: '',
+        transaction_date: '',
+        description: `Bank Transaction #${txId.slice(0, 8)}`,
+        amount: 0,
+        currency: 'IDR',
+        status: 'matched',
+        created_at: new Date().toISOString(),
+      })
+    }
   }
 
   return (
@@ -692,15 +708,21 @@ export const AuditTraceabilityView: React.FC = () => {
           <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
             <div>
               <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
-                {docAudit.document_id
-                  ? 'Source Document Audit Context'
-                  : docAudit.resolved_entity_type === 'bank_transaction'
-                    ? 'Bank Transaction Audit Context (Unmatched / Bank-Only)'
-                    : 'Journal Entry Audit Context (Manual / Standalone)'}
+                {traceMode === 'bank_transaction'
+                  ? docAudit.document_id
+                    ? 'Bank Transaction Trace (Resolved to Source Document)'
+                    : 'Bank Transaction Audit Context (Unmatched / Bank-Only)'
+                  : traceMode === 'journal_entry'
+                    ? docAudit.document_id
+                      ? 'Journal Entry Trace (Resolved to Source Document)'
+                      : 'Journal Entry Audit Context (Manual / Standalone)'
+                    : 'Source Document Audit Context'}
               </span>
               <p className="font-bold text-slate-100 text-sm">{docAudit.filename}</p>
               <p className="text-slate-400 font-mono text-[11px] mt-0.5">
-                {docAudit.document_id ? `Document ID: ${docAudit.document_id}` : `Resolved ID: ${docAudit.resolved_entity_id || '—'}`}
+                {docAudit.document_id
+                  ? `Document ID: ${docAudit.document_id}`
+                  : `Resolved ID: ${docAudit.resolved_entity_id || '—'}`}
               </p>
             </div>
 

@@ -5,14 +5,18 @@ import uuid
 from datetime import UTC, date, datetime, time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.audit import AuditEvent
 from app.models.document import Document
 from app.models.journal import JournalEntry
-from app.models.reconciliation import BankTransaction, ReconciliationMatch
+from app.models.reconciliation import (
+    BankStatementImport,
+    BankTransaction,
+    ReconciliationMatch,
+)
 from app.schemas.audit import (
     AuditEventListResponse,
     AuditEventResponse,
@@ -261,6 +265,26 @@ def get_bank_transaction_audit_log(
         AuditEvent.input_snapshot["bank_transaction_id"].astext == tx_id_str,
         AuditEvent.output_snapshot["bank_transaction_id"].astext == tx_id_str,
     ]
+
+    # Include parent batch bank_statement_imported event if available
+    if tx.bank_statement_import_id:
+        conditions.append(
+            and_(
+                AuditEvent.source_type == "bank_statement_import",
+                AuditEvent.source_id == tx.bank_statement_import_id,
+            )
+        )
+
+    # Also include any reconciliation match events for this bank transaction
+    all_matches = (
+        db.query(ReconciliationMatch)
+        .filter(ReconciliationMatch.bank_transaction_id == tx.id)
+        .all()
+    )
+    match_ids = [m.id for m in all_matches]
+    if match_ids:
+        conditions.append(AuditEvent.source_id.in_(match_ids))
+
     events = (
         db.query(AuditEvent)
         .filter(or_(*conditions))
@@ -269,11 +293,15 @@ def get_bank_transaction_audit_log(
     )
     event_responses = [AuditEventResponse.model_validate(e) for e in events]
 
+    up_at = getattr(tx, "created_at", None)
+    if tx.import_record and getattr(tx.import_record, "imported_at", None):
+        up_at = tx.import_record.imported_at
+
     return DocumentAuditTraceabilityResponse(
         document_id=None,
         filename=f"Bank Transaction #{str(tx.id)[:8]} ({tx.description})",
         current_status=tx.status,
-        uploaded_at=tx.created_at,
+        uploaded_at=up_at,
         timeline=event_responses,
         resolved_entity_type="bank_transaction",
         resolved_entity_id=tx.id,

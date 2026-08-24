@@ -412,7 +412,7 @@ def stream_document_processing(
                 source_type="document",
                 source_id=doc.id,
                 actor_type="agent",
-                actor_name="DocumentProcessingGraph",
+                actor_name="IntakeAgent",
                 input_snapshot={
                     "document_id": str(doc_uuid),
                     "original_filename": fname,

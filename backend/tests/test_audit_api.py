@@ -4,6 +4,7 @@ from datetime import date, datetime
 from app.models.audit import AuditEvent
 from app.models.document import Document
 from app.models.journal import JournalEntry
+from app.models.reconciliation import BankStatementImport, BankTransaction
 
 
 def test_get_document_audit_log_not_found(client):
@@ -250,4 +251,42 @@ def test_cross_entity_audit_trace_endpoints(client, db_session):
     data = res.json()
     assert data["resolved_entity_type"] == "journal_entry"
     assert len(data["timeline"]) >= 1
+
+    # Test unmatched bank transaction with parent batch import event
+    imp_id = uuid.uuid4()
+    imp = BankStatementImport(
+        id=imp_id,
+        original_filename="august_batch.csv",
+        status="imported",
+        row_count=5,
+    )
+    tx_id = uuid.uuid4()
+    tx = BankTransaction(
+        id=tx_id,
+        bank_statement_import_id=imp_id,
+        transaction_date=date(2026, 8, 11),
+        description="Bank Fee Unmatched",
+        amount=-15000.0,
+        currency="IDR",
+        status="imported",
+    )
+    audit_imp = AuditEvent(
+        id=uuid.uuid4(),
+        event_type="bank_statement_imported",
+        source_type="bank_statement_import",
+        source_id=imp_id,
+        actor_type="human",
+        actor_name="api_user",
+        input_snapshot={"original_filename": "august_batch.csv", "row_count": 5},
+        output_snapshot={"status": "imported", "row_count": 5},
+    )
+    db_session.add_all([imp, tx, audit_imp])
+    db_session.commit()
+
+    res_tx = client.get(f"/api/v1/audit-log/bank-transaction/{tx_id}")
+    assert res_tx.status_code == 200
+    data_tx = res_tx.json()
+    assert data_tx["resolved_entity_type"] == "bank_transaction"
+    assert len(data_tx["timeline"]) >= 1
+    assert data_tx["timeline"][0]["event_type"] == "bank_statement_imported"
 
