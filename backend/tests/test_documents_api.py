@@ -260,3 +260,77 @@ def test_stream_document_processing_sse(mock_session_class, mock_graph, client, 
     assert "data:" in response.text
 
 
+def test_list_documents_status_filtering(client, db_session):
+    """Test filtering documents by umbrella and exact status values."""
+    docs = [
+        Document(
+            id=uuid.uuid4(),
+            original_filename="doc_ext_rev.pdf",
+            stored_file_path="/tmp/doc1.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            document_type="invoice",
+            status="extraction_review_required",
+        ),
+        Document(
+            id=uuid.uuid4(),
+            original_filename="doc_bk_rev.pdf",
+            stored_file_path="/tmp/doc2.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            document_type="invoice",
+            status="bookkeeping_review_required",
+        ),
+        Document(
+            id=uuid.uuid4(),
+            original_filename="doc_ready.pdf",
+            stored_file_path="/tmp/doc3.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            document_type="receipt",
+            status="ready_to_post",
+        ),
+        Document(
+            id=uuid.uuid4(),
+            original_filename="doc_proc.pdf",
+            stored_file_path="/tmp/doc4.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            document_type="invoice",
+            status="extracting",
+        ),
+    ]
+    for d in docs:
+        db_session.add(d)
+    db_session.commit()
+
+    # 1. Umbrella review_required filter (should match extraction_review_required and bookkeeping_review_required)
+    res = client.get("/api/v1/documents?status=review_required")
+    assert res.status_code == 200
+    items = res.json()["items"]
+    statuses = {item["status"] for item in items}
+    assert "extraction_review_required" in statuses
+    assert "bookkeeping_review_required" in statuses
+    assert "ready_to_post" not in statuses
+
+    # 2. Specific extraction_review_required filter
+    res_ext = client.get("/api/v1/documents?status=extraction_review_required")
+    assert res_ext.status_code == 200
+    ext_items = res_ext.json()["items"]
+    assert all(item["status"] == "extraction_review_required" for item in ext_items)
+
+    # 3. Specific ready_to_post filter
+    res_ready = client.get("/api/v1/documents?status=ready_to_post")
+    assert res_ready.status_code == 200
+    ready_items = res_ready.json()["items"]
+    assert all(item["status"] == "ready_to_post" for item in ready_items)
+    assert any(item["original_filename"] == "doc_ready.pdf" for item in ready_items)
+
+    # 4. Processing umbrella filter (matching 'extracting')
+    res_proc = client.get("/api/v1/documents?status=processing")
+    assert res_proc.status_code == 200
+    proc_items = res_proc.json()["items"]
+    assert any(item["status"] == "extracting" for item in proc_items)
+
+
+

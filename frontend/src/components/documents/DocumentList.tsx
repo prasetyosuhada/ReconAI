@@ -46,28 +46,68 @@ export const DocumentList: React.FC<DocumentListProps> = ({
   const getStatusBadge = (status: string) => {
     switch (status.toLowerCase()) {
       case 'uploaded':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-700/50 border border-slate-600/50 text-slate-300 text-xs font-medium">
+            <Clock className="w-3 h-3 text-slate-400" />
+            Uploaded
+          </span>
+        )
       case 'processing':
       case 'extracting':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium animate-pulse">
             <Loader2 className="w-3 h-3 animate-spin" />
-            {status}
+            Processing
           </span>
         )
       case 'extracted':
-      case 'posted':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-teal-500/10 border border-teal-500/20 text-teal-400 text-xs font-medium">
             <CheckCircle2 className="w-3 h-3" />
-            {status}
+            Extracted
+          </span>
+        )
+      case 'ready_to_post':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-medium">
+            <CheckCircle2 className="w-3 h-3" />
+            Ready to Post
           </span>
         )
       case 'review_required':
+      case 'needs_review':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
+            <Clock className="w-3 h-3" />
+            Review Required
+          </span>
+        )
       case 'extraction_review_required':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
             <Clock className="w-3 h-3" />
-            Needs Review
+            Extraction Review
+          </span>
+        )
+      case 'bookkeeping_review_required':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
+            <Clock className="w-3 h-3" />
+            Bookkeeping Review
+          </span>
+        )
+      case 'approved':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-medium">
+            <CheckCircle2 className="w-3 h-3" />
+            Approved
+          </span>
+        )
+      case 'posted':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
+            <CheckCircle2 className="w-3 h-3" />
+            Posted
           </span>
         )
       case 'rejected':
@@ -75,13 +115,13 @@ export const DocumentList: React.FC<DocumentListProps> = ({
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-medium">
             <AlertCircle className="w-3 h-3" />
-            {status}
+            {status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' ')}
           </span>
         )
       default:
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium">
-            {status}
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium capitalize">
+            {status.replace(/_/g, ' ')}
           </span>
         )
     }
@@ -127,9 +167,14 @@ export const DocumentList: React.FC<DocumentListProps> = ({
               <option value="uploaded">Uploaded</option>
               <option value="processing">Processing</option>
               <option value="extracted">Extracted</option>
-              <option value="review_required">Review Required</option>
+              <option value="ready_to_post">Ready to Post</option>
+              <option value="review_required">Review Required (All)</option>
+              <option value="extraction_review_required">↳ Extraction Review</option>
+              <option value="bookkeeping_review_required">↳ Bookkeeping Review</option>
+              <option value="approved">Approved</option>
               <option value="posted">Posted</option>
               <option value="rejected">Rejected</option>
+              <option value="failed">Failed</option>
             </select>
           </div>
 

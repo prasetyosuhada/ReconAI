@@ -89,8 +89,23 @@ def list_documents(
 ) -> DocumentListResponse:
     """List uploaded documents in repository."""
     query = db.query(Document)
-    if status:
-        query = query.filter(Document.status == status)
+    if status and status.strip():
+        s = status.strip().lower()
+        if s in ("review_required", "needs_review"):
+            query = query.filter(
+                Document.status.in_([
+                    "review_required",
+                    "needs_review",
+                    "extraction_review_required",
+                    "bookkeeping_review_required",
+                ])
+            )
+        elif s in ("processing", "extracting"):
+            query = query.filter(Document.status.in_(["processing", "extracting"]))
+        elif s in ("failed", "error"):
+            query = query.filter(Document.status.in_(["failed", "error"]))
+        else:
+            query = query.filter(Document.status == s)
 
     total_count = query.with_entities(func.count(Document.id)).scalar() or 0
     records = (
