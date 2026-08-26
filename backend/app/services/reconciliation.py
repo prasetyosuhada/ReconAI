@@ -5,7 +5,7 @@ from collections.abc import Generator
 from typing import Any
 
 from app.agents.bookkeeping import run_bookkeeping_agent
-from app.agents.reconciliation import run_reconciliation_agent
+from app.agents.orchestrator import reconciliation_graph
 from app.db.session import SessionLocal
 from app.models.adjustment_suggestion import AdjustmentSuggestion
 from app.models.coa import ChartOfAccount
@@ -262,14 +262,23 @@ def stream_reconciliation_workflow(
                 yield f"data: {json.dumps({'stage': 'agent_invoked', 'tx_id': str(tx.id), 'description': tx.description, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'No exact match. Invoking AI Reconciliation Agent for {tx.description}...' })}\n\n"
 
                 try:
-                    agent_res = run_reconciliation_agent(tx_dict, candidate_dicts)
-                    top_matches = agent_res.result.matches or []
+                    agent_state = reconciliation_graph.invoke(
+                        {
+                            "bank_transaction": tx_dict,
+                            "candidate_journal_entries": candidate_dicts,
+                        }
+                    )
+                    top_matches = agent_state.get("candidate_matches", []) or []
+                    agent_status = agent_state.get("status")
+                    agent_needs_review = agent_state.get("needs_review", False)
 
                     if top_matches:
                         best_match = top_matches[0]
-                        matched_je_id = uuid.UUID(best_match.journal_entry_id)
-                        conf = best_match.confidence_score
-                        is_high_conf = conf >= 0.85
+                        matched_je_id = uuid.UUID(best_match["journal_entry_id"])
+                        conf = float(best_match.get("confidence_score", 0.0))
+                        is_high_conf = (
+                            agent_status == "matched" and not agent_needs_review
+                        )
 
                         match_status = "accepted" if is_high_conf else "proposed"
                         match_type = "fuzzy"
@@ -281,10 +290,10 @@ def stream_reconciliation_workflow(
                             match_type=match_type,
                             status=match_status,
                             confidence_score=conf,
-                            amount_score=best_match.amount_score,
-                            date_score=best_match.date_score,
-                            vendor_score=best_match.vendor_score,
-                            rationale=best_match.rationale,
+                            amount_score=best_match.get("amount_score"),
+                            date_score=best_match.get("date_score"),
+                            vendor_score=best_match.get("vendor_score"),
+                            rationale=best_match.get("rationale"),
                         )
                         db.add(match)
 
@@ -316,10 +325,10 @@ def stream_reconciliation_workflow(
                                     "reference_number": tx.reference_number,
                                     "proposed_journal_entry_id": str(matched_je_id),
                                     "confidence_score": conf,
-                                    "amount_score": best_match.amount_score,
-                                    "date_score": best_match.date_score,
-                                    "vendor_score": best_match.vendor_score,
-                                    "rationale": best_match.rationale,
+                                    "amount_score": best_match.get("amount_score"),
+                                    "date_score": best_match.get("date_score"),
+                                    "vendor_score": best_match.get("vendor_score"),
+                                    "rationale": best_match.get("rationale"),
                                 },
                             )
                             db.add(review)
@@ -329,14 +338,14 @@ def stream_reconciliation_workflow(
                         doc_id_to_pass = matched_je_rec.document_id if matched_je_rec else None
 
                         reasoning_items = []
-                        if best_match.rationale:
-                            reasoning_items.append(best_match.rationale)
-                        if best_match.amount_score is not None:
-                            reasoning_items.append(f"Amount match score: {int(best_match.amount_score * 100)}%")
-                        if best_match.date_score is not None:
-                            reasoning_items.append(f"Date match score: {int(best_match.date_score * 100)}%")
-                        if best_match.vendor_score is not None:
-                            reasoning_items.append(f"Vendor match score: {int(best_match.vendor_score * 100)}%")
+                        if best_match.get("rationale"):
+                            reasoning_items.append(best_match["rationale"])
+                        if best_match.get("amount_score") is not None:
+                            reasoning_items.append(f"Amount match score: {int(best_match['amount_score'] * 100)}%")
+                        if best_match.get("date_score") is not None:
+                            reasoning_items.append(f"Date match score: {int(best_match['date_score'] * 100)}%")
+                        if best_match.get("vendor_score") is not None:
+                            reasoning_items.append(f"Vendor match score: {int(best_match['vendor_score'] * 100)}%")
 
                         log_event(
                             db=db,
@@ -356,7 +365,7 @@ def stream_reconciliation_workflow(
                                 "confidence_score": conf,
                             },
                             confidence_score=conf,
-                            rationale=best_match.rationale,
+                            rationale=best_match.get("rationale"),
                             document_id=doc_id_to_pass,
                         )
                         db.commit()
@@ -367,6 +376,8 @@ def stream_reconciliation_workflow(
                             yield f"data: {json.dumps({'stage': 'review_queued', 'tx_id': str(tx.id), 'matched_je_id': str(matched_je_id), 'confidence': conf, 'proposed_count': proposed_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'⚠️ AI Agent proposed match for {tx.description} ({int(conf*100)}% conf). Queued for Human Review.'})}\n\n"
 
                     else:
+                        if agent_status == "failed":
+                            yield f"data: {json.dumps({'stage': 'agent_error', 'tx_id': str(tx.id), 'message': f'Reconciliation agent failed for {tx.description}: {agent_state.get("error") or "unknown error"}'})}\n\n"
                         unmatched_count += 1
                         # No matches found by agent — bank transaction remains Bank Only.
                         # Unmatched (Bank Only) items are resolved in the Bank Reconciliation view
@@ -428,4 +439,3 @@ def execute_reconciliation_workflow(import_id: str | uuid.UUID) -> None:
     """Execute background reconciliation by consuming the stream generator."""
     for _ in stream_reconciliation_workflow(import_id):
         pass
-

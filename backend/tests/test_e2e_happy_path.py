@@ -234,15 +234,19 @@ def test_e2e_happy_path_workflow(client, db_session):
     assert bank_res.status_code == 201
     import_id = bank_res.json()["id"]
 
-    mock_agent_res = MagicMock()
-    mock_agent_res.result.matches = []
+    mock_graph = MagicMock()
+    mock_graph.invoke.return_value = {
+        "candidate_matches": [],
+        "status": "unmatched_review_required",
+        "needs_review": True,
+    }
 
     # Run Reconciliation Engine
     with (
         patch("app.services.reconciliation.SessionLocal", return_value=db_session),
         patch(
-            "app.services.reconciliation.run_reconciliation_agent",
-            return_value=mock_agent_res,
+            "app.services.reconciliation.reconciliation_graph",
+            mock_graph,
         ),
     ):
         execute_reconciliation_workflow(import_id)

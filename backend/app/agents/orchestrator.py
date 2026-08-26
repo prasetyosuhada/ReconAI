@@ -16,6 +16,7 @@ from app.agents.reconciliation import run_reconciliation_agent
 from app.agents.state import (
     BookkeepingState,
     DocumentIntakeState,
+    DocumentProcessingState,
     ReconciliationState,
 )
 
@@ -150,7 +151,7 @@ def route_after_reconciliation(
 # ==========================================
 
 
-def document_intake_node(state: DocumentIntakeState) -> DocumentIntakeState:
+def document_intake_node(state: DocumentProcessingState) -> DocumentProcessingState:
     """LangGraph node executing Document Intake Agent."""
     logger.info("Executing document_intake_node...")
     response = run_document_intake_agent(
@@ -179,6 +180,7 @@ def document_intake_node(state: DocumentIntakeState) -> DocumentIntakeState:
 
     return {
         **state,
+        "document_type": result.document_type,
         "vendor_name": result.vendor_name,
         "transaction_date": result.transaction_date,
         "subtotal_amount": result.subtotal_amount,
@@ -196,11 +198,12 @@ def document_intake_node(state: DocumentIntakeState) -> DocumentIntakeState:
     }
 
 
-def bookkeeping_node(state: BookkeepingState) -> BookkeepingState:
+def bookkeeping_node(state: DocumentProcessingState) -> DocumentProcessingState:
     """LangGraph node executing Bookkeeping Agent."""
     logger.info("Executing bookkeeping_node...")
 
     extraction_data = {
+        "document_type": state.get("document_type", "unknown"),
         "vendor_name": state.get("vendor_name"),
         "transaction_date": state.get("transaction_date"),
         "subtotal_amount": state.get("subtotal_amount"),
@@ -208,6 +211,7 @@ def bookkeeping_node(state: BookkeepingState) -> BookkeepingState:
         "total_amount": state.get("total_amount"),
         "currency": state.get("currency", "IDR"),
         "line_items": state.get("line_items", []),
+        "extraction_notes": state.get("extraction_notes"),
     }
 
     coa_list = state.get("chart_of_accounts", [])
@@ -236,6 +240,8 @@ def bookkeeping_node(state: BookkeepingState) -> BookkeepingState:
     )
 
     journal_lines = [jl.model_dump() for jl in result.journal_lines]
+    total_debit = sum(line["debit_amount"] for line in journal_lines)
+    total_credit = sum(line["credit_amount"] for line in journal_lines)
 
     return {
         **state,
@@ -243,6 +249,8 @@ def bookkeeping_node(state: BookkeepingState) -> BookkeepingState:
         "entry_description": result.description,
         "journal_lines": journal_lines,
         "proposed_journal": journal_lines,
+        "total_debit": total_debit,
+        "total_credit": total_credit,
         "is_balanced": result.is_balanced,
         "uses_sensitive_account": result.uses_sensitive_account,
         "risk_flags": result.risk_flags,
@@ -279,25 +287,29 @@ def reconciliation_node(state: ReconciliationState) -> ReconciliationState:
     return {
         **state,
         "candidate_matches": [m.model_dump() for m in result.matches],
+        "recommended_status": result.recommended_status,
         "confidence_score": response.confidence_score,
         "rationale": response.rationale,
         "warnings": response.warnings,
-        "status": result.recommended_status,
+        "status": (
+            "failed" if response.status == "failed" else result.recommended_status
+        ),
         "needs_review": next_step == "reconciliation_review_required",
+        "error": response.rationale if response.status == "failed" else None,
     }
 
 
 def review_router_node(state: dict[str, Any]) -> dict[str, Any]:
     """LangGraph node capturing human review queue payloads when routing to review."""
     logger.info("Executing review_router_node - Routing to Human Review Queue...")
-    warnings = list(state.get("warnings", []))
-    if "Routed to human review queue for manual verification." not in warnings:
-        warnings.append("Routed to human review queue for manual verification.")
+    review_warning = "Routed to human review queue for manual verification."
+    warnings = state.get("warnings", [])
 
+    # `warnings` uses an additive reducer. Return only the new warning instead of
+    # copying the complete accumulated list, otherwise previous warnings duplicate.
     return {
-        **state,
         "needs_review": True,
-        "warnings": warnings,
+        "warnings": [] if review_warning in warnings else [review_warning],
     }
 
 
@@ -308,7 +320,7 @@ def review_router_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def build_document_processing_graph() -> Any:
     """Build and compile the Document Intake -> Bookkeeping LangGraph workflow DAG."""
-    builder = StateGraph(BookkeepingState)
+    builder = StateGraph(DocumentProcessingState)
 
     # 1. Add nodes
     builder.add_node("document_intake", document_intake_node)

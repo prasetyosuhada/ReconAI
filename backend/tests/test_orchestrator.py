@@ -13,6 +13,9 @@ from app.agents.schemas import (
     DocumentExtractionResult,
     DocumentIntakeResponse,
     ProposedJournalLine,
+    ProposedMatchCandidate,
+    ReconciliationResponse,
+    ReconciliationResult,
 )
 
 
@@ -220,3 +223,65 @@ def test_reconciliation_graph_end_to_end_unmatched():
 
     assert final_state["needs_review"] is True
     assert final_state["status"] == "unmatched_review_required"
+
+
+@patch("app.agents.orchestrator.run_reconciliation_agent")
+def test_reconciliation_graph_end_to_end_matched(mock_agent):
+    mock_agent.return_value = ReconciliationResponse(
+        agent_name="reconciliation_agent",
+        status="completed",
+        confidence_score=0.95,
+        rationale="Single strong candidate match.",
+        result=ReconciliationResult(
+            bank_transaction_id="tx-101",
+            matches=[
+                ProposedMatchCandidate(
+                    journal_entry_id="je-101",
+                    match_type="exact",
+                    confidence_score=0.95,
+                    amount_score=1.0,
+                    date_score=0.95,
+                    vendor_score=0.9,
+                    rationale="Amount and date align.",
+                )
+            ],
+            recommended_status="matched",
+        ),
+    )
+
+    final_state = reconciliation_graph.invoke(
+        {
+            "bank_transaction": {"id": "tx-101", "amount": 250000.0},
+            "candidate_journal_entries": [{"id": "je-101"}],
+        }
+    )
+
+    assert final_state["status"] == "matched"
+    assert final_state["recommended_status"] == "matched"
+    assert final_state["needs_review"] is False
+
+
+@patch("app.agents.orchestrator.run_reconciliation_agent")
+def test_reconciliation_graph_preserves_agent_failure(mock_agent):
+    mock_agent.return_value = ReconciliationResponse(
+        agent_name="reconciliation_agent",
+        status="failed",
+        confidence_score=0.0,
+        rationale="Provider unavailable.",
+        result=ReconciliationResult(
+            bank_transaction_id="tx-102",
+            matches=[],
+            recommended_status="unmatched_review_required",
+        ),
+    )
+
+    final_state = reconciliation_graph.invoke(
+        {
+            "bank_transaction": {"id": "tx-102", "amount": 250000.0},
+            "candidate_journal_entries": [{"id": "je-102"}],
+        }
+    )
+
+    assert final_state["status"] == "failed"
+    assert final_state["needs_review"] is False
+    assert final_state["error"] == "Provider unavailable."

@@ -52,6 +52,7 @@ class DocumentIntakeState(TypedDict, total=False):
 
     # Extraction output
     extraction_id: str | None
+    document_type: str
     vendor_name: str | None
     transaction_date: str | None
     subtotal_amount: float | None
@@ -82,6 +83,7 @@ class BookkeepingState(TypedDict, total=False):
     demo_currency: str
     raw_text: str | None
     extraction_id: str | None
+    document_type: str
     vendor_name: str | None
     transaction_date: str | None
     subtotal_amount: float | None
@@ -118,6 +120,13 @@ class BookkeepingState(TypedDict, total=False):
     error: str | None
 
 
+class DocumentProcessingState(BookkeepingState, total=False):
+    """Unified state for the document intake -> bookkeeping workflow."""
+
+    # Intake-only metadata that must remain available to bookkeeping and persistence.
+    extraction_notes: str | None
+
+
 class ReconciliationState(TypedDict, total=False):
     """State schema for Reconciliation Agent & Workflow."""
 
@@ -132,6 +141,7 @@ class ReconciliationState(TypedDict, total=False):
     match_id: str | None
     matched_journal_entry_id: str | None
     match_type: str  # exact, fuzzy, manual, unmatched
+    recommended_status: str
     amount_score: float | None
     date_score: float | None
     vendor_score: float | None

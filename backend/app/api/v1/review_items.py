@@ -15,7 +15,6 @@ from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry, JournalEntryLine
 from app.models.review import ReviewItem
-from app.services.audit_service import log_event
 from app.schemas.review import (
     ReviewApproveRequest,
     ReviewApproveResponse,
@@ -30,6 +29,7 @@ from app.services.accounting import (
     post_journal_entry_to_ledger,
     save_journal_entry_safely,
 )
+from app.services.audit_service import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +152,7 @@ def _continue_document_to_bookkeeping(
         "mime_type": doc.mime_type,
         "stored_file_path": doc.stored_file_path,
         "raw_text": extraction.raw_text,
+        "extraction_notes": payload.get("extraction_notes"),
         "extraction_id": str(extraction.id),
         "vendor_name": extraction.vendor_name,
         "transaction_date": extraction.transaction_date.isoformat()

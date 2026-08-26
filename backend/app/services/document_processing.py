@@ -139,6 +139,7 @@ def stream_document_processing(
             "mime_type": effective_mime,
             "stored_file_path": file_path,
             "raw_text": raw_text or None,
+            "document_type": document_type,
             "status": "extracting",
             "chart_of_accounts": coa_list,
         }
@@ -169,7 +170,6 @@ def stream_document_processing(
                 lines = bookkeeping_data.get("journal_lines") or []
                 is_bal = bookkeeping_data.get("is_balanced", True)
                 uses_sens = bookkeeping_data.get("uses_sensitive_account", False)
-                bk_conf = float(bookkeeping_data.get("confidence_score", 0.0))
 
                 yield f"data: {json.dumps({'stage': 'bookkeeping_done', 'percentage': 88, 'lines_count': len(lines), 'message': f'✓ Bookkeeping Agent: Classified {len(lines)} journal entry lines (Balanced: {is_bal}, Sensitive: {uses_sens})'})}\n\n"
 
@@ -394,6 +394,9 @@ def stream_document_processing(
             yield f"data: {json.dumps({'stage': 'journal_created', 'percentage': 95, 'message': f'✓ Balanced journal entry created with #{je_ref}'})}\n\n"
 
         doc.status = final_status
+        extracted_document_type = final_state.get("document_type")
+        if extracted_document_type in ("invoice", "receipt"):
+            doc.document_type = extracted_document_type
         db.commit()
 
         # 4. Audit Trail Event: extraction_completed (idempotent)
@@ -569,4 +572,3 @@ def process_document_background(
         document_id, stored_file_path, mime_type, original_filename, document_type
     ):
         pass
-
