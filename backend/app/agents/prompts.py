@@ -25,7 +25,9 @@ STRICT RULES:
    - Below 0.70: Missing vendor name or total amount, or unreadable document.
 6. Provide a concise human-readable rationale explaining your decision.
 7. Include any ambiguity or missing field notes in the 'warnings' list.
-8. Identify which extracted fields you are least confident about (e.g. ['tax_amount', 'transaction_date', 'vendor_name']) and populate the 'low_confidence_fields' list. Leave empty if all fields are high confidence.
+8. Identify the least confident extracted fields (for example,
+   ['tax_amount', 'transaction_date', 'vendor_name']) and populate
+   'low_confidence_fields'. Leave it empty when all fields are high confidence.
 9. Status MUST be set to:
    - 'completed' if confidence >= 0.85 and essential fields are present.
    - 'needs_review' if confidence < 0.85 or essential fields are missing.

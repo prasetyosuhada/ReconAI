@@ -25,7 +25,6 @@ from app.models.reconciliation import (
     ReconciliationMatch,
 )
 from app.models.review import ReviewItem
-from app.services.audit_service import log_event
 from app.schemas.reconciliation import (
     AdjustmentSuggestionRequest,
     AdjustmentSuggestionResponse,
@@ -42,6 +41,7 @@ from app.schemas.reconciliation import (
     SuggestedJournalLine,
 )
 from app.services.accounting import save_journal_entry_safely
+from app.services.audit_service import log_event
 from app.services.reconciliation import (
     compute_and_save_adjustment_suggestion,
     execute_reconciliation_workflow,
@@ -123,7 +123,10 @@ def run_reconciliation_workflow(
     "/suggest-adjustment",
     response_model=AdjustmentSuggestionResponse,
     status_code=status.HTTP_200_OK,
-    summary="Retrieve pre-computed BookkeepingAgent COA suggestion for an unmatched bank transaction",
+    summary=(
+        "Retrieve pre-computed BookkeepingAgent COA suggestion for an unmatched "
+        "bank transaction"
+    ),
 )
 def suggest_adjustment_journal(
     req: AdjustmentSuggestionRequest,
@@ -158,15 +161,15 @@ def suggest_adjustment_journal(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
-                f"No COA suggestion found for bank transaction [{req.bank_transaction_id}]. "
-                "Suggestion is generated automatically when the match is rejected or unmatched. "
+                f"No COA suggestion found for bank transaction "
+                f"[{req.bank_transaction_id}]. "
+                "Suggestion is generated automatically when the match is rejected "
+                "or unmatched. "
                 "Run 'Run Recon Engine' first if this is a Bank Only transaction."
             ),
         )
 
-    logger.info(
-        "Returning stored BookkeepingAgent suggestion for bank tx [%s]", tx.id
-    )
+    logger.info("Returning stored BookkeepingAgent suggestion for bank tx [%s]", tx.id)
 
     return AdjustmentSuggestionResponse(
         bank_transaction_id=str(tx.id),
@@ -346,7 +349,11 @@ def accept_reconciliation_match(
             rev_item.status = "approved"
             rev_item.resolved_by = "human_user"
             rev_item.resolved_at = datetime.now(UTC)
-            rev_item.resolution_note = action_req.resolution_note if action_req else "Approved in Reconciliation View."
+            rev_item.resolution_note = (
+                action_req.resolution_note
+                if action_req
+                else "Approved in Reconciliation View."
+            )
 
     note = action_req.resolution_note if action_req else None
     matched_je_rec = (
@@ -429,13 +436,19 @@ def reject_reconciliation_match(
             rev_item.status = "rejected"
             rev_item.resolved_by = "human_user"
             rev_item.resolved_at = datetime.now(UTC)
-            rev_item.resolution_note = action_req.resolution_note if action_req else "Rejected in Reconciliation View."
+            rev_item.resolution_note = (
+                action_req.resolution_note
+                if action_req
+                else "Rejected in Reconciliation View."
+            )
 
     # Eagerly compute & save COA suggestion for newly unmatched transaction
     if match.bank_transaction:
         existing_sug = (
             db.query(AdjustmentSuggestion)
-            .filter(AdjustmentSuggestion.bank_transaction_id == match.bank_transaction.id)
+            .filter(
+                AdjustmentSuggestion.bank_transaction_id == match.bank_transaction.id
+            )
             .first()
         )
         if not existing_sug:
@@ -443,7 +456,8 @@ def reject_reconciliation_match(
                 compute_and_save_adjustment_suggestion(tx=match.bank_transaction, db=db)
             except Exception as e:
                 logger.warning(
-                    "Could not generate eager suggestion on match reject for tx [%s]: %s",
+                    "Could not generate eager suggestion on match reject for "
+                    "tx [%s]: %s",
                     match.bank_transaction_id,
                     e,
                 )
@@ -498,9 +512,7 @@ def get_reconciliation_summary(
         ) from None
 
     import_record = (
-        db.query(BankStatementImport)
-        .filter(BankStatementImport.id == imp_uuid)
-        .first()
+        db.query(BankStatementImport).filter(BankStatementImport.id == imp_uuid).first()
     )
     if not import_record:
         raise HTTPException(
@@ -551,7 +563,7 @@ def get_reconciliation_summary(
 
     # Calculate status & progress percentage
     total_tx = len(transactions)
-    prog_pct = int((matched_count / total_tx * 100)) if total_tx > 0 else 0
+    prog_pct = int(matched_count / total_tx * 100) if total_tx > 0 else 0
 
     if is_balanced and matched_count == total_tx and total_tx > 0:
         recon_status = "reconciled"
@@ -606,11 +618,7 @@ def manual_match_transaction(
             detail=f"Bank transaction [{req.bank_transaction_id}] not found.",
         )
 
-    je = (
-        db.query(JournalEntry)
-        .filter(JournalEntry.id == req.journal_entry_id)
-        .first()
-    )
+    je = db.query(JournalEntry).filter(JournalEntry.id == req.journal_entry_id).first()
     if not je:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -712,13 +720,13 @@ def create_and_post_adjustment_entry(
     if req.lines and len(req.lines) >= 2:
         lines_data = [
             {
-                "account_code": l.account_code,
-                "account_name": l.account_name,
-                "description": l.description,
-                "debit_amount": l.debit_amount,
-                "credit_amount": l.credit_amount,
+                "account_code": line.account_code,
+                "account_name": line.account_name,
+                "description": line.description,
+                "debit_amount": line.debit_amount,
+                "credit_amount": line.credit_amount,
             }
-            for l in req.lines
+            for line in req.lines
         ]
     else:
         # Fallback to stored suggestion
@@ -778,7 +786,9 @@ def create_and_post_adjustment_entry(
         "source_type": "reconciliation",
         "agent_name": "BookkeepingAgent",
         "confidence_score": 1.0,
-        "rationale": f"Adjusting journal entry created from bank mutation: {tx.description}",
+        "rationale": (
+            f"Adjusting journal entry created from bank mutation: {tx.description}"
+        ),
         "lines": lines_data,
     }
 
@@ -791,7 +801,10 @@ def create_and_post_adjustment_entry(
     if not save_result.success or not save_result.journal_entry_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to post adjusting journal entry: {'; '.join(save_result.errors)}",
+            detail=(
+                "Failed to post adjusting journal entry: "
+                f"{'; '.join(save_result.errors)}"
+            ),
         )
 
     je_id = uuid.UUID(save_result.journal_entry_id)
@@ -817,7 +830,9 @@ def create_and_post_adjustment_entry(
         existing_match.amount_score = 1.00
         existing_match.date_score = 1.00
         existing_match.vendor_score = 1.00
-        existing_match.rationale = "Adjusting journal entry created and posted to ledger."
+        existing_match.rationale = (
+            "Adjusting journal entry created and posted to ledger."
+        )
         existing_match.updated_at = datetime.now(UTC)
         match_rec = existing_match
     else:
@@ -870,8 +885,8 @@ def create_and_post_adjustment_entry(
     )
     db.commit()
 
-    total_deb = sum(float(l.get("debit_amount", 0.0)) for l in lines_data)
-    total_cred = sum(float(l.get("credit_amount", 0.0)) for l in lines_data)
+    total_deb = sum(float(line.get("debit_amount", 0.0)) for line in lines_data)
+    total_cred = sum(float(line.get("credit_amount", 0.0)) for line in lines_data)
 
     return CreateAdjustmentJournalResponse(
         journal_entry_id=je_id,
@@ -880,7 +895,7 @@ def create_and_post_adjustment_entry(
         status="posted",
         total_debit=total_deb,
         total_credit=total_cred,
-        message="Adjusting journal entry created and posted to General Ledger successfully.",
+        message=(
+            "Adjusting journal entry created and posted to General Ledger successfully."
+        ),
     )
-
-

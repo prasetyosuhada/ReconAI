@@ -53,10 +53,7 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
   const activeImport = imports.find((i) => i.id === activeImportId) ?? null
 
   // Button is only active when a fresh import exists that hasn't been processed yet
-  const canRunRecon =
-    !!activeImportId &&
-    !!activeImport &&
-    activeImport.status === 'imported'
+  const canRunRecon = !!activeImportId && !!activeImport && activeImport.status === 'imported'
 
   const reconEngineDisabledReason = !activeImportId
     ? 'Upload a Bank Statement CSV first'
@@ -259,7 +256,10 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
             <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
               Bank Account
             </div>
-            <div className="text-xs font-semibold text-slate-100 truncate" title={bankAccountDisplay}>
+            <div
+              className="text-xs font-semibold text-slate-100 truncate"
+              title={bankAccountDisplay}
+            >
               {bankAccountDisplay}
             </div>
           </div>
@@ -330,7 +330,9 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
                         setDropdownOpen(false)
                       }}
                       className={`w-full px-3 py-2 flex items-center gap-2.5 text-left text-xs hover:bg-slate-800 transition-colors cursor-pointer ${
-                        imp.id === activeImportId ? 'bg-emerald-950/40 text-emerald-300' : 'text-slate-200'
+                        imp.id === activeImportId
+                          ? 'bg-emerald-950/40 text-emerald-300'
+                          : 'text-slate-200'
                       }`}
                     >
                       <FileSpreadsheet
@@ -399,4 +401,3 @@ export const ReconciliationHeader: React.FC<ReconciliationHeaderProps> = ({
     </div>
   )
 }
-

@@ -6,7 +6,6 @@ import {
   Code2,
   ExternalLink,
   History,
-  Layers,
   ShieldCheck,
   Sparkles,
   UploadCloud,
@@ -14,40 +13,13 @@ import {
 } from 'lucide-react'
 import type { AuditEventResponse } from '../../services/api'
 import { AuditEventInspectorModal } from './AuditEventInspectorModal'
+import { getActorMeta } from './auditDisplayUtils'
 
 interface AuditTimelineProps {
   events: AuditEventResponse[]
   highlightedEventId?: string | null
   onSelectJournalEntry?: (journalEntryId: string) => void
   onSelectBankTransaction?: (bankTransactionId: string) => void
-}
-
-export function getActorMeta(actorType?: string) {
-  switch (actorType?.toLowerCase()) {
-    case 'agent':
-      return {
-        label: 'AI AGENT',
-        badgeClass:
-          'bg-purple-500/10 border border-purple-500/25 text-purple-300',
-        textClass: 'text-purple-400',
-        Icon: Sparkles,
-      }
-    case 'human':
-      return {
-        label: 'HUMAN',
-        badgeClass:
-          'bg-amber-500/10 border border-amber-500/25 text-amber-300',
-        textClass: 'text-amber-400',
-        Icon: UserCheck,
-      }
-    default:
-      return {
-        label: 'SYSTEM',
-        badgeClass: 'bg-slate-800/80 border border-slate-700 text-slate-300',
-        textClass: 'text-slate-400',
-        Icon: Layers,
-      }
-  }
 }
 
 export const AuditTimeline: React.FC<AuditTimelineProps> = ({
@@ -103,9 +75,7 @@ export const AuditTimeline: React.FC<AuditTimelineProps> = ({
       >
         <ActorIcon className={`w-3.5 h-3.5 ${meta.textClass} shrink-0`} />
         <div className="text-left leading-none">
-          <span
-            className={`text-[9px] font-bold tracking-wider ${meta.textClass} uppercase block`}
-          >
+          <span className={`text-[9px] font-bold tracking-wider ${meta.textClass} uppercase block`}>
             {meta.label}
           </span>
           <span className="text-[11px] font-semibold text-slate-200 block mt-0.5 max-w-[130px] sm:max-w-[180px] truncate">
@@ -254,7 +224,9 @@ export const AuditTimeline: React.FC<AuditTimelineProps> = ({
                   {/* Confidence Score Bar if available */}
                   {confPercent !== null && (
                     <div className="flex items-center gap-2 text-xs">
-                      <span className="text-[11px] text-slate-400 font-medium">Extraction Score:</span>
+                      <span className="text-[11px] text-slate-400 font-medium">
+                        Extraction Score:
+                      </span>
                       <div className="w-24 bg-slate-800 h-1.5 rounded-full overflow-hidden">
                         <div
                           className={`h-full rounded-full ${

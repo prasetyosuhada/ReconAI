@@ -410,7 +410,9 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
                         }}
                         className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition-colors"
                       >
-                        <option value="" disabled>Select COA Account...</option>
+                        <option value="" disabled>
+                          Select COA Account...
+                        </option>
                         {dbCOA.map((coa) => (
                           <option key={coa.account_code} value={coa.account_code}>
                             [{coa.account_code}] {coa.account_name} ({coa.account_type})

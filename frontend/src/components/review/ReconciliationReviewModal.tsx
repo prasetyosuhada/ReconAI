@@ -85,8 +85,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
 
   // Parse bank transaction attributes from bankTxRecord, payload, or activeItem
   const bankTx = payload.bank_transaction || payload
-  const bankTxId =
-    activeItem?.source_id || bankTxRecord?.id || bankTx.id || payload.tx_id || ''
+  const bankTxId = activeItem?.source_id || bankTxRecord?.id || bankTx.id || payload.tx_id || ''
 
   const rawTxDescription =
     bankTxRecord?.description ||
@@ -109,27 +108,16 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
     ''
 
   const txAmount = Number(
-    bankTxRecord?.amount ??
-      bankTx.amount ??
-      payload.amount ??
-      payload.total_amount ??
-      0
+    bankTxRecord?.amount ?? bankTx.amount ?? payload.amount ?? payload.total_amount ?? 0
   )
 
-  const txCurrency =
-    bankTxRecord?.currency || bankTx.currency || payload.currency || 'IDR'
+  const txCurrency = bankTxRecord?.currency || bankTx.currency || payload.currency || 'IDR'
   const txRef =
-    bankTxRecord?.reference_number ||
-    bankTx.reference_number ||
-    payload.reference_number ||
-    'N/A'
+    bankTxRecord?.reference_number || bankTx.reference_number || payload.reference_number || 'N/A'
 
   // Candidate Match metadata (if fuzzy match)
   const proposedJEId =
-    payload.proposed_journal_entry_id ||
-    payload.journal_entry_id ||
-    payload.proposed_je_id ||
-    null
+    payload.proposed_journal_entry_id || payload.journal_entry_id || payload.proposed_je_id || null
   // For reconciliation review items in Review Queue, treat as candidate match by default while loading
   const isFuzzyMatch =
     Boolean(proposedJEId) ||
@@ -171,8 +159,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
         if (!ignore) {
           setDetailItem(res)
           const p = res.original_payload || {}
-          const jeId =
-            p.proposed_journal_entry_id || p.journal_entry_id || p.proposed_je_id
+          const jeId = p.proposed_journal_entry_id || p.journal_entry_id || p.proposed_je_id
           if (jeId) {
             setLoadingCandidate(true)
             fetchJournalEntryDetail(jeId)
@@ -212,7 +199,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
     return () => {
       ignore = true
     }
-  }, [item?.id])
+  }, [item])
 
   // Load pre-computed BookkeepingAgent suggestion (only from DB cache, no LLM call on open)
   // For fuzzy match items, no COA suggestion needed (they have a candidate GL entry already).
@@ -240,7 +227,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
       .finally(() => {
         setSuggestionLoading(false)
       })
-  }, [bankTxId, isFuzzyMatch])
+  }, [bankTxId, isFuzzyMatch, loadingDetail])
 
   // Handle Approve / Accept Match
   const handleAcceptMatch = async () => {
@@ -388,9 +375,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
                   <Building2 className="w-3.5 h-3.5 text-blue-400" /> Bank Statement Mutation
                 </span>
-                <span className="text-[10px] font-mono text-slate-500">
-                  Ref: {txRef}
-                </span>
+                <span className="text-[10px] font-mono text-slate-500">Ref: {txRef}</span>
               </div>
 
               <div className="space-y-2">

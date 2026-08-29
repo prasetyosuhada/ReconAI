@@ -22,17 +22,20 @@ from app.services.audit_service import log_event
 logger = logging.getLogger(__name__)
 
 
+def _sse_event(payload: dict[str, Any]) -> str:
+    """Serialize a payload as one Server-Sent Events message."""
+    return f"data: {json.dumps(payload, default=str)}\n\n"
+
+
 def compute_and_save_adjustment_suggestion(
     tx: BankTransaction,
     db: Any,
     coa_list: list[dict[str, Any]] | None = None,
 ) -> AdjustmentSuggestion:
-    """Run BookkeepingAgent on a bank transaction and upsert to AdjustmentSuggestion table."""
+    """Run BookkeepingAgent and upsert the adjustment suggestion."""
     if coa_list is None:
         coa_rows = (
-            db.query(ChartOfAccount)
-            .filter(ChartOfAccount.is_active.is_(True))
-            .all()
+            db.query(ChartOfAccount).filter(ChartOfAccount.is_active.is_(True)).all()
         )
         coa_list = [
             {
@@ -110,8 +113,10 @@ def compute_and_save_adjustment_suggestion(
 def stream_reconciliation_workflow(
     import_id: str | uuid.UUID,
 ) -> Generator[str, None, None]:
-    """Execute bank statement reconciliation workflow and yield real-time SSE events."""
-    logger.info("Starting streaming reconciliation workflow for import ID: %s", import_id)
+    """Execute reconciliation and yield real-time SSE events."""
+    logger.info(
+        "Starting streaming reconciliation workflow for import ID: %s", import_id
+    )
     import_uuid = uuid.UUID(import_id) if isinstance(import_id, str) else import_id
 
     db = SessionLocal()
@@ -123,13 +128,26 @@ def stream_reconciliation_workflow(
         )
         if not imp_record:
             logger.error("BankStatementImport %s not found in DB.", import_id)
-            yield f"data: {json.dumps({'stage': 'error', 'message': f'Bank statement import [{import_id}] not found.'})}\n\n"
+            yield _sse_event(
+                {
+                    "stage": "error",
+                    "message": f"Bank statement import [{import_id}] not found.",
+                }
+            )
             return
 
         imp_record.status = "matching_in_progress"
         db.commit()
 
-        yield f"data: {json.dumps({'stage': 'init', 'message': 'Reconciliation Engine initialized. Fetching statement records...', 'percentage': 5})}\n\n"
+        yield _sse_event(
+            {
+                "stage": "init",
+                "message": (
+                    "Reconciliation Engine initialized. Fetching statement records..."
+                ),
+                "percentage": 5,
+            }
+        )
 
         transactions = (
             db.query(BankTransaction)
@@ -161,7 +179,17 @@ def stream_reconciliation_workflow(
         ]
 
         total_tx = len(transactions)
-        yield f"data: {json.dumps({'stage': 'candidates_loaded', 'message': f'Loaded {len(posted_entries)} posted GL entries and {total_tx} bank transactions.', 'total': total_tx, 'percentage': 10})}\n\n"
+        yield _sse_event(
+            {
+                "stage": "candidates_loaded",
+                "message": (
+                    f"Loaded {len(posted_entries)} posted GL entries and "
+                    f"{total_tx} bank transactions."
+                ),
+                "total": total_tx,
+                "percentage": 10,
+            }
+        )
 
         # Prepare candidate dictionary list for matching
         candidate_dicts: list[dict[str, Any]] = []
@@ -193,7 +221,19 @@ def stream_reconciliation_workflow(
 
             if tx.status == "matched":
                 matched_count += 1
-                yield f"data: {json.dumps({'stage': 'already_matched', 'tx_id': str(tx.id), 'description': tx.description, 'amount': float(tx.amount), 'current': idx, 'total': total_tx, 'matched_count': matched_count, 'percentage': pct, 'message': f'#{idx}: {tx.description} is already reconciled.'})}\n\n"
+                yield _sse_event(
+                    {
+                        "stage": "already_matched",
+                        "tx_id": str(tx.id),
+                        "description": tx.description,
+                        "amount": float(tx.amount),
+                        "current": idx,
+                        "total": total_tx,
+                        "matched_count": matched_count,
+                        "percentage": pct,
+                        "message": f"#{idx}: {tx.description} is already reconciled.",
+                    }
+                )
                 continue
 
             tx_dict = {
@@ -208,7 +248,22 @@ def stream_reconciliation_workflow(
                 "currency": tx.currency,
             }
 
-            yield f"data: {json.dumps({'stage': 'evaluating', 'tx_id': str(tx.id), 'description': tx.description, 'amount': float(tx.amount), 'current': idx, 'total': total_tx, 'matched_count': matched_count, 'percentage': pct, 'message': f'Evaluating #{idx}/{total_tx}: {tx.description} (Rp{abs(tx.amount):,.0f}) via Exact Matching...' })}\n\n"
+            yield _sse_event(
+                {
+                    "stage": "evaluating",
+                    "tx_id": str(tx.id),
+                    "description": tx.description,
+                    "amount": float(tx.amount),
+                    "current": idx,
+                    "total": total_tx,
+                    "matched_count": matched_count,
+                    "percentage": pct,
+                    "message": (
+                        f"Evaluating #{idx}/{total_tx}: {tx.description} "
+                        f"(Rp{abs(tx.amount):,.0f}) via Exact Matching..."
+                    ),
+                }
+            )
 
             # Step 1: Deterministic Exact Match
             exact_res = find_exact_reconciliation_matches(tx_dict, candidate_dicts)
@@ -232,7 +287,11 @@ def stream_reconciliation_workflow(
                 matched_count += 1
 
                 # Resolve document_id from matched JournalEntry
-                matched_je_rec = db.query(JournalEntry).filter(JournalEntry.id == matched_je_id).first()
+                matched_je_rec = (
+                    db.query(JournalEntry)
+                    .filter(JournalEntry.id == matched_je_id)
+                    .first()
+                )
                 doc_id_to_pass = matched_je_rec.document_id if matched_je_rec else None
 
                 log_event(
@@ -255,11 +314,39 @@ def stream_reconciliation_workflow(
                 )
                 db.commit()
 
-                yield f"data: {json.dumps({'stage': 'exact_match_found', 'tx_id': str(tx.id), 'matched_je_id': str(matched_je_id), 'confidence': 1.0, 'matched_count': matched_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'✓ Exact Match (100%) for {tx.description} with #JE-{str(matched_je_id)[:8]}'})}\n\n"
+                yield _sse_event(
+                    {
+                        "stage": "exact_match_found",
+                        "tx_id": str(tx.id),
+                        "matched_je_id": str(matched_je_id),
+                        "confidence": 1.0,
+                        "matched_count": matched_count,
+                        "current": idx,
+                        "total": total_tx,
+                        "percentage": pct,
+                        "message": (
+                            f"✓ Exact Match (100%) for {tx.description} "
+                            f"with #JE-{str(matched_je_id)[:8]}"
+                        ),
+                    }
+                )
 
             else:
                 # Step 2: Agent Fuzzy Matching
-                yield f"data: {json.dumps({'stage': 'agent_invoked', 'tx_id': str(tx.id), 'description': tx.description, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'No exact match. Invoking AI Reconciliation Agent for {tx.description}...' })}\n\n"
+                yield _sse_event(
+                    {
+                        "stage": "agent_invoked",
+                        "tx_id": str(tx.id),
+                        "description": tx.description,
+                        "current": idx,
+                        "total": total_tx,
+                        "percentage": pct,
+                        "message": (
+                            "No exact match. Invoking AI Reconciliation Agent "
+                            f"for {tx.description}..."
+                        ),
+                    }
+                )
 
                 try:
                     agent_state = reconciliation_graph.invoke(
@@ -334,18 +421,33 @@ def stream_reconciliation_workflow(
                             db.add(review)
 
                         # Resolve document_id from matched JournalEntry
-                        matched_je_rec = db.query(JournalEntry).filter(JournalEntry.id == matched_je_id).first()
-                        doc_id_to_pass = matched_je_rec.document_id if matched_je_rec else None
+                        matched_je_rec = (
+                            db.query(JournalEntry)
+                            .filter(JournalEntry.id == matched_je_id)
+                            .first()
+                        )
+                        doc_id_to_pass = (
+                            matched_je_rec.document_id if matched_je_rec else None
+                        )
 
                         reasoning_items = []
                         if best_match.get("rationale"):
                             reasoning_items.append(best_match["rationale"])
                         if best_match.get("amount_score") is not None:
-                            reasoning_items.append(f"Amount match score: {int(best_match['amount_score'] * 100)}%")
+                            reasoning_items.append(
+                                "Amount match score: "
+                                f"{int(best_match['amount_score'] * 100)}%"
+                            )
                         if best_match.get("date_score") is not None:
-                            reasoning_items.append(f"Date match score: {int(best_match['date_score'] * 100)}%")
+                            reasoning_items.append(
+                                "Date match score: "
+                                f"{int(best_match['date_score'] * 100)}%"
+                            )
                         if best_match.get("vendor_score") is not None:
-                            reasoning_items.append(f"Vendor match score: {int(best_match['vendor_score'] * 100)}%")
+                            reasoning_items.append(
+                                "Vendor match score: "
+                                f"{int(best_match['vendor_score'] * 100)}%"
+                            )
 
                         log_event(
                             db=db,
@@ -359,7 +461,9 @@ def stream_reconciliation_workflow(
                                 "je_id": str(matched_je_id),
                             },
                             output_snapshot={
-                                "decision": "matched" if is_high_conf else "proposed_match",
+                                "decision": "matched"
+                                if is_high_conf
+                                else "proposed_match",
                                 "reasoning": reasoning_items,
                                 "status": match_status,
                                 "confidence_score": conf,
@@ -371,27 +475,105 @@ def stream_reconciliation_workflow(
                         db.commit()
 
                         if is_high_conf:
-                            yield f"data: {json.dumps({'stage': 'agent_match_accepted', 'tx_id': str(tx.id), 'matched_je_id': str(matched_je_id), 'confidence': conf, 'matched_count': matched_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'✨ AI Agent matched {tx.description} with #JE-{str(matched_je_id)[:8]} ({int(conf*100)}% conf)'})}\n\n"
+                            yield _sse_event(
+                                {
+                                    "stage": "agent_match_accepted",
+                                    "tx_id": str(tx.id),
+                                    "matched_je_id": str(matched_je_id),
+                                    "confidence": conf,
+                                    "matched_count": matched_count,
+                                    "current": idx,
+                                    "total": total_tx,
+                                    "percentage": pct,
+                                    "message": (
+                                        f"✨ AI Agent matched {tx.description} "
+                                        f"with #JE-{str(matched_je_id)[:8]} "
+                                        f"({int(conf * 100)}% conf)"
+                                    ),
+                                }
+                            )
                         else:
-                            yield f"data: {json.dumps({'stage': 'review_queued', 'tx_id': str(tx.id), 'matched_je_id': str(matched_je_id), 'confidence': conf, 'proposed_count': proposed_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'⚠️ AI Agent proposed match for {tx.description} ({int(conf*100)}% conf). Queued for Human Review.'})}\n\n"
+                            yield _sse_event(
+                                {
+                                    "stage": "review_queued",
+                                    "tx_id": str(tx.id),
+                                    "matched_je_id": str(matched_je_id),
+                                    "confidence": conf,
+                                    "proposed_count": proposed_count,
+                                    "current": idx,
+                                    "total": total_tx,
+                                    "percentage": pct,
+                                    "message": (
+                                        "⚠️ AI Agent proposed match for "
+                                        f"{tx.description} ({int(conf * 100)}% conf). "
+                                        "Queued for Human Review."
+                                    ),
+                                }
+                            )
 
                     else:
                         if agent_status == "failed":
-                            yield f"data: {json.dumps({'stage': 'agent_error', 'tx_id': str(tx.id), 'message': f'Reconciliation agent failed for {tx.description}: {agent_state.get("error") or "unknown error"}'})}\n\n"
+                            logger.error(
+                                "Reconciliation agent failed for transaction %s: %s",
+                                tx.id,
+                                agent_state.get("error") or "unknown error",
+                            )
+                            yield _sse_event(
+                                {
+                                    "stage": "agent_error",
+                                    "tx_id": str(tx.id),
+                                    "message": (
+                                        "Reconciliation agent failed. "
+                                        "Please check the server logs."
+                                    ),
+                                }
+                            )
                         unmatched_count += 1
-                        # No matches found by agent — bank transaction remains Bank Only.
-                        # Unmatched (Bank Only) items are resolved in the Bank Reconciliation view
-                        # (e.g. Create Adjusting Journal) and are not routed to the Human Review Queue.
-                        yield f"data: {json.dumps({'stage': 'unmatched_queued', 'tx_id': str(tx.id), 'unmatched_count': unmatched_count, 'current': idx, 'total': total_tx, 'percentage': pct, 'message': f'✕ No matching GL entry for {tx.description}. Marked as Bank Only.'})}\n\n"
+                        # Unmatched items remain Bank Only until resolved in the UI.
+                        yield _sse_event(
+                            {
+                                "stage": "unmatched_queued",
+                                "tx_id": str(tx.id),
+                                "unmatched_count": unmatched_count,
+                                "current": idx,
+                                "total": total_tx,
+                                "percentage": pct,
+                                "message": (
+                                    f"✕ No matching GL entry for {tx.description}. "
+                                    "Marked as Bank Only."
+                                ),
+                            }
+                        )
 
-                        # --- BookkeepingAgent: classify the unmatched tx & save to DB ---
-                        yield f"data: {json.dumps({'stage': 'bookkeeping_classifying', 'tx_id': str(tx.id), 'message': f'🤖 BookkeepingAgent classifying {tx.description} for COA suggestion...'})}\n\n"
+                        # Classify the unmatched transaction and save its suggestion.
+                        yield _sse_event(
+                            {
+                                "stage": "bookkeeping_classifying",
+                                "tx_id": str(tx.id),
+                                "message": (
+                                    "🤖 BookkeepingAgent classifying "
+                                    f"{tx.description} for COA suggestion..."
+                                ),
+                            }
+                        )
 
                         try:
                             suggestion = compute_and_save_adjustment_suggestion(
                                 tx=tx, db=db, coa_list=coa_list
                             )
-                            yield f"data: {json.dumps({'stage': 'bookkeeping_suggestion_saved', 'tx_id': str(tx.id), 'confidence': suggestion.confidence_score, 'message': f'💡 COA suggestion saved for {tx.description} (confidence {int(suggestion.confidence_score * 100)}%).'})}\n\n"
+                            yield _sse_event(
+                                {
+                                    "stage": "bookkeeping_suggestion_saved",
+                                    "tx_id": str(tx.id),
+                                    "confidence": suggestion.confidence_score,
+                                    "message": (
+                                        "💡 COA suggestion saved for "
+                                        f"{tx.description} "
+                                        f"(confidence "
+                                        f"{int(suggestion.confidence_score * 100)}%)."
+                                    ),
+                                }
+                            )
 
                         except Exception as bk_err:
                             logger.warning(
@@ -400,8 +582,16 @@ def stream_reconciliation_workflow(
                                 str(bk_err),
                             )
                             db.rollback()
-                            yield f"data: {json.dumps({'stage': 'bookkeeping_suggestion_failed', 'tx_id': str(tx.id), 'message': f'⚠️ COA suggestion failed for {tx.description}: {str(bk_err)[:80]}'})}\n\n"
-
+                            yield _sse_event(
+                                {
+                                    "stage": "bookkeeping_suggestion_failed",
+                                    "tx_id": str(tx.id),
+                                    "message": (
+                                        "⚠️ COA suggestion is unavailable. "
+                                        "Please check the server logs."
+                                    ),
+                                }
+                            )
 
                 except Exception as ex:
                     logger.error(
@@ -409,7 +599,16 @@ def stream_reconciliation_workflow(
                         tx.id,
                         str(ex),
                     )
-                    yield f"data: {json.dumps({'stage': 'agent_error', 'tx_id': str(tx.id), 'message': f'Agent error for {tx.description}: {str(ex)}'})}\n\n"
+                    yield _sse_event(
+                        {
+                            "stage": "agent_error",
+                            "tx_id": str(tx.id),
+                            "message": (
+                                "Reconciliation agent failed. "
+                                "Please check the server logs."
+                            ),
+                        }
+                    )
 
         # Final import status
         if matched_count == len(transactions) and len(transactions) > 0:
@@ -420,7 +619,20 @@ def stream_reconciliation_workflow(
             imp_record.status = "imported"
 
         db.commit()
-        yield f"data: {json.dumps({'stage': 'completed', 'matched_count': matched_count, 'proposed_count': proposed_count, 'unmatched_count': unmatched_count, 'total_count': total_tx, 'percentage': 100, 'message': f'🎉 Reconciliation Run Complete! {matched_count}/{total_tx} matched, {proposed_count} review required.'})}\n\n"
+        yield _sse_event(
+            {
+                "stage": "completed",
+                "matched_count": matched_count,
+                "proposed_count": proposed_count,
+                "unmatched_count": unmatched_count,
+                "total_count": total_tx,
+                "percentage": 100,
+                "message": (
+                    f"🎉 Reconciliation Run Complete! {matched_count}/{total_tx} "
+                    f"matched, {proposed_count} review required."
+                ),
+            }
+        )
 
     except Exception as e:
         logger.error(
@@ -430,7 +642,12 @@ def stream_reconciliation_workflow(
             exc_info=True,
         )
         db.rollback()
-        yield f"data: {json.dumps({'stage': 'error', 'message': f'Execution failed: {str(e)}'})}\n\n"
+        yield _sse_event(
+            {
+                "stage": "error",
+                "message": "Reconciliation failed. Please check the server logs.",
+            }
+        )
     finally:
         db.close()
 

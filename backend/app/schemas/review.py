@@ -89,7 +89,6 @@ class ReviewItemDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-
 class ReviewApproveRequest(BaseModel):
     """Request schema for approving a review item."""
 

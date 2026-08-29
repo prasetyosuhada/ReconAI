@@ -186,4 +186,3 @@ def test_list_all_bank_transactions_with_search(client, db_session):
     res_stat = client.get("/api/v1/bank/transactions?status=matched")
     assert res_stat.status_code == 200
     assert all(item["status"] == "matched" for item in res_stat.json()["items"])
-

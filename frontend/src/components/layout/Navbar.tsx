@@ -6,9 +6,7 @@ interface NavbarProps {
   pendingReviewCount?: number
 }
 
-export const Navbar: React.FC<NavbarProps> = ({
-  activeTabTitle = 'Dashboard',
-}) => {
+export const Navbar: React.FC<NavbarProps> = ({ activeTabTitle = 'Dashboard' }) => {
   return (
     <header className="sticky top-0 z-30 h-16 bg-slate-900/80 backdrop-blur-md border-b border-slate-800/80 px-6 flex items-center justify-between">
       {/* Left spacer — mirrors profile avatar width so title is truly centered */}

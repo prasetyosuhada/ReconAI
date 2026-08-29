@@ -79,7 +79,6 @@ class JournalEntryDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-
 class ChartOfAccountResponse(BaseModel):
     """API response schema for Chart of Account item."""
 

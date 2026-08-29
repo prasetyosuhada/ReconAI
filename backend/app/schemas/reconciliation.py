@@ -111,7 +111,7 @@ class ReconciliationSummaryResponse(BaseModel):
 
 
 class AdjustmentSuggestionRequest(BaseModel):
-    """Request schema to ask BookkeepingAgent to suggest an adjusting journal entry for an unmatched bank transaction."""
+    """Request schema for an adjusting journal suggestion."""
 
     bank_transaction_id: uuid.UUID = Field(
         ..., description="UUID of the unmatched bank transaction to classify"
@@ -129,7 +129,7 @@ class SuggestedJournalLine(BaseModel):
 
 
 class AdjustmentSuggestionResponse(BaseModel):
-    """API response schema for BookkeepingAgent COA suggestion for an unmatched bank transaction."""
+    """API response schema for an adjusting journal suggestion."""
 
     bank_transaction_id: str
     transaction_description: str
@@ -156,7 +156,7 @@ class ManualMatchRequest(BaseModel):
 
 
 class CreateAdjustmentJournalRequest(BaseModel):
-    """Request schema for creating and posting an adjusting journal entry from a bank mutation."""
+    """Request schema for creating an adjusting journal from a bank mutation."""
 
     bank_transaction_id: uuid.UUID = Field(
         ..., description="UUID of the bank transaction to create journal entry for"
@@ -183,5 +183,3 @@ class CreateAdjustmentJournalResponse(BaseModel):
     total_debit: float
     total_credit: float
     message: str
-
-

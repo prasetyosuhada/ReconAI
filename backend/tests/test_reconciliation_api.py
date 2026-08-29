@@ -260,5 +260,3 @@ def test_stream_reconciliation_workflow_sse(client, db_session):
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")
     assert "data:" in response.text
-
-

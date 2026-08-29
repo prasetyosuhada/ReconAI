@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 def run_document_intake_agent(
     raw_text: str | None = None,
+    image_base64: str | None = None,
     original_filename: str = "document.pdf",
     mime_type: str = "application/pdf",
     demo_currency: str = "IDR",
@@ -27,6 +28,7 @@ def run_document_intake_agent(
 
     Args:
         raw_text: Raw text or OCR output from the document.
+        image_base64: Optional base64-encoded image for vision-capable providers.
         original_filename: Original file name.
         mime_type: MIME type of the uploaded file.
         demo_currency: Configured fallback demo currency (default "IDR").
@@ -38,7 +40,7 @@ def run_document_intake_agent(
     """
     logger.info("Executing Document Intake Agent for file: %s", original_filename)
 
-    if not raw_text or not raw_text.strip():
+    if not raw_text and not image_base64:
         logger.warning("Empty text input provided to Document Intake Agent.")
         return DocumentIntakeResponse(
             agent_name="document_intake_agent",
@@ -70,14 +72,24 @@ def run_document_intake_agent(
             f"--- DOCUMENT TEXT END ---"
         )
 
+        human_content: str | list[dict[str, object]] = user_content
+        if image_base64:
+            human_content = [
+                {"type": "text", "text": user_content},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
+                },
+            ]
+
         messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(content=user_content),
+            HumanMessage(content=human_content),
         ]
 
         logger.info(
             "Sending document text (%d chars) to LLM (%s)...",
-            len(raw_text),
+            len(raw_text or ""),
             provider or "default",
         )
 
@@ -99,7 +111,10 @@ def run_document_intake_agent(
         if not result.vendor_name or not result.total_amount:
             if not result.vendor_name and "vendor_name" not in low_confidence_fields:
                 low_confidence_fields.append("vendor_name")
-            if result.total_amount is None and "total_amount" not in low_confidence_fields:
+            if (
+                result.total_amount is None
+                and "total_amount" not in low_confidence_fields
+            ):
                 low_confidence_fields.append("total_amount")
             if "Vendor name or total amount is missing." not in warnings:
                 warnings.append("Vendor name or total amount is missing.")

@@ -51,10 +51,10 @@ export const DocumentIntakeView: React.FC<DocumentIntakeViewProps> = ({ onSelect
     setStreamingDoc({ id: documentId, filename })
   }
 
-  const handleStreamCompleted = () => {
+  const handleStreamCompleted = useCallback(() => {
     setRefreshTrigger((prev) => prev + 1)
     notifyReviewQueueUpdated()
-  }
+  }, [])
 
   const handleStatusFilterChange = (newStatus: string) => {
     setStatusFilter(newStatus)
@@ -64,10 +64,7 @@ export const DocumentIntakeView: React.FC<DocumentIntakeViewProps> = ({ onSelect
   return (
     <div className="space-y-6">
       {/* Upload Dropzone */}
-      <DropzoneUpload
-        onUploadSuccess={handleUploadSuccess}
-        onStartStream={handleStartStream}
-      />
+      <DropzoneUpload onUploadSuccess={handleUploadSuccess} onStartStream={handleStartStream} />
 
       {/* Document List Repository with Pagination */}
       <DocumentList
@@ -99,5 +96,3 @@ export const DocumentIntakeView: React.FC<DocumentIntakeViewProps> = ({ onSelect
     </div>
   )
 }
-
-

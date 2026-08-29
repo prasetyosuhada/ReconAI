@@ -19,7 +19,7 @@ class AdjustmentSuggestion(Base):
     """Stores BookkeepingAgent output for an unmatched BankTransaction.
 
     One-to-one with BankTransaction (UNIQUE constraint on bank_transaction_id).
-    Upserted during Run Recon Engine; read by the frontend when user opens a Bank Only tx.
+    Upserted during Run Recon Engine and read by the Bank Only transaction view.
     """
 
     __tablename__ = "adjustment_suggestions"
@@ -44,9 +44,7 @@ class AdjustmentSuggestion(Base):
     uses_sensitive_account: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    risk_flags: Mapped[list[Any]] = mapped_column(
-        JSONB, nullable=False, default=list
-    )
+    risk_flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     # list of {account_code, account_name, description, debit_amount, credit_amount}
     suggested_lines: Mapped[list[Any]] = mapped_column(
         JSONB, nullable=False, default=list

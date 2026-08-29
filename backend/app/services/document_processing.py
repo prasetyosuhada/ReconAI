@@ -19,6 +19,11 @@ from app.services.document_extraction import extract_document_content
 logger = logging.getLogger(__name__)
 
 
+def _sse_event(payload: dict[str, Any]) -> str:
+    """Serialize a payload as one Server-Sent Events message."""
+    return f"data: {json.dumps(payload, default=str)}\n\n"
+
+
 def _parse_date(d: Any) -> date | None:
     """Safely parse date from date object, datetime object, or string."""
     if isinstance(d, date):
@@ -40,8 +45,10 @@ def stream_document_processing(
     original_filename: str | None = None,
     document_type: str = "unknown",
 ) -> Generator[str, None, None]:
-    """Execute LangGraph document intake & bookkeeping workflow and yield real-time SSE events."""
-    logger.info("Starting streaming document processing for document ID: %s", document_id)
+    """Execute the document workflow and yield real-time SSE events."""
+    logger.info(
+        "Starting streaming document processing for document ID: %s", document_id
+    )
     doc_uuid = uuid.UUID(document_id) if isinstance(document_id, str) else document_id
 
     db = SessionLocal()
@@ -49,10 +56,15 @@ def stream_document_processing(
         doc = db.query(Document).filter(Document.id == doc_uuid).first()
         if not doc:
             logger.error("Document %s not found in DB.", document_id)
-            yield f"data: {json.dumps({'stage': 'error', 'message': f'Document [{document_id}] not found.'})}\n\n"
+            yield _sse_event(
+                {
+                    "stage": "error",
+                    "message": f"Document [{document_id}] not found.",
+                }
+            )
             return
 
-        # Guard against duplicate concurrent execution or re-execution of already-completed documents
+        # Guard against duplicate concurrent execution or re-execution.
         if doc.status in (
             "extracted",
             "ready_to_post",
@@ -61,7 +73,7 @@ def stream_document_processing(
             "bookkeeping_review_required",
         ):
             logger.info(
-                "Document %s already processed (status=%s). Returning existing results.",
+                "Document %s already processed (status=%s). Returning results.",
                 document_id,
                 doc.status,
             )
@@ -71,9 +83,7 @@ def stream_document_processing(
                 .first()
             )
             vendor = (
-                existing_extraction.vendor_name
-                if existing_extraction
-                else "Document"
+                existing_extraction.vendor_name if existing_extraction else "Document"
             )
             tot_amount = (
                 float(existing_extraction.total_amount)
@@ -86,7 +96,20 @@ def stream_document_processing(
                 if existing_extraction
                 else 1.0
             )
-            yield f"data: {json.dumps({'stage': 'completed', 'percentage': 100, 'status': doc.status, 'confidence_score': conf, 'vendor_name': vendor, 'total_amount': tot_amount, 'currency': curr, 'message': f'Document \"{doc.original_filename}\" is already processed.'})}\n\n"
+            yield _sse_event(
+                {
+                    "stage": "completed",
+                    "percentage": 100,
+                    "status": doc.status,
+                    "confidence_score": conf,
+                    "vendor_name": vendor,
+                    "total_amount": tot_amount,
+                    "currency": curr,
+                    "message": (
+                        f'Document "{doc.original_filename}" is already processed.'
+                    ),
+                }
+            )
             return
 
         file_path = stored_file_path or doc.stored_file_path
@@ -96,18 +119,40 @@ def stream_document_processing(
         doc.status = "extracting"
         db.commit()
 
-        yield f"data: {json.dumps({'stage': 'init', 'percentage': 10, 'message': f'Document Intake pipeline initialized for \"{fname}\"...'})}\n\n"
+        yield _sse_event(
+            {
+                "stage": "init",
+                "percentage": 10,
+                "message": f'Document Intake pipeline initialized for "{fname}"...',
+            }
+        )
 
         # Step 1: Text & OCR Extraction
-        yield f"data: {json.dumps({'stage': 'ocr_started', 'percentage': 25, 'message': f'Extracting text & visual tokens via OCR parser ({effective_mime})...'})}\n\n"
+        yield _sse_event(
+            {
+                "stage": "ocr_started",
+                "percentage": 25,
+                "message": (
+                    "Extracting text & visual tokens via OCR parser "
+                    f"({effective_mime})..."
+                ),
+            }
+        )
 
-        raw_text, _image_b64 = extract_document_content(
+        raw_text, image_b64 = extract_document_content(
             file_path=file_path,
             mime_type=effective_mime,
         )
 
         char_count = len(raw_text) if raw_text else 0
-        yield f"data: {json.dumps({'stage': 'ocr_extracted', 'percentage': 40, 'message': f'Extracted {char_count} characters of content from file.', 'text_preview': (raw_text[:180] + '...') if raw_text else None})}\n\n"
+        yield _sse_event(
+            {
+                "stage": "ocr_extracted",
+                "percentage": 40,
+                "message": f"Extracted {char_count} characters of content from file.",
+                "text_preview": (raw_text[:180] + "...") if raw_text else None,
+            }
+        )
 
         # Step 2: Load Active COA
         coa_rows = (
@@ -128,10 +173,28 @@ def stream_document_processing(
             for coa in coa_rows
         ]
 
-        yield f"data: {json.dumps({'stage': 'coa_loaded', 'percentage': 50, 'message': f'Loaded {len(coa_list)} Chart of Accounts entries for AI classifier.'})}\n\n"
+        yield _sse_event(
+            {
+                "stage": "coa_loaded",
+                "percentage": 50,
+                "message": (
+                    f"Loaded {len(coa_list)} Chart of Accounts entries "
+                    "for AI classifier."
+                ),
+            }
+        )
 
-        # Step 3: Stream LangGraph execution (Document Intake Agent -> Bookkeeping Agent)
-        yield f"data: {json.dumps({'stage': 'intake_agent', 'percentage': 55, 'message': 'Invoking Document Intake Agent (Gemini 3 Flash) for entity extraction...'})}\n\n"
+        # Step 3: Stream LangGraph execution.
+        yield _sse_event(
+            {
+                "stage": "intake_agent",
+                "percentage": 55,
+                "message": (
+                    "Invoking Document Intake Agent (Gemini 3 Flash) "
+                    "for entity extraction..."
+                ),
+            }
+        )
 
         initial_state: dict[str, Any] = {
             "document_id": str(doc_uuid),
@@ -139,6 +202,7 @@ def stream_document_processing(
             "mime_type": effective_mime,
             "stored_file_path": file_path,
             "raw_text": raw_text or None,
+            "image_base64": image_b64,
             "document_type": document_type,
             "status": "extracting",
             "chart_of_accounts": coa_list,
@@ -147,7 +211,9 @@ def stream_document_processing(
         final_state: dict[str, Any] = dict(initial_state)
 
         for step_output in document_processing_graph.stream(initial_state):
-            print("STEP OUTPUT:\n", step_output)
+            logger.debug(
+                "Document processing graph step output: %s", step_output.keys()
+            )
             # 1. Document Intake Agent Node
             if "document_intake" in step_output:
                 intake_data = step_output["document_intake"]
@@ -158,10 +224,33 @@ def stream_document_processing(
                 conf = float(intake_data.get("confidence_score", 0.0))
                 needs_rev = intake_data.get("needs_review", False)
 
-                yield f"data: {json.dumps({'stage': 'intake_done', 'percentage': 70, 'vendor_name': vendor, 'total_amount': tot_amount, 'currency': curr, 'confidence_score': conf, 'message': f'✓ Document Intake Agent: Extracted {vendor} • {curr} {tot_amount or 0:,.0f} (Confidence: {int(conf * 100)}%)'})}\n\n"
+                yield _sse_event(
+                    {
+                        "stage": "intake_done",
+                        "percentage": 70,
+                        "vendor_name": vendor,
+                        "total_amount": tot_amount,
+                        "currency": curr,
+                        "confidence_score": conf,
+                        "message": (
+                            f"✓ Document Intake Agent: Extracted {vendor} • "
+                            f"{curr} {tot_amount or 0:,.0f} "
+                            f"(Confidence: {int(conf * 100)}%)"
+                        ),
+                    }
+                )
 
                 if not needs_rev:
-                    yield f"data: {json.dumps({'stage': 'bookkeeping_agent', 'percentage': 75, 'message': 'Invoking Bookkeeping Agent (Gemini 3 Flash) for Chart of Accounts classification...'})}\n\n"
+                    yield _sse_event(
+                        {
+                            "stage": "bookkeeping_agent",
+                            "percentage": 75,
+                            "message": (
+                                "Invoking Bookkeeping Agent (Gemini 3 Flash) "
+                                "for Chart of Accounts classification..."
+                            ),
+                        }
+                    )
 
             # 2. Bookkeeping Agent Node
             if "bookkeeping" in step_output:
@@ -171,13 +260,33 @@ def stream_document_processing(
                 is_bal = bookkeeping_data.get("is_balanced", True)
                 uses_sens = bookkeeping_data.get("uses_sensitive_account", False)
 
-                yield f"data: {json.dumps({'stage': 'bookkeeping_done', 'percentage': 88, 'lines_count': len(lines), 'message': f'✓ Bookkeeping Agent: Classified {len(lines)} journal entry lines (Balanced: {is_bal}, Sensitive: {uses_sens})'})}\n\n"
+                yield _sse_event(
+                    {
+                        "stage": "bookkeeping_done",
+                        "percentage": 88,
+                        "lines_count": len(lines),
+                        "message": (
+                            f"✓ Bookkeeping Agent: Classified {len(lines)} "
+                            f"journal entry lines (Balanced: {is_bal}, "
+                            f"Sensitive: {uses_sens})"
+                        ),
+                    }
+                )
 
             # 3. Review Router Node (if routed)
             if "review_router" in step_output:
                 router_data = step_output["review_router"]
                 final_state.update(router_data)
-                yield f"data: {json.dumps({'stage': 'review_queued', 'percentage': 92, 'message': '⚠️ Low confidence or sensitive account flagged. Routing to Human Review Queue.'})}\n\n"
+                yield _sse_event(
+                    {
+                        "stage": "review_queued",
+                        "percentage": 92,
+                        "message": (
+                            "⚠️ Low confidence or sensitive account flagged. "
+                            "Routing to Human Review Queue."
+                        ),
+                    }
+                )
 
         vendor = final_state.get("vendor_name") or "Unknown Vendor"
         tot_amount = final_state.get("total_amount")
@@ -219,9 +328,7 @@ def stream_document_processing(
                 id=uuid.uuid4(),
                 document_id=doc.id,
                 vendor_name=final_state.get("vendor_name"),
-                transaction_date=_parse_date(
-                    final_state.get("transaction_date")
-                ),
+                transaction_date=_parse_date(final_state.get("transaction_date")),
                 subtotal_amount=final_state.get("subtotal_amount"),
                 tax_amount=final_state.get("tax_amount"),
                 total_amount=final_state.get("total_amount"),
@@ -238,7 +345,7 @@ def stream_document_processing(
         db.commit()
         db.refresh(extraction)
 
-        # 2. Save Proposed Journal Entry using deterministic guardrails (idempotent check)
+        # 2. Save the proposed journal entry with deterministic guardrails.
         proposed_journal = (
             final_state.get("journal_entry")
             or final_state.get("proposed_journal")
@@ -252,15 +359,14 @@ def stream_document_processing(
         )
 
         existing_je = (
-            db.query(JournalEntry)
-            .filter(JournalEntry.document_id == doc.id)
-            .first()
+            db.query(JournalEntry).filter(JournalEntry.document_id == doc.id).first()
         )
 
         if existing_je:
             saved_journal_id = str(existing_je.id)
             logger.info(
-                "JournalEntry already exists for document %s (#JE-%s). Skipping duplicate insert.",
+                "JournalEntry already exists for document %s (#JE-%s). "
+                "Skipping duplicate insert.",
                 doc.id,
                 saved_journal_id[:8],
             )
@@ -277,7 +383,11 @@ def stream_document_processing(
                 "risk_flags": final_risk_flags,
                 "lines": proposed_journal,
             }
-            save_res = save_journal_entry_safely(journal_data, db_session=db)
+            save_res = save_journal_entry_safely(
+                journal_data,
+                db_session=db,
+                chart_of_accounts=coa_list,
+            )
             if save_res.success:
                 saved_journal_id = save_res.journal_entry_id
             else:
@@ -304,18 +414,17 @@ def stream_document_processing(
             is_sensitive = "uses_sensitive_account" in final_risk_flags
             priority = "high" if is_sensitive or not is_balanced else "normal"
 
-            flags_str = (
-                ", ".join(final_risk_flags) if final_risk_flags else "None"
+            flags_str = ", ".join(final_risk_flags) if final_risk_flags else "None"
+            review_summary = (
+                f"Agent flagged document. Conf: {final_confidence:.2f}, "
+                f"Flags: {flags_str}"
             )
-            review_summary = f"Agent flagged document. Conf: {final_confidence:.2f}, Flags: {flags_str}"
 
             if review_type == "bookkeeping" and saved_journal_id:
                 review_payload: dict = {
                     "journal_entry_id": str(saved_journal_id),
                     "vendor_name": final_state.get("vendor_name"),
-                    "transaction_date": str(
-                        final_state.get("transaction_date") or ""
-                    ),
+                    "transaction_date": str(final_state.get("transaction_date") or ""),
                     "total_amount": final_state.get("total_amount"),
                     "subtotal_amount": final_state.get("subtotal_amount"),
                     "tax_amount": final_state.get("tax_amount"),
@@ -341,9 +450,7 @@ def stream_document_processing(
             else:
                 review_payload = {
                     "vendor_name": final_state.get("vendor_name"),
-                    "transaction_date": str(
-                        final_state.get("transaction_date") or ""
-                    ),
+                    "transaction_date": str(final_state.get("transaction_date") or ""),
                     "total_amount": final_state.get("total_amount"),
                     "subtotal_amount": final_state.get("subtotal_amount"),
                     "tax_amount": final_state.get("tax_amount"),
@@ -381,17 +488,35 @@ def stream_document_processing(
                     suggested_action=(
                         "Review and correct the extracted data before bookkeeping."
                         if review_type == "extraction"
-                        else "Review the AI-generated journal entry account classification."
+                        else (
+                            "Review the AI-generated journal entry account "
+                            "classification."
+                        )
                     ),
                     original_payload=review_payload,
                 )
                 db.add(review_item)
             review_item_created = True
 
-            yield f"data: {json.dumps({'stage': 'review_queued', 'percentage': 95, 'message': f'⚠️ Routed to Human Review Queue ({priority} priority). Flags: {flags_str}'})}\n\n"
+            yield _sse_event(
+                {
+                    "stage": "review_queued",
+                    "percentage": 95,
+                    "message": (
+                        f"⚠️ Routed to Human Review Queue ({priority} priority). "
+                        f"Flags: {flags_str}"
+                    ),
+                }
+            )
         else:
             je_ref = str(saved_journal_id)[:8] if saved_journal_id else "JE"
-            yield f"data: {json.dumps({'stage': 'journal_created', 'percentage': 95, 'message': f'✓ Balanced journal entry created with #{je_ref}'})}\n\n"
+            yield _sse_event(
+                {
+                    "stage": "journal_created",
+                    "percentage": 95,
+                    "message": f"✓ Balanced journal entry created with #{je_ref}",
+                }
+            )
 
         doc.status = final_status
         extracted_document_type = final_state.get("document_type")
@@ -465,9 +590,10 @@ def stream_document_processing(
                     decision_str = "Bookkeeping classified"
                     if proposed_journal and isinstance(proposed_journal, list):
                         debit_lines = [
-                            f"COA: {l.get('account_code')} - {l.get('account_name', '')}".strip(" -")
-                            for l in proposed_journal
-                            if float(l.get("debit_amount", 0.0) or 0.0) > 0
+                            f"COA: {line.get('account_code')} - "
+                            f"{line.get('account_name', '')}".strip(" -")
+                            for line in proposed_journal
+                            if float(line.get("debit_amount", 0.0) or 0.0) > 0
                         ]
                         if debit_lines:
                             decision_str = debit_lines[0]
@@ -502,7 +628,7 @@ def stream_document_processing(
                     )
                     db.commit()
             else:
-                # Failure case: Bookkeeping ran but journal could not be validated or saved
+                # Failure case: bookkeeping ran but saving failed.
                 existing_bk_fail_audit = (
                     db.query(AuditEvent)
                     .filter(
@@ -517,9 +643,14 @@ def stream_document_processing(
                         if final_state.get("error"):
                             fail_reasoning.append(str(final_state["error"]))
                         elif not final_state.get("is_balanced", True):
-                            fail_reasoning.append("Journal entry double-entry balance validation failed.")
+                            fail_reasoning.append(
+                                "Journal entry double-entry balance validation failed."
+                            )
                         else:
-                            fail_reasoning.append("Bookkeeping agent failed to produce a valid journal entry.")
+                            fail_reasoning.append(
+                                "Bookkeeping agent failed to produce a valid "
+                                "journal entry."
+                            )
 
                     log_event(
                         db=db,
@@ -539,13 +670,24 @@ def stream_document_processing(
                             "journal_entry_id": None,
                         },
                         confidence_score=final_confidence,
-                        rationale=final_rationale or "Bookkeeping classification failed validation.",
+                        rationale=final_rationale
+                        or "Bookkeeping classification failed validation.",
                         document_id=doc.id,
                     )
                     db.commit()
 
-        yield f"data: {json.dumps({'stage': 'completed', 'percentage': 100, 'status': final_status, 'confidence_score': final_confidence, 'vendor_name': vendor, 'total_amount': tot_amount, 'currency': curr, 'message': f'🎉 Document \"{fname}\" processing completed successfully!'})}\n\n"
-
+        yield _sse_event(
+            {
+                "stage": "completed",
+                "percentage": 100,
+                "status": final_status,
+                "confidence_score": final_confidence,
+                "vendor_name": vendor,
+                "total_amount": tot_amount,
+                "currency": curr,
+                "message": f'🎉 Document "{fname}" processing completed successfully!',
+            }
+        )
 
     except Exception as e:
         logger.error(
@@ -555,7 +697,12 @@ def stream_document_processing(
             exc_info=True,
         )
         db.rollback()
-        yield f"data: {json.dumps({'stage': 'error', 'message': f'Document processing failed: {str(e)}'})}\n\n"
+        yield _sse_event(
+            {
+                "stage": "error",
+                "message": "Document processing failed. Please check the server logs.",
+            }
+        )
     finally:
         db.close()
 
@@ -567,7 +714,7 @@ def process_document_background(
     original_filename: str | None = None,
     document_type: str = "unknown",
 ) -> None:
-    """Execute LangGraph document intake & bookkeeping workflow by consuming stream generator."""
+    """Execute the document workflow by consuming its stream generator."""
     for _ in stream_document_processing(
         document_id, stored_file_path, mime_type, original_filename, document_type
     ):

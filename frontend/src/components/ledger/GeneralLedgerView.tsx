@@ -93,4 +93,3 @@ export const GeneralLedgerView: React.FC<GeneralLedgerViewProps> = ({ onNavigate
     </div>
   )
 }
-

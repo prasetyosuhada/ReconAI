@@ -156,6 +156,7 @@ def document_intake_node(state: DocumentProcessingState) -> DocumentProcessingSt
     logger.info("Executing document_intake_node...")
     response = run_document_intake_agent(
         raw_text=state.get("raw_text"),
+        image_base64=state.get("image_base64"),
         original_filename=state.get("original_filename", "document.pdf"),
         mime_type=state.get("mime_type", "application/pdf"),
         demo_currency=state.get("demo_currency", "IDR"),

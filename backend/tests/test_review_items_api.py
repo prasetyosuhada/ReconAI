@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
 from app.models.audit import AuditEvent
+from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry, JournalEntryLine
 from app.models.review import ReviewItem
@@ -201,10 +202,14 @@ def test_approve_review_item_success(client, db_session):
     assert audit is not None
     assert audit.event_type == "review_item_approved"
 
-    posted_audit = db_session.query(AuditEvent).filter(
-        AuditEvent.source_id == je.id,
-        AuditEvent.event_type == "journal_entry_posted",
-    ).first()
+    posted_audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.source_id == je.id,
+            AuditEvent.event_type == "journal_entry_posted",
+        )
+        .first()
+    )
     assert posted_audit is not None
     assert posted_audit.output_snapshot["status"] == "posted"
     assert posted_audit.output_snapshot["document_id"] == str(doc_id)
@@ -278,10 +283,14 @@ def test_edit_review_item_success(client, db_session):
     assert len(je.lines) == 2
 
     # Verify journal_entry_posted audit event created
-    posted_audit = db_session.query(AuditEvent).filter(
-        AuditEvent.source_id == je.id,
-        AuditEvent.event_type == "journal_entry_posted",
-    ).first()
+    posted_audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.source_id == je.id,
+            AuditEvent.event_type == "journal_entry_posted",
+        )
+        .first()
+    )
     assert posted_audit is not None
     assert posted_audit.output_snapshot["status"] == "posted"
     assert posted_audit.output_snapshot["document_id"] == str(doc_id)
@@ -322,6 +331,25 @@ def test_edit_extraction_review_continues_to_bookkeeping(
         },
     )
     db_session.add_all([doc, item])
+    db_session.commit()
+    db_session.add_all(
+        [
+            ChartOfAccount(
+                account_code="5100",
+                account_name="Supplies Expense",
+                account_type="expense",
+                normal_balance="debit",
+                is_active=True,
+            ),
+            ChartOfAccount(
+                account_code="2000",
+                account_name="Accounts Payable",
+                account_type="liability",
+                normal_balance="credit",
+                is_active=True,
+            ),
+        ]
+    )
     db_session.commit()
 
     mock_bookkeeping_node.return_value = {
@@ -487,28 +515,46 @@ def test_review_queue_header_counts_independent_of_pagination(client, db_session
     db_session.commit()
 
     # --- Page 1 (offset=0, limit=10) ---
-    p1_items_res = client.get("/api/v1/review-items?status=pending&limit=10&offset=0").json()
+    p1_items_res = client.get(
+        "/api/v1/review-items?status=pending&limit=10&offset=0"
+    ).json()
     assert len(p1_items_res["items"]) == 10
     assert p1_items_res["total"] == 15
 
     # Header queries on Page 1
-    p1_pending = client.get("/api/v1/review-items?status=pending&limit=1").json()["total"]
-    p1_high = client.get("/api/v1/review-items?status=pending&priority=high&limit=1").json()["total"]
-    p1_resolved_today = client.get("/api/v1/review-items?resolved_today=true&limit=1").json()["total"]
+    p1_pending = client.get("/api/v1/review-items?status=pending&limit=1").json()[
+        "total"
+    ]
+    p1_high = client.get(
+        "/api/v1/review-items?status=pending&priority=high&limit=1"
+    ).json()["total"]
+    p1_resolved_today = client.get(
+        "/api/v1/review-items?resolved_today=true&limit=1"
+    ).json()["total"]
 
     assert p1_pending == 15
     assert p1_high == 5
-    assert p1_resolved_today == 3  # exactly the 3 resolved today, not the 4th from 5 days ago
+    assert (
+        p1_resolved_today == 3
+    )  # exactly the 3 resolved today, not the 4th from 5 days ago
 
     # --- Page 2 (offset=10, limit=10) ---
-    p2_items_res = client.get("/api/v1/review-items?status=pending&limit=10&offset=10").json()
+    p2_items_res = client.get(
+        "/api/v1/review-items?status=pending&limit=10&offset=10"
+    ).json()
     assert len(p2_items_res["items"]) == 5
     assert p2_items_res["total"] == 15
 
     # Header queries on Page 2
-    p2_pending = client.get("/api/v1/review-items?status=pending&limit=1").json()["total"]
-    p2_high = client.get("/api/v1/review-items?status=pending&priority=high&limit=1").json()["total"]
-    p2_resolved_today = client.get("/api/v1/review-items?resolved_today=true&limit=1").json()["total"]
+    p2_pending = client.get("/api/v1/review-items?status=pending&limit=1").json()[
+        "total"
+    ]
+    p2_high = client.get(
+        "/api/v1/review-items?status=pending&priority=high&limit=1"
+    ).json()["total"]
+    p2_resolved_today = client.get(
+        "/api/v1/review-items?resolved_today=true&limit=1"
+    ).json()["total"]
 
     assert p2_pending == 15
     assert p2_high == 5
@@ -518,4 +564,3 @@ def test_review_queue_header_counts_independent_of_pagination(client, db_session
     assert p1_pending == p2_pending
     assert p1_high == p2_high
     assert p1_resolved_today == p2_resolved_today
-

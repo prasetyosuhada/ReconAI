@@ -121,7 +121,7 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
             },
           ]
     )
-  }, [activeItem])
+  }, [activeItem, totalAmount, vendorName])
 
   if (!activeItem) return null
 
@@ -301,7 +301,7 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
           <div className="flex items-start gap-2 text-xs text-amber-300 max-w-xl">
             <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
             <span>
-            AI generated this draft below the confidence threshold. Review the account
+              AI generated this draft below the confidence threshold. Review the account
               classification before posting.
             </span>
           </div>

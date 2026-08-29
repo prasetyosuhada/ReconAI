@@ -6,7 +6,6 @@ and ledger posting guardrails.
 
 import logging
 import re
-import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -635,6 +634,49 @@ def save_journal_entry_safely(
         from app.models.coa import ChartOfAccount
         from app.models.journal import JournalEntry, JournalEntryLine
 
+        coa_records = (
+            list(chart_of_accounts)
+            if chart_of_accounts is not None
+            else db_session.query(ChartOfAccount)
+            .filter(ChartOfAccount.is_active.is_(True))
+            .all()
+        )
+        allowed_account_codes = {
+            str(
+                coa.get("account_code")
+                if isinstance(coa, dict)
+                else getattr(coa, "account_code", "")
+            ).strip()
+            for coa in coa_records
+        }
+        referenced_account_codes = {
+            str(
+                line.get("account_code", "")
+                if isinstance(line, dict)
+                else getattr(line, "account_code", "")
+            ).strip()
+            for line in lines
+        }
+        unknown_account_codes = sorted(
+            code for code in referenced_account_codes - allowed_account_codes if code
+        )
+        if unknown_account_codes:
+            logger.warning(
+                "Guardrail Triggered: rejected journal with unknown COA codes: %s",
+                unknown_account_codes,
+            )
+            return SaveJournalEntryResult(
+                success=False,
+                journal_entry_id=None,
+                status="rejected",
+                validation_result=val_res,
+                sensitive_check_result=sens_res,
+                errors=[
+                    "Journal references account codes that are not present in the "
+                    f"active Chart of Accounts: {', '.join(unknown_account_codes)}."
+                ],
+            )
+
         new_entry = JournalEntry(
             document_id=doc_id,
             extraction_id=ext_id,
@@ -650,38 +692,34 @@ def save_journal_entry_safely(
         for line_idx, line in enumerate(lines, start=1):
             if isinstance(line, dict):
                 ac_code = str(line.get("account_code", ""))
-                ac_name = str(line.get("account_name", "Unassigned Account"))
                 deb = float(line.get("debit_amount", 0.0))
                 cred = float(line.get("credit_amount", 0.0))
                 l_desc = line.get("description")
             else:
                 ac_code = str(getattr(line, "account_code", ""))
-                ac_name = str(getattr(line, "account_name", "Unassigned Account"))
                 deb = float(getattr(line, "debit_amount", 0.0))
                 cred = float(getattr(line, "credit_amount", 0.0))
                 l_desc = getattr(line, "description", None)
 
-            # Lookup or auto-create ChartOfAccount record for FK
-            coa_record = None
-            if ac_code:
-                coa_record = (
-                    db_session.query(ChartOfAccount)
-                    .filter(ChartOfAccount.account_code == ac_code)
-                    .first()
-                )
-
+            coa_record = (
+                db_session.query(ChartOfAccount)
+                .filter(ChartOfAccount.account_code == ac_code)
+                .first()
+            )
             if not coa_record:
-                is_sens = ac_code in ("1000", "1010", "2100", "3000", "9999")
-                coa_record = ChartOfAccount(
-                    id=uuid.uuid4(),
-                    account_code=ac_code or f"AUTO_{uuid.uuid4().hex[:6]}",
-                    account_name=ac_name or "Auto Generated Account",
-                    account_type="expense" if deb > 0 else "liability",
-                    normal_balance="debit" if deb > 0 else "credit",
-                    is_sensitive=is_sens,
+                logger.error(
+                    "Active COA validation passed but account %s could not be loaded",
+                    ac_code,
                 )
-                db_session.add(coa_record)
-                db_session.flush()
+                db_session.rollback()
+                return SaveJournalEntryResult(
+                    success=False,
+                    journal_entry_id=None,
+                    status="failed",
+                    validation_result=val_res,
+                    sensitive_check_result=sens_res,
+                    errors=[f"Chart of Accounts record not found for {ac_code}."],
+                )
 
             orm_line = JournalEntryLine(
                 line_number=line_idx,

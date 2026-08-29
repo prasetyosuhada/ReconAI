@@ -96,10 +96,13 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
   const computedTotalCredit = lines.reduce((sum, line) => sum + (line.credit_amount ?? 0), 0)
   const isBalanced = Math.abs(computedTotalDebit - computedTotalCredit) < 0.01
   const canPost = detail?.status === 'draft' || detail?.status === 'ready_to_post'
-  const rawLineItems = Array.isArray(extraction?.line_items)
-    ? extraction.line_items
-    : Array.isArray((extraction?.line_items as Record<string, any> | undefined)?.items)
-      ? (extraction?.line_items as Record<string, any>).items
+  const extractionLineItems = extraction?.line_items
+  const rawLineItems = Array.isArray(extractionLineItems)
+    ? extractionLineItems
+    : extractionLineItems &&
+        typeof extractionLineItems === 'object' &&
+        Array.isArray((extractionLineItems as Record<string, unknown>).items)
+      ? ((extractionLineItems as Record<string, unknown>).items as unknown[])
       : []
 
   const handlePost = async () => {
@@ -172,7 +175,8 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
             </div>
           ) : detail ? (
             <>
-              {(detail.status === 'review_required' || detail.status === 'bookkeeping_review_required') && (
+              {(detail.status === 'review_required' ||
+                detail.status === 'bookkeeping_review_required') && (
                 <div className="mx-4 sm:mx-6 mt-4 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-start gap-3">
                   <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                   <div className="min-w-0">
@@ -183,7 +187,10 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
                       {onNavigateToReview ? (
                         <button
                           type="button"
-                          onClick={() => { onClose(); onNavigateToReview(); }}
+                          onClick={() => {
+                            onClose()
+                            onNavigateToReview()
+                          }}
                           className="font-semibold text-amber-300 underline underline-offset-2 hover:text-amber-200 inline-flex items-center gap-0.5 cursor-pointer transition-colors"
                         >
                           Review Queue <ExternalLink className="w-3 h-3" />
@@ -207,9 +214,7 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
                 currency={extraction?.currency || 'IDR'}
                 sourceLineItems={rawLineItems}
                 lines={lines}
-                confidenceScore={Math.round(
-                  Number(detail.confidence_score ?? 0) * 100
-                )}
+                confidenceScore={Math.round(Number(detail.confidence_score ?? 0) * 100)}
                 rationale={detail.rationale || undefined}
                 riskFlags={detail.risk_flags || []}
               />
@@ -232,7 +237,6 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
 
         {detail && (
           <div className="px-4 sm:px-6 py-4 bg-slate-950 border-t border-slate-800 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
-
             {/* Posted: immutable audit trail notice */}
             {detail.status === 'posted' ? (
               <div className="flex items-center gap-2 text-xs text-emerald-400">
@@ -241,17 +245,21 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
                   This entry has been permanently recorded in the General Ledger
                   {detail.posted_at
                     ? ` on ${new Date(detail.posted_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })} at ${new Date(detail.posted_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
-                    : ''}.
-                  {' '}Status <span className="font-bold">Posted</span> is locked and immutable.
+                    : ''}
+                  . Status <span className="font-bold">Posted</span> is locked and immutable.
                 </span>
               </div>
-            ) : detail.status === 'review_required' || detail.status === 'bookkeeping_review_required' ? (
+            ) : detail.status === 'review_required' ||
+              detail.status === 'bookkeeping_review_required' ? (
               <p className="text-xs text-slate-500 max-w-xl">
                 Complete the review in the{' '}
                 {onNavigateToReview ? (
                   <button
                     type="button"
-                    onClick={() => { onClose(); onNavigateToReview(); }}
+                    onClick={() => {
+                      onClose()
+                      onNavigateToReview()
+                    }}
                     className="font-semibold text-amber-400 underline underline-offset-2 hover:text-amber-300 cursor-pointer transition-colors"
                   >
                     Review Queue
@@ -263,7 +271,8 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
               </p>
             ) : (
               <p className="text-xs text-slate-400 max-w-xl">
-                Posting will permanently record this entry in the General Ledger and affect Trial Balance balances.
+                Posting will permanently record this entry in the General Ledger and affect Trial
+                Balance balances.
               </p>
             )}
 

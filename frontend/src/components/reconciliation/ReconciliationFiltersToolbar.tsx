@@ -11,12 +11,7 @@ import {
 } from 'lucide-react'
 
 export type ReconFilterType =
-  | 'all'
-  | 'matched'
-  | 'needs_review'
-  | 'bank_only'
-  | 'gl_only'
-  | 'reconciled'
+  'all' | 'matched' | 'needs_review' | 'bank_only' | 'gl_only' | 'reconciled'
 
 interface ReconciliationFiltersToolbarProps {
   activeFilter: ReconFilterType

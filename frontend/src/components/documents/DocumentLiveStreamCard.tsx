@@ -40,9 +40,9 @@ export const DocumentLiveStreamCard: React.FC<DocumentLiveStreamCardProps> = ({
   onCompleted,
 }) => {
   const [events, setEvents] = useState<LogEntry[]>([])
-  const [status, setStatus] = useState<
-    'connecting' | 'running' | 'completed' | 'error'
-  >('connecting')
+  const [status, setStatus] = useState<'connecting' | 'running' | 'completed' | 'error'>(
+    'connecting'
+  )
   const [percentage, setPercentage] = useState<number>(0)
   const [extractedData, setExtractedData] = useState<{
     vendor_name?: string
@@ -103,7 +103,12 @@ export const DocumentLiveStreamCard: React.FC<DocumentLiveStreamCardProps> = ({
           setPercentage(data.percentage)
         }
 
-        if (data.vendor_name || data.total_amount != null || data.confidence_score != null || data.text_preview) {
+        if (
+          data.vendor_name ||
+          data.total_amount != null ||
+          data.confidence_score != null ||
+          data.text_preview
+        ) {
           setExtractedData((prev) => ({
             vendor_name: data.vendor_name ?? prev.vendor_name,
             total_amount: data.total_amount ?? prev.total_amount,
@@ -136,7 +141,7 @@ export const DocumentLiveStreamCard: React.FC<DocumentLiveStreamCardProps> = ({
     return () => {
       es.close()
     }
-  }, [isOpen, documentId])
+  }, [isOpen, documentId, onCompleted])
 
   if (!isOpen) return null
 
@@ -241,9 +246,7 @@ export const DocumentLiveStreamCard: React.FC<DocumentLiveStreamCardProps> = ({
           <div className="px-4 py-3 bg-slate-950/60 flex items-center justify-between text-xs">
             <div className="flex items-center gap-2">
               <span className="text-slate-400 font-medium">Pipeline Progress:</span>
-              <span className="font-bold text-indigo-400 font-mono">
-                {percentage}%
-              </span>
+              <span className="font-bold text-indigo-400 font-mono">{percentage}%</span>
             </div>
             <div className="flex items-center gap-3 text-[11px] font-mono">
               <span className="text-slate-300">
@@ -375,9 +378,7 @@ export const DocumentLiveStreamCard: React.FC<DocumentLiveStreamCardProps> = ({
                         [{evt.time}]
                       </span>
                       {getStageIcon(evt.stage)}
-                      <span className="text-slate-300 text-[11px] break-words">
-                        {evt.message}
-                      </span>
+                      <span className="text-slate-300 text-[11px] break-words">{evt.message}</span>
                     </div>
                   ))
                 )}
@@ -391,9 +392,7 @@ export const DocumentLiveStreamCard: React.FC<DocumentLiveStreamCardProps> = ({
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
                   <div>
-                    <p className="text-xs font-bold text-white">
-                      Document Processing Complete!
-                    </p>
+                    <p className="text-xs font-bold text-white">Document Processing Complete!</p>
                     <p className="text-[11px] text-emerald-300">
                       Extraction, Bookkeeping, and Guardrails verified.
                     </p>

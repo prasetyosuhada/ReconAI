@@ -156,5 +156,3 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
     </div>
   )
 }
-
-

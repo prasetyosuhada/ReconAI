@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   AlertTriangle,
@@ -106,14 +106,16 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
     originalPayload.payment_status ||
     originalPayload.payment_status_label ||
     (Number(extractedTotal) > 0 ? 'paid' : 'unknown')
-  const rawLineItems = extractionPayload.line_items || extractionPayload.items
-  const lineItems = Array.isArray(rawLineItems)
-    ? rawLineItems
-    : Array.isArray(rawLineItems?.items)
-      ? rawLineItems.items
-      : Array.isArray(rawLineItems?.line_items)
-        ? rawLineItems.line_items
-        : []
+  const lineItems = useMemo(() => {
+    const rawLineItems = extractionPayload.line_items || extractionPayload.items
+    return Array.isArray(rawLineItems)
+      ? rawLineItems
+      : Array.isArray(rawLineItems?.items)
+        ? rawLineItems.items
+        : Array.isArray(rawLineItems?.line_items)
+          ? rawLineItems.line_items
+          : []
+  }, [extractionPayload.items, extractionPayload.line_items])
   const warnings =
     (Array.isArray(extractionPayload.warnings) && extractionPayload.warnings) ||
     (Array.isArray(item?.risk_flags) && item?.risk_flags) ||
@@ -199,7 +201,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
     return () => {
       ignore = true
     }
-  }, [item])
+  }, [item, originalPayload.document_id, originalPayload.source_document_id])
 
   useEffect(() => {
     setErrorMsg(null)
@@ -261,7 +263,25 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
       total_amount: String(item.edited_payload?.total_amount ?? extractedTotal ?? ''),
       line_items: item.edited_payload?.line_items || lineItems,
     })
-  }, [item, latestExtraction])
+  }, [
+    item,
+    latestExtraction,
+    originalPayload.document_type,
+    originalPayload.lines,
+    originalPayload.journal_lines,
+    originalPayload.payment_status,
+    extractionPayload.document_type,
+    extractionPayload.merchant_name,
+    extractionPayload.payment_status,
+    extractionPayload.vendor_name,
+    extractedCurrency,
+    extractedDate,
+    extractedSubtotal,
+    extractedTax,
+    extractedTotal,
+    extractedVendor,
+    lineItems,
+  ])
 
   if (!item) return null
 
@@ -285,8 +305,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
   }
 
   const handleAddLine = () => {
-    const defaultAcct =
-      dbCOA.find((c) => c.account_type === 'expense') ||
+    const defaultAcct = dbCOA.find((c) => c.account_type === 'expense') ||
       dbCOA[0] || {
         account_code: '5900',
         account_name: 'Miscellaneous Expense',
@@ -607,8 +626,8 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   </div>
 
                   <p className="text-xs text-slate-400 mt-4 max-w-[260px]">
-                    Original document preview is displayed as a reference while the reviewer verifies
-                    extracted fields.
+                    Original document preview is displayed as a reference while the reviewer
+                    verifies extracted fields.
                   </p>
 
                   {sourcePath && (
@@ -805,7 +824,10 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                             type="number"
                             readOnly
                             disabled
-                            value={line.amount ?? ((Number(line.quantity) || 0) * (Number(line.unit_price) || 0))}
+                            value={
+                              line.amount ??
+                              (Number(line.quantity) || 0) * (Number(line.unit_price) || 0)
+                            }
                             placeholder="Amount"
                             className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs font-mono font-bold text-slate-300 text-right cursor-not-allowed"
                             title="Calculated automatically: Qty × Unit Price"
@@ -978,8 +1000,12 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                         <tr>
                           <th className="py-2.5 px-3 w-56">Account (COA)</th>
                           <th className="py-2.5 px-3">Line Memo</th>
-                          <th className="py-2.5 px-3 text-right w-36">Debit ({extractedCurrency})</th>
-                          <th className="py-2.5 px-3 text-right w-36">Credit ({extractedCurrency})</th>
+                          <th className="py-2.5 px-3 text-right w-36">
+                            Debit ({extractedCurrency})
+                          </th>
+                          <th className="py-2.5 px-3 text-right w-36">
+                            Credit ({extractedCurrency})
+                          </th>
                           <th className="py-2.5 px-3 text-center w-12">Action</th>
                         </tr>
                       </thead>
@@ -999,7 +1025,9 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                                 }}
                                 className="w-full px-2 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition-colors"
                               >
-                                <option value="" disabled>Select COA Account...</option>
+                                <option value="" disabled>
+                                  Select COA Account...
+                                </option>
                                 {dbCOA.map((coa) => (
                                   <option key={coa.account_code} value={coa.account_code}>
                                     [{coa.account_code}] {coa.account_name} ({coa.account_type})
@@ -1046,7 +1074,9 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                                 onClick={() => handleRemoveLine(idx)}
                                 disabled={lines.length <= 2}
                                 className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                                title={lines.length <= 2 ? 'Minimum 2 lines required' : 'Delete line'}
+                                title={
+                                  lines.length <= 2 ? 'Minimum 2 lines required' : 'Delete line'
+                                }
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>

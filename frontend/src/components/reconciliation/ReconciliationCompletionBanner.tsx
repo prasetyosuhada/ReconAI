@@ -1,12 +1,5 @@
 import React, { useState } from 'react'
-import {
-  Download,
-  History,
-  Lock,
-  PartyPopper,
-  Sparkles,
-  Unlock,
-} from 'lucide-react'
+import { Download, History, Lock, PartyPopper, Sparkles, Unlock } from 'lucide-react'
 import type {
   BankStatementImportResponse,
   BankTransactionResponse,
@@ -57,8 +50,7 @@ export const ReconciliationCompletionBanner: React.FC<ReconciliationCompletionBa
         match?.match_rule_type || match?.match_type || 'EXACT',
       ].join(',')
     })
-    const csvContent =
-      'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n')
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n')
     const encodedUri = encodeURI(csvContent)
     const link = document.createElement('a')
     link.setAttribute('href', encodedUri)
@@ -94,12 +86,10 @@ export const ReconciliationCompletionBanner: React.FC<ReconciliationCompletionBa
             </div>
             <p className="text-xs text-slate-300 leading-relaxed max-w-xl">
               Statement period{' '}
-              <span className="font-semibold text-emerald-300 font-mono">
-                {statementPeriod}
-              </span>{' '}
-              is fully reconciled with a difference of{' '}
-              <span className="font-bold text-emerald-400 font-mono">Rp0</span>. All
-              bank mutations have verified ledger entries.
+              <span className="font-semibold text-emerald-300 font-mono">{statementPeriod}</span> is
+              fully reconciled with a difference of{' '}
+              <span className="font-bold text-emerald-400 font-mono">Rp0</span>. All bank mutations
+              have verified ledger entries.
             </p>
           </div>
         </div>
@@ -121,8 +111,7 @@ export const ReconciliationCompletionBanner: React.FC<ReconciliationCompletionBa
               </>
             ) : (
               <>
-                <Unlock className="w-3.5 h-3.5 text-slate-400" /> Lock Statement
-                Period
+                <Unlock className="w-3.5 h-3.5 text-slate-400" /> Lock Statement Period
               </>
             )}
           </button>

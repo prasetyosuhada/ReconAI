@@ -10,15 +10,10 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { AuditEventResponse } from '../../services/api'
-import { getActorMeta } from './AuditTimeline'
+import { getActorMeta } from './auditDisplayUtils'
 
 export type StageStatus =
-  | 'completed'
-  | 'needs_review'
-  | 'rejected'
-  | 'failed'
-  | 'skipped'
-  | 'not_reached'
+  'completed' | 'needs_review' | 'rejected' | 'failed' | 'skipped' | 'not_reached'
 
 export interface ReviewedInfo {
   reviewer: string
@@ -53,7 +48,7 @@ function formatDuration(startIso?: string, endIso?: string): string {
   return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`
 }
 
-export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
+function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
   const sorted = [...events].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   )
@@ -80,9 +75,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
   const bkTs = bookkeepingEvt ? new Date(bookkeepingEvt.created_at).getTime() : null
 
   // Route review events to their owning stage
-  const getReviewStage = (
-    evt: AuditEventResponse
-  ): 'intake' | 'bookkeeping' | 'reconciliation' => {
+  const getReviewStage = (evt: AuditEventResponse): 'intake' | 'bookkeeping' | 'reconciliation' => {
     const rType = evt.input_snapshot?.review_type
     if (rType === 'extraction') return 'intake'
     if (rType === 'bookkeeping') return 'bookkeeping'
@@ -91,10 +84,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     if (evt.event_type === 'bookkeeping_continued_after_extraction_review') return 'intake'
     if (evt.source_type === 'document') return 'intake'
     if (evt.source_type === 'journal_entry') return 'bookkeeping'
-    if (
-      evt.source_type === 'bank_transaction' ||
-      evt.source_type === 'reconciliation_match'
-    ) {
+    if (evt.source_type === 'bank_transaction' || evt.source_type === 'reconciliation_match') {
       return 'reconciliation'
     }
 
@@ -120,9 +110,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
   if (intakeEvt) {
     const intakeSnap = intakeEvt.output_snapshot || {}
     const intakeReviews = reviewEvts.filter((e) => getReviewStage(e) === 'intake')
-    const hasIntakeReject = intakeReviews.some(
-      (e) => e.event_type === 'review_item_rejected'
-    )
+    const hasIntakeReject = intakeReviews.some((e) => e.event_type === 'review_item_rejected')
     const intakeResolveEvt = intakeReviews.find(
       (e) =>
         e.event_type === 'review_item_approved' ||
@@ -149,10 +137,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     if (intakeResolveEvt) {
       intakeReviewedInfo = {
         reviewer: intakeResolveEvt.actor_name || 'Human Reviewer',
-        action:
-          intakeResolveEvt.event_type === 'review_item_edited'
-            ? 'edited'
-            : 'approved',
+        action: intakeResolveEvt.event_type === 'review_item_edited' ? 'edited' : 'approved',
         timestamp: intakeResolveEvt.created_at,
         eventId: intakeResolveEvt.id,
       }
@@ -169,13 +154,9 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
   if (bookkeepingEvt) {
     const bkSnap = bookkeepingEvt.output_snapshot || {}
     const bkReviews = reviewEvts.filter((e) => getReviewStage(e) === 'bookkeeping')
-    const hasBkReject = bkReviews.some(
-      (e) => e.event_type === 'review_item_rejected'
-    )
+    const hasBkReject = bkReviews.some((e) => e.event_type === 'review_item_rejected')
     const bkResolveEvt = bkReviews.find(
-      (e) =>
-        e.event_type === 'review_item_approved' ||
-        e.event_type === 'review_item_edited'
+      (e) => e.event_type === 'review_item_approved' || e.event_type === 'review_item_edited'
     )
 
     if (bkSnap.status === 'failed' || bkSnap.decision === 'failed') {
@@ -199,10 +180,7 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
     if (bkResolveEvt) {
       bkReviewedInfo = {
         reviewer: bkResolveEvt.actor_name || 'Human Reviewer',
-        action:
-          bkResolveEvt.event_type === 'review_item_edited'
-            ? 'edited'
-            : 'approved',
+        action: bkResolveEvt.event_type === 'review_item_edited' ? 'edited' : 'approved',
         timestamp: bkResolveEvt.created_at,
         eventId: bkResolveEvt.id,
       }
@@ -230,12 +208,8 @@ export function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleSt
         e.event_type === 'reconciliation_match_accepted' ||
         e.event_type === 'reconciliation_match_manual'
     )
-    const reconProposed = reconEvts.find(
-      (e) => e.event_type === 'reconciliation_match_proposed'
-    )
-    const reconRejected = reconEvts.find(
-      (e) => e.event_type === 'reconciliation_match_rejected'
-    )
+    const reconProposed = reconEvts.find((e) => e.event_type === 'reconciliation_match_proposed')
+    const reconRejected = reconEvts.find((e) => e.event_type === 'reconciliation_match_rejected')
 
     if (reconAccepted?.actor_type) {
       reconActorType = reconAccepted.actor_type
@@ -438,10 +412,8 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
         return {
           container:
             'bg-emerald-950/30 border-emerald-500/40 text-slate-100 hover:bg-emerald-950/50 shadow-emerald-500/10 cursor-pointer',
-          iconWrap:
-            'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40',
-          badge:
-            'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono',
+          iconWrap: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40',
+          badge: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono',
           badgeText: 'Completed',
           connector: 'bg-emerald-500/60',
         }
@@ -449,10 +421,8 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
         return {
           container:
             'bg-amber-950/30 border-amber-500/60 text-slate-100 hover:bg-amber-950/50 shadow-amber-500/15 ring-1 ring-amber-500/40 cursor-pointer',
-          iconWrap:
-            'bg-amber-500/20 text-amber-400 border border-amber-500/40',
-          badge:
-            'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono',
+          iconWrap: 'bg-amber-500/20 text-amber-400 border border-amber-500/40',
+          badge: 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono',
           badgeText: 'Needs Review',
           connector: 'bg-amber-500/40',
         }
@@ -461,8 +431,7 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
           container:
             'bg-rose-950/30 border-rose-500/40 text-slate-100 hover:bg-rose-950/50 shadow-rose-500/10 cursor-pointer',
           iconWrap: 'bg-rose-500/20 text-rose-400 border border-rose-500/40',
-          badge:
-            'bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono',
+          badge: 'bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono',
           badgeText: 'Rejected',
           connector: 'bg-rose-500/40',
         }
@@ -471,18 +440,15 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
           container:
             'bg-red-950/40 border-red-600/50 text-slate-100 hover:bg-red-950/60 shadow-red-500/10 cursor-pointer',
           iconWrap: 'bg-red-500/20 text-red-400 border border-red-500/40',
-          badge:
-            'bg-red-500/20 text-red-300 border border-red-500/30 font-mono',
+          badge: 'bg-red-500/20 text-red-300 border border-red-500/30 font-mono',
           badgeText: 'Failed',
           connector: 'bg-red-500/40',
         }
       case 'skipped':
         return {
-          container:
-            'bg-slate-900/40 border-slate-700/60 border-dashed text-slate-400 opacity-75',
+          container: 'bg-slate-900/40 border-slate-700/60 border-dashed text-slate-400 opacity-75',
           iconWrap: 'bg-slate-800/80 text-slate-400 border border-slate-700',
-          badge:
-            'bg-slate-800/80 text-slate-400 border border-slate-700 border-dashed font-mono',
+          badge: 'bg-slate-800/80 text-slate-400 border border-slate-700 border-dashed font-mono',
           badgeText: 'Skipped',
           connector: 'bg-slate-700/60 border-dashed',
         }
@@ -490,8 +456,7 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
         return {
           container: 'bg-slate-950/40 border-slate-800 text-slate-500 opacity-50',
           iconWrap: 'bg-slate-900 text-slate-600 border border-slate-800',
-          badge:
-            'bg-slate-900 text-slate-500 border border-slate-800 font-mono',
+          badge: 'bg-slate-900 text-slate-500 border border-slate-800 font-mono',
           badgeText: 'Not Reached',
           connector: 'bg-slate-800',
         }
@@ -556,26 +521,25 @@ export const AuditLifecycleStepper: React.FC<AuditLifecycleStepperProps> = ({
                   <span className="text-[10px] font-mono font-bold text-slate-400 block">
                     0{idx + 1}.
                   </span>
-                  {stage.actorType && (() => {
-                    const meta = getActorMeta(stage.actorType)
-                    const ActorIcon = meta.Icon
-                    return (
-                      <span
-                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${meta.badgeClass}`}
-                        title={`Actor: ${meta.label}`}
-                      >
-                        <ActorIcon className={`w-2.5 h-2.5 ${meta.textClass}`} />
-                        {meta.label}
-                      </span>
-                    )
-                  })()}
+                  {stage.actorType &&
+                    (() => {
+                      const meta = getActorMeta(stage.actorType)
+                      const ActorIcon = meta.Icon
+                      return (
+                        <span
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${meta.badgeClass}`}
+                          title={`Actor: ${meta.label}`}
+                        >
+                          <ActorIcon className={`w-2.5 h-2.5 ${meta.textClass}`} />
+                          {meta.label}
+                        </span>
+                      )
+                    })()}
                 </div>
                 <p className="text-xs font-bold leading-tight truncate text-slate-100">
                   {stage.label}
                 </p>
-                <p className="text-[10px] text-slate-400 truncate">
-                  {stage.subtitle}
-                </p>
+                <p className="text-[10px] text-slate-400 truncate">{stage.subtitle}</p>
 
                 {/* Step 3: Reviewed Indicator Badge */}
                 {stage.reviewedInfo && (

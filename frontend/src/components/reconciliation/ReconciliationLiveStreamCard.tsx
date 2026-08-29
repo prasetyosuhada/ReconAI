@@ -31,13 +31,17 @@ interface LogEntry {
   confidence?: number
 }
 
-export const ReconciliationLiveStreamCard: React.FC<
-  ReconciliationLiveStreamCardProps
-> = ({ importId, statementFilename, isOpen, onClose, onCompleted }) => {
+export const ReconciliationLiveStreamCard: React.FC<ReconciliationLiveStreamCardProps> = ({
+  importId,
+  statementFilename,
+  isOpen,
+  onClose,
+  onCompleted,
+}) => {
   const [events, setEvents] = useState<LogEntry[]>([])
-  const [status, setStatus] = useState<
-    'connecting' | 'running' | 'completed' | 'error'
-  >('connecting')
+  const [status, setStatus] = useState<'connecting' | 'running' | 'completed' | 'error'>(
+    'connecting'
+  )
   const [percentage, setPercentage] = useState<number>(0)
   const [currentTx, setCurrentTx] = useState<{
     description?: string
@@ -153,7 +157,7 @@ export const ReconciliationLiveStreamCard: React.FC<
     return () => {
       es.close()
     }
-  }, [isOpen, importId])
+  }, [isOpen, importId, onCompleted])
 
   if (!isOpen) return null
 
@@ -256,9 +260,7 @@ export const ReconciliationLiveStreamCard: React.FC<
           <div className="px-4 py-3 bg-slate-950/60 flex items-center justify-between text-xs">
             <div className="flex items-center gap-2">
               <span className="text-slate-400 font-medium">Progress:</span>
-              <span className="font-bold text-emerald-400 font-mono">
-                {percentage}%
-              </span>
+              <span className="font-bold text-emerald-400 font-mono">{percentage}%</span>
             </div>
             <div className="flex items-center gap-3 text-[11px] font-mono">
               <span className="text-emerald-300">✓ Matched: {counts.matched}</span>
@@ -368,9 +370,7 @@ export const ReconciliationLiveStreamCard: React.FC<
                         [{evt.time}]
                       </span>
                       {getStageIcon(evt.stage)}
-                      <span className="text-slate-300 text-[11px] break-words">
-                        {evt.message}
-                      </span>
+                      <span className="text-slate-300 text-[11px] break-words">{evt.message}</span>
                     </div>
                   ))
                 )}
@@ -384,9 +384,7 @@ export const ReconciliationLiveStreamCard: React.FC<
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
                   <div>
-                    <p className="text-xs font-bold text-white">
-                      Reconciliation Complete!
-                    </p>
+                    <p className="text-xs font-bold text-white">Reconciliation Complete!</p>
                     <p className="text-[11px] text-emerald-300">
                       Statement data successfully updated and balanced.
                     </p>

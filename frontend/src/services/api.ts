@@ -365,7 +365,8 @@ export async function fetchReviewItems(params?: {
   if (params?.review_type) query.append('review_type', params.review_type)
   if (params?.priority) query.append('priority', params.priority)
   if (params?.search) query.append('search', params.search)
-  if (params?.resolved_today !== undefined) query.append('resolved_today', String(params.resolved_today))
+  if (params?.resolved_today !== undefined)
+    query.append('resolved_today', String(params.resolved_today))
   if (params?.limit) query.append('limit', params.limit.toString())
   if (params?.offset) query.append('offset', params.offset.toString())
 
@@ -499,13 +500,10 @@ export interface PostJournalEntryResponse {
   trial_balance_status: string
 }
 
-export async function postJournalEntry(
-  journalEntryId: string
-): Promise<PostJournalEntryResponse> {
-  const response = await fetch(
-    `${API_BASE_URL}/ledger/journal-entries/${journalEntryId}/post`,
-    { method: 'POST' }
-  )
+export async function postJournalEntry(journalEntryId: string): Promise<PostJournalEntryResponse> {
+  const response = await fetch(`${API_BASE_URL}/ledger/journal-entries/${journalEntryId}/post`, {
+    method: 'POST',
+  })
   if (!response.ok) {
     const err = await response.json().catch(() => ({}))
     throw new Error(err.detail || 'Failed to post journal entry')
@@ -699,7 +697,6 @@ export async function createAdjustmentJournalEntry(payload: {
   return result
 }
 
-
 export async function fetchReconciliationMatches(params?: {
   bank_statement_import_id?: string
   status?: string
@@ -811,7 +808,6 @@ export async function manualMatchReconciliation(
   notifyReviewQueueUpdated()
   return result
 }
-
 
 // Audit Log & Traceability APIs
 export async function fetchAuditEvents(params?: {

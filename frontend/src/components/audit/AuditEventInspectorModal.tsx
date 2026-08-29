@@ -141,7 +141,9 @@ export const AuditEventInspectorModal: React.FC<AuditEventInspectorModalProps> =
             >
               {actorBadge.icon}
               <div className="text-left">
-                <span className={`text-[9px] font-bold tracking-wider block ${actorBadge.typeColor}`}>
+                <span
+                  className={`text-[9px] font-bold tracking-wider block ${actorBadge.typeColor}`}
+                >
                   {actorBadge.typeText}
                 </span>
                 <span className="text-xs font-semibold block leading-tight">
@@ -255,7 +257,9 @@ export const AuditEventInspectorModal: React.FC<AuditEventInspectorModalProps> =
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
                   <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 block font-semibold">Event Type</span>
+                    <span className="text-[10px] text-slate-400 block font-semibold">
+                      Event Type
+                    </span>
                     <span className="font-mono text-slate-200">{event.event_type}</span>
                   </div>
 

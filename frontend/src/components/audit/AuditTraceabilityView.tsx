@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   BookOpen,
@@ -64,7 +64,9 @@ export const AuditTraceabilityView: React.FC = () => {
   // Journal entry mode state
   const [journalSearch, setJournalSearch] = useState<string>('')
   const [journalOptions, setJournalOptions] = useState<JournalEntryResponse[]>([])
-  const [selectedJournalEntry, setSelectedJournalEntry] = useState<JournalEntryResponse | null>(null)
+  const [selectedJournalEntry, setSelectedJournalEntry] = useState<JournalEntryResponse | null>(
+    null
+  )
   const [showJournalDropdown, setShowJournalDropdown] = useState<boolean>(false)
   const [loadingJournals, setLoadingJournals] = useState<boolean>(false)
 
@@ -97,7 +99,12 @@ export const AuditTraceabilityView: React.FC = () => {
 
   // Default date range for Global mode on initial entry
   useEffect(() => {
-    if (traceMode === 'global' && !startDateFilter && !endDateFilter && !hasInitializedGlobalDates) {
+    if (
+      traceMode === 'global' &&
+      !startDateFilter &&
+      !endDateFilter &&
+      !hasInitializedGlobalDates
+    ) {
       setStartDateFilter(getDefaultStartDate())
       setEndDateFilter(getDefaultEndDate())
       setHasInitializedGlobalDates(true)
@@ -124,8 +131,8 @@ export const AuditTraceabilityView: React.FC = () => {
       try {
         const res = await fetchDocuments({ limit: 50 })
         setDocuments(res.items)
-        if (res.items.length > 0 && !selectedDocId) {
-          setSelectedDocId(res.items[0].id)
+        if (res.items.length > 0) {
+          setSelectedDocId((current) => current || res.items[0].id)
         }
       } catch (err: unknown) {
         console.error('Failed to fetch document list for audit selector:', err)
@@ -169,7 +176,7 @@ export const AuditTraceabilityView: React.FC = () => {
   }, [bankSearch, traceMode])
 
   // Fetch audit data based on active mode and selected entity
-  const loadAuditData = async () => {
+  const loadAuditData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -216,7 +223,17 @@ export const AuditTraceabilityView: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [
+    actorFilter,
+    endDateFilter,
+    eventTypeFilter,
+    globalSearch,
+    selectedBankTx,
+    selectedDocId,
+    selectedJournalEntry,
+    startDateFilter,
+    traceMode,
+  ])
 
   // Incremental "Load More" pagination handler for Global Events
   const handleLoadMoreGlobal = async () => {
@@ -244,17 +261,7 @@ export const AuditTraceabilityView: React.FC = () => {
 
   useEffect(() => {
     loadAuditData()
-  }, [
-    traceMode,
-    selectedDocId,
-    selectedJournalEntry,
-    selectedBankTx,
-    actorFilter,
-    eventTypeFilter,
-    startDateFilter,
-    endDateFilter,
-    globalSearch,
-  ])
+  }, [loadAuditData])
 
   // Determine displayed timeline events
   const displayedEvents =
@@ -265,7 +272,8 @@ export const AuditTraceabilityView: React.FC = () => {
     traceMode === 'global'
       ? globalEvents
       : displayedEvents.filter((evt) => {
-          if (actorFilter && evt.actor_type.toLowerCase() !== actorFilter.toLowerCase()) return false
+          if (actorFilter && evt.actor_type.toLowerCase() !== actorFilter.toLowerCase())
+            return false
           if (
             eventTypeFilter &&
             !evt.event_type.toLowerCase().includes(eventTypeFilter.toLowerCase())
@@ -749,9 +757,7 @@ export const AuditTraceabilityView: React.FC = () => {
 
             {/* Date Range: End */}
             <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                To Date
-              </label>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">To Date</label>
               <div className="relative">
                 <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                 <input
@@ -837,10 +843,14 @@ export const AuditTraceabilityView: React.FC = () => {
             <div className="py-16 text-center text-slate-400 space-y-3 bg-slate-900/40 rounded-xl border border-slate-800 p-6">
               <History className="w-10 h-10 text-slate-600 mx-auto" />
               <div>
-                <p className="text-sm font-semibold text-slate-200">No Audit Events in Selected Date Range</p>
+                <p className="text-sm font-semibold text-slate-200">
+                  No Audit Events in Selected Date Range
+                </p>
                 <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto leading-relaxed">
-                  No events found between <span className="font-mono text-slate-300">{startDateFilter || 'earliest'}</span> and{' '}
-                  <span className="font-mono text-slate-300">{endDateFilter || 'today'}</span>. Try clearing or widening the date filters above to view earlier audit records.
+                  No events found between{' '}
+                  <span className="font-mono text-slate-300">{startDateFilter || 'earliest'}</span>{' '}
+                  and <span className="font-mono text-slate-300">{endDateFilter || 'today'}</span>.
+                  Try clearing or widening the date filters above to view earlier audit records.
                 </p>
               </div>
               <button
@@ -877,7 +887,8 @@ export const AuditTraceabilityView: React.FC = () => {
             {traceMode === 'global' && (
               <div className="pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-3">
                 <span className="font-mono text-slate-400 text-[11px]">
-                  Showing <span className="font-semibold text-slate-200">{globalEvents.length}</span> of{' '}
+                  Showing{' '}
+                  <span className="font-semibold text-slate-200">{globalEvents.length}</span> of{' '}
                   <span className="font-semibold text-indigo-300">{globalTotal}</span> audit events
                 </span>
 
@@ -893,7 +904,9 @@ export const AuditTraceabilityView: React.FC = () => {
                     ) : (
                       <RefreshCw className="w-3.5 h-3.5 text-indigo-400" />
                     )}
-                    <span>{loadingMore ? 'Loading More Events...' : 'Load More Audit Events (+20)'}</span>
+                    <span>
+                      {loadingMore ? 'Loading More Events...' : 'Load More Audit Events (+20)'}
+                    </span>
                   </button>
                 ) : (
                   <span className="text-xs text-slate-500 font-medium">All events loaded</span>

@@ -133,7 +133,9 @@ def test_get_document_audit_log_includes_snapshot_document_id(client, db_session
         input_snapshot={"document_id": str(unrelated_doc_id)},
     )
 
-    db_session.add_all([doc, je, evt_upload, evt_je_posted, evt_review, evt_recon, evt_unrelated])
+    db_session.add_all(
+        [doc, je, evt_upload, evt_je_posted, evt_review, evt_recon, evt_unrelated]
+    )
     db_session.commit()
 
     response = client.get(f"/api/v1/audit-log/{doc_id}")
@@ -213,7 +215,9 @@ def test_list_audit_events_with_search_and_date_filters(client, db_session):
     # Search by rationale
     res_rat = client.get("/api/v1/audit-events?search=high precision")
     assert res_rat.status_code == 200
-    assert any("high precision" in (i["rationale"] or "") for i in res_rat.json()["items"])
+    assert any(
+        "high precision" in (i["rationale"] or "") for i in res_rat.json()["items"]
+    )
 
     # Filter by date
     today_str = now.strftime("%Y-%m-%d")
@@ -289,4 +293,3 @@ def test_cross_entity_audit_trace_endpoints(client, db_session):
     assert data_tx["resolved_entity_type"] == "bank_transaction"
     assert len(data_tx["timeline"]) >= 1
     assert data_tx["timeline"][0]["event_type"] == "bank_statement_imported"
-

@@ -1,11 +1,5 @@
 import React from 'react'
-import {
-  ArrowRight,
-  CheckCircle2,
-  Edit3,
-  History,
-  XCircle,
-} from 'lucide-react'
+import { ArrowRight, CheckCircle2, Edit3, History, XCircle } from 'lucide-react'
 import type { AuditEventResponse } from '../../services/api'
 
 export interface StatusTransitionNode {
@@ -18,7 +12,7 @@ export interface StatusTransitionNode {
   eventType: string
 }
 
-export function formatStatusLabel(status: string): string {
+function formatStatusLabel(status: string): string {
   switch (status.toLowerCase()) {
     case 'uploaded':
       return 'Uploaded'
@@ -50,7 +44,7 @@ export function formatStatusLabel(status: string): string {
   }
 }
 
-export function getStatusTone(status: string) {
+function getStatusTone(status: string) {
   switch (status.toLowerCase()) {
     case 'posted':
     case 'approved':
@@ -99,7 +93,7 @@ export function getStatusTone(status: string) {
   }
 }
 
-export function deriveStatusTransitions(events: AuditEventResponse[]): StatusTransitionNode[] {
+function deriveStatusTransitions(events: AuditEventResponse[]): StatusTransitionNode[] {
   const sorted = [...events].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   )
@@ -114,8 +108,7 @@ export function deriveStatusTransitions(events: AuditEventResponse[]): StatusTra
       evt.event_type === 'review_item_rejected' ||
       evt.event_type === 'reconciliation_match_rejected'
     const isReviewAction =
-      evt.event_type === 'review_item_approved' ||
-      evt.event_type === 'review_item_edited'
+      evt.event_type === 'review_item_approved' || evt.event_type === 'review_item_edited'
 
     if (!isDocSource && !isPosted && !isRejected && !isReviewAction) continue
 
@@ -212,7 +205,9 @@ export const AuditStatusStrip: React.FC<AuditStatusStripProps> = ({
                 }`}
                 title={`Event: ${node.eventType} by ${node.actorName} at ${new Date(node.timestamp).toLocaleTimeString()}`}
               >
-                <span className={`w-2 h-2 rounded-full ${tone.dot} ${isLatest ? 'animate-pulse' : ''}`} />
+                <span
+                  className={`w-2 h-2 rounded-full ${tone.dot} ${isLatest ? 'animate-pulse' : ''}`}
+                />
                 <span>{node.label}</span>
                 {isLatest && (node.rawStatus === 'posted' || node.rawStatus === 'approved') && (
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />

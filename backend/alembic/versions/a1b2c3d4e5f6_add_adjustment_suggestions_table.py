@@ -8,8 +8,9 @@ Create Date: 2026-08-18 10:40:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a1b2c3d4e5f6"
@@ -36,9 +37,7 @@ def upgrade() -> None:
             server_default="0.0000",
         ),
         sa.Column("rationale", sa.Text(), nullable=False, server_default=""),
-        sa.Column(
-            "is_balanced", sa.Boolean(), nullable=False, server_default="false"
-        ),
+        sa.Column("is_balanced", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column(
             "uses_sensitive_account",
             sa.Boolean(),

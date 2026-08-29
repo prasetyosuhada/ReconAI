@@ -184,14 +184,20 @@ def _continue_document_to_bookkeeping(
     )
 
     # Pin AI output fields once — both JournalEntry and ReviewItem MUST reference
-    # the exact same values to guarantee consistency across the GL and Review Queue modals.
+    # the exact same values across the GL and Review Queue modals.
     final_rationale: str | None = final_state.get("rationale")
     final_risk_flags: list[str] = final_state.get("risk_flags", []) or []
     final_confidence: float = float(final_state.get("confidence_score", 0.0))
 
     saved_journal_id = None
-    journal_entry_date = _parse_date_value(final_state.get("entry_date")) or extraction.transaction_date or date.today()
-    journal_desc = final_state.get("entry_description") or f"Journal for {doc.original_filename}"
+    journal_entry_date = (
+        _parse_date_value(final_state.get("entry_date"))
+        or extraction.transaction_date
+        or date.today()
+    )
+    journal_desc = (
+        final_state.get("entry_description") or f"Journal for {doc.original_filename}"
+    )
 
     if proposed_journal:
         journal_data = {
@@ -206,7 +212,11 @@ def _continue_document_to_bookkeeping(
             "risk_flags": final_risk_flags,
             "lines": proposed_journal,
         }
-        save_res = save_journal_entry_safely(journal_data, db_session=db)
+        save_res = save_journal_entry_safely(
+            journal_data,
+            db_session=db,
+            chart_of_accounts=_chart_of_accounts_payload(db),
+        )
         if not save_res.success:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -227,9 +237,15 @@ def _continue_document_to_bookkeeping(
             "journal_entry_id": str(saved_journal_id) if saved_journal_id else None,
             "vendor_name": extraction.vendor_name,
             "transaction_date": str(extraction.transaction_date or ""),
-            "total_amount": float(extraction.total_amount) if extraction.total_amount is not None else None,
-            "subtotal_amount": float(extraction.subtotal_amount) if extraction.subtotal_amount is not None else None,
-            "tax_amount": float(extraction.tax_amount) if extraction.tax_amount is not None else None,
+            "total_amount": float(extraction.total_amount)
+            if extraction.total_amount is not None
+            else None,
+            "subtotal_amount": float(extraction.subtotal_amount)
+            if extraction.subtotal_amount is not None
+            else None,
+            "tax_amount": float(extraction.tax_amount)
+            if extraction.tax_amount is not None
+            else None,
             "currency": extraction.currency,
             "line_items": extraction.line_items or [],
             "lines": proposed_journal,
@@ -260,7 +276,9 @@ def _continue_document_to_bookkeeping(
                 "Bookkeeping agent flagged reviewed extraction. "
                 f"Conf: {final_confidence:.2f}"
             ),
-            suggested_action="Review the AI-generated journal entry account classification.",
+            suggested_action=(
+                "Review the AI-generated journal entry account classification."
+            ),
             original_payload=review_payload,
         )
         db.add(review_item)
@@ -270,9 +288,11 @@ def _continue_document_to_bookkeeping(
     decision_str = "Bookkeeping classified"
     if proposed_journal and isinstance(proposed_journal, list):
         debit_lines = [
-            f"COA: {l.get('account_code')} - {l.get('account_name', '')}".strip(" -")
-            for l in proposed_journal
-            if float(l.get("debit_amount", 0.0) or 0.0) > 0
+            f"COA: {line.get('account_code')} - {line.get('account_name', '')}".strip(
+                " -"
+            )
+            for line in proposed_journal
+            if float(line.get("debit_amount", 0.0) or 0.0) > 0
         ]
         if debit_lines:
             decision_str = debit_lines[0]
@@ -303,7 +323,6 @@ def _continue_document_to_bookkeeping(
         document_id=doc.id,
     )
     return next_status
-
 
 
 @router.get(
@@ -361,7 +380,9 @@ def list_review_items(
 
     if resolved_today:
         if not status_filter:
-            query = query.filter(ReviewItem.status.in_(["approved", "posted", "edited"]))
+            query = query.filter(
+                ReviewItem.status.in_(["approved", "posted", "edited"])
+            )
         query = query.filter(ReviewItem.resolved_at.isnot(None))
         today_date = datetime.now(UTC).date()
         today_start = datetime.combine(today_date, datetime.min.time()).replace(
@@ -404,7 +425,11 @@ def get_review_item_detail(
     if item.source_type == "bank_transaction" and item.source_id:
         from app.models.reconciliation import BankTransaction, ReconciliationMatch
 
-        tx = db.query(BankTransaction).filter(BankTransaction.id == item.source_id).first()
+        tx = (
+            db.query(BankTransaction)
+            .filter(BankTransaction.id == item.source_id)
+            .first()
+        )
         if tx:
             payload.setdefault("tx_id", str(tx.id))
             payload.setdefault("transaction_date", str(tx.transaction_date))
@@ -421,7 +446,9 @@ def get_review_item_detail(
                 .first()
             )
             if match and match.journal_entry_id:
-                payload.setdefault("proposed_journal_entry_id", str(match.journal_entry_id))
+                payload.setdefault(
+                    "proposed_journal_entry_id", str(match.journal_entry_id)
+                )
                 payload.setdefault("confidence_score", match.confidence_score)
                 payload.setdefault("amount_score", match.amount_score)
                 payload.setdefault("date_score", match.date_score)
@@ -451,9 +478,9 @@ def get_review_item_detail(
         if "confidence_score" in payload and payload["confidence_score"] is not None
         else None,
         risk_flags=list(payload.get("risk_flags") or []),
-        journal_entry_id=payload.get("journal_entry_id") or payload.get("proposed_journal_entry_id"),
+        journal_entry_id=payload.get("journal_entry_id")
+        or payload.get("proposed_journal_entry_id"),
     )
-
 
 
 @router.post(
@@ -489,7 +516,9 @@ def approve_review_item(
     if item.source_type == "document":
         doc_id_to_pass = item.source_id
     elif item.source_type == "journal_entry":
-        je_rec = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        je_rec = (
+            db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        )
         if je_rec and je_rec.document_id:
             doc_id_to_pass = je_rec.document_id
 
@@ -506,7 +535,10 @@ def approve_review_item(
         actor_type="human",
         actor_name="human_user",
         human_action="approved",
-        input_snapshot={"resolution_note": resolution_note, "review_type": item.review_type},
+        input_snapshot={
+            "resolution_note": resolution_note,
+            "review_type": item.review_type,
+        },
         output_snapshot={
             "status": "approved",
             # next_workflow_status will be determined by the workflow branch below;
@@ -561,10 +593,15 @@ def approve_review_item(
                     output_snapshot={
                         "status": "posted",
                         "journal_entry_id": str(je.id),
-                        "gl_period": je.entry_date.strftime("%Y-%m") if je.entry_date else None,
+                        "gl_period": je.entry_date.strftime("%Y-%m")
+                        if je.entry_date
+                        else None,
                         "document_id": str(item.source_id),
                     },
-                    rationale="Journal entry posted automatically after bookkeeping review approval.",
+                    rationale=(
+                        "Journal entry posted automatically after bookkeeping "
+                        "review approval."
+                    ),
                     document_id=item.source_id,
                 )
             elif doc:
@@ -599,17 +636,26 @@ def approve_review_item(
                 output_snapshot={
                     "status": "posted",
                     "journal_entry_id": str(je.id),
-                    "gl_period": je.entry_date.strftime("%Y-%m") if je.entry_date else None,
+                    "gl_period": je.entry_date.strftime("%Y-%m")
+                    if je.entry_date
+                    else None,
                     "document_id": str(_je_doc_id) if _je_doc_id else None,
                 },
-                rationale="Journal entry posted automatically after bookkeeping review approval.",
+                rationale=(
+                    "Journal entry posted automatically after bookkeeping "
+                    "review approval."
+                ),
                 document_id=_je_doc_id,
             )
 
     elif item.source_type == "bank_transaction":
         from app.models.reconciliation import BankTransaction, ReconciliationMatch
 
-        tx = db.query(BankTransaction).filter(BankTransaction.id == item.source_id).first()
+        tx = (
+            db.query(BankTransaction)
+            .filter(BankTransaction.id == item.source_id)
+            .first()
+        )
         match = (
             db.query(ReconciliationMatch)
             .filter(ReconciliationMatch.bank_transaction_id == item.source_id)
@@ -667,7 +713,9 @@ def edit_review_item(
     if item.source_type == "document":
         doc_id_to_pass_edit = item.source_id
     elif item.source_type == "journal_entry":
-        _je_edit = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        _je_edit = (
+            db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        )
         if _je_edit and _je_edit.document_id:
             doc_id_to_pass_edit = _je_edit.document_id
 
@@ -788,7 +836,10 @@ def edit_review_item(
                 "gl_period": je.entry_date.strftime("%Y-%m") if je.entry_date else None,
                 "document_id": str(_edit_je_doc_id) if _edit_je_doc_id else None,
             },
-            rationale="Journal entry posted automatically after bookkeeping review edit and approval.",
+            rationale=(
+                "Journal entry posted automatically after bookkeeping review "
+                "edit and approval."
+            ),
             document_id=_edit_je_doc_id,
         )
 
@@ -854,7 +905,11 @@ def reject_review_item(
         from app.models.reconciliation import BankTransaction, ReconciliationMatch
         from app.services.reconciliation import compute_and_save_adjustment_suggestion
 
-        tx = db.query(BankTransaction).filter(BankTransaction.id == item.source_id).first()
+        tx = (
+            db.query(BankTransaction)
+            .filter(BankTransaction.id == item.source_id)
+            .first()
+        )
         match = (
             db.query(ReconciliationMatch)
             .filter(ReconciliationMatch.bank_transaction_id == item.source_id)
@@ -874,16 +929,19 @@ def reject_review_item(
                 try:
                     compute_and_save_adjustment_suggestion(tx=tx, db=db)
                 except Exception as e:
-                    logger.warning("Could not generate eager suggestion on review item reject: %s", e)
-
-
+                    logger.warning(
+                        "Could not generate eager suggestion on review item reject: %s",
+                        e,
+                    )
 
     # Resolve document_id if available
     doc_id_to_pass = None
     if item.source_type == "document":
         doc_id_to_pass = item.source_id
     elif item.source_type == "journal_entry":
-        je_rec = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        je_rec = (
+            db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        )
         if je_rec and je_rec.document_id:
             doc_id_to_pass = je_rec.document_id
 
@@ -896,7 +954,10 @@ def reject_review_item(
         actor_type="human",
         actor_name="human_user",
         human_action="rejected",
-        input_snapshot={"resolution_note": resolution_note, "review_type": item.review_type},
+        input_snapshot={
+            "resolution_note": resolution_note,
+            "review_type": item.review_type,
+        },
         output_snapshot={"status": "rejected"},
         document_id=doc_id_to_pass,
     )

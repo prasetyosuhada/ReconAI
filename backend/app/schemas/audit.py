@@ -50,7 +50,8 @@ class DocumentAuditTraceabilityResponse(BaseModel):
         default_factory=list, description="Chronological list of audit events"
     )
     resolved_entity_type: str | None = Field(
-        None, description="Resolved entity type: document, journal_entry, bank_transaction"
+        None,
+        description="Resolved entity type: document, journal_entry, bank_transaction",
     )
     resolved_entity_id: uuid.UUID | None = Field(
         None, description="UUID of the resolved entity"

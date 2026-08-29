@@ -4,10 +4,7 @@ import { ReconciliationBalanceSummary } from './ReconciliationBalanceSummary'
 import { ReconciliationCompletionBanner } from './ReconciliationCompletionBanner'
 import { ReconciliationAuditTimeline } from './ReconciliationAuditTimeline'
 import { ReconciliationLiveStreamCard } from './ReconciliationLiveStreamCard'
-import {
-  ReconciliationFiltersToolbar,
-  type ReconFilterType,
-} from './ReconciliationFiltersToolbar'
+import { ReconciliationFiltersToolbar, type ReconFilterType } from './ReconciliationFiltersToolbar'
 import { Reconciliation2ColumnView } from './Reconciliation2ColumnView'
 import type {
   BankStatementImportResponse,
@@ -226,9 +223,7 @@ export const ReconciliationView: React.FC = () => {
     setActionLoading(true)
     try {
       await acceptReconciliationMatch(matchId)
-      setMatches((prev) =>
-        prev.map((m) => (m.id === matchId ? { ...m, status: 'accepted' } : m))
-      )
+      setMatches((prev) => prev.map((m) => (m.id === matchId ? { ...m, status: 'accepted' } : m)))
       setTransactions((prev) =>
         prev.map((t) => {
           const match = matches.find((m) => m.id === matchId)
@@ -249,9 +244,7 @@ export const ReconciliationView: React.FC = () => {
     setActionLoading(true)
     try {
       await rejectReconciliationMatch(matchId)
-      setMatches((prev) =>
-        prev.map((m) => (m.id === matchId ? { ...m, status: 'rejected' } : m))
-      )
+      setMatches((prev) => prev.map((m) => (m.id === matchId ? { ...m, status: 'rejected' } : m)))
       setTransactions((prev) =>
         prev.map((t) => {
           const match = matches.find((m) => m.id === matchId)
@@ -275,7 +268,7 @@ export const ReconciliationView: React.FC = () => {
     setIsStreamingRecon(true)
   }
 
-  const handleStreamCompleted = () => {
+  const handleStreamCompleted = useCallback(() => {
     setIsStreamingRecon(false)
     if (activeImportId) {
       loadData(activeImportId)
@@ -284,7 +277,7 @@ export const ReconciliationView: React.FC = () => {
     refreshImports(setImports)
     // Dispatch event to update sidebar / dashboard review queue badge
     notifyReviewQueueUpdated()
-  }
+  }, [activeImportId, loadData])
 
   return (
     <div className="space-y-6">
@@ -384,4 +377,3 @@ export const ReconciliationView: React.FC = () => {
     </div>
   )
 }
-

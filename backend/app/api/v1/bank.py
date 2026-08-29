@@ -22,13 +22,13 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.reconciliation import BankStatementImport, BankTransaction
-from app.services.audit_service import log_event
 from app.schemas.bank import (
     BankStatementImportListResponse,
     BankStatementImportResponse,
     BankTransactionListResponse,
     BankTransactionResponse,
 )
+from app.services.audit_service import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ router = APIRouter(prefix="/bank-statements", tags=["Bank Statements"])
 bank_router = APIRouter(prefix="/bank", tags=["Bank Statements"])
 
 UPLOAD_STORAGE_DIR = Path("./storage/bank_imports")
+MAX_BANK_UPLOAD_BYTES = 5 * 1024 * 1024
 
 
 def _get_bank_storage_dir() -> Path:
@@ -88,6 +89,11 @@ async def upload_bank_statement_csv(
         )
 
     content_bytes = await file.read()
+    if len(content_bytes) > MAX_BANK_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Uploaded bank statement exceeds the 5 MB size limit.",
+        )
     if not content_bytes or len(content_bytes) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -312,10 +318,7 @@ def list_all_bank_transactions(
         ]
         # Match TX ID or prefix like #TX-1234abcd
         id_part = (
-            s_clean.replace("#TX-", "")
-            .replace("TX-", "")
-            .replace("#", "")
-            .strip()
+            s_clean.replace("#TX-", "").replace("TX-", "").replace("#", "").strip()
         )
         if id_part:
             search_conds.append(cast(BankTransaction.id, String).ilike(f"%{id_part}%"))
@@ -422,4 +425,3 @@ def get_bank_transaction(
             detail=f"Bank transaction [{transaction_id}] not found.",
         )
     return tx
-

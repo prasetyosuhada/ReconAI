@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from datetime import UTC, date, datetime, time
+from datetime import datetime, time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, or_
@@ -13,7 +13,6 @@ from app.models.audit import AuditEvent
 from app.models.document import Document
 from app.models.journal import JournalEntry
 from app.models.reconciliation import (
-    BankStatementImport,
     BankTransaction,
     ReconciliationMatch,
 )
@@ -423,4 +422,3 @@ def get_audit_event_detail(
         )
 
     return AuditEventResponse.model_validate(event)
-

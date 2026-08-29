@@ -165,20 +165,17 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
       )
     } else {
       const rawAmt = Math.abs(selectedTx.amount)
-      const bankAcct =
-        dbCOA.find((c) => c.account_code === '1010') ||
+      const bankAcct = dbCOA.find((c) => c.account_code === '1010') ||
         dbCOA.find((c) => c.account_type === 'asset') || {
           account_code: '1010',
           account_name: 'Bank Account',
         }
-      const expenseAcct =
-        dbCOA.find((c) => c.account_code === '5900') ||
+      const expenseAcct = dbCOA.find((c) => c.account_code === '5900') ||
         dbCOA.find((c) => c.account_type === 'expense') || {
           account_code: '5900',
           account_name: 'Miscellaneous Expense',
         }
-      const revenueAcct =
-        dbCOA.find((c) => c.account_code === '4000') ||
+      const revenueAcct = dbCOA.find((c) => c.account_code === '4000') ||
         dbCOA.find((c) => c.account_type === 'revenue') || {
           account_code: '4000',
           account_name: 'Sales Revenue',
@@ -247,9 +244,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
     const newName = foundCoa ? foundCoa.account_name : 'Custom Account'
     setJournalLines((prev) =>
       prev.map((line, idx) =>
-        idx === index
-          ? { ...line, account_code: newAccountCode, account_name: newName }
-          : line
+        idx === index ? { ...line, account_code: newAccountCode, account_name: newName } : line
       )
     )
   }
@@ -276,8 +271,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
   }
 
   const handleAddLine = () => {
-    const defaultExpense =
-      dbCOA.find((c) => c.account_type === 'expense') ||
+    const defaultExpense = dbCOA.find((c) => c.account_type === 'expense') ||
       dbCOA[0] || {
         account_code: '5900',
         account_name: 'Miscellaneous Expense',
@@ -332,7 +326,9 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
     if (!onRejectMatch) return
     try {
       await onRejectMatch(matchId)
-      showToast('✓ Transaction unmatched. BookkeepingAgent classified COA suggestion for Bank Only tab.')
+      showToast(
+        '✓ Transaction unmatched. BookkeepingAgent classified COA suggestion for Bank Only tab.'
+      )
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Failed to unmatch transaction.')
     }
@@ -401,8 +397,7 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
         setSuggestionError(err.message)
       })
       .finally(() => setSuggestionLoading(false))
-  }, [selectedTx?.id, selectedMatch?.id, selectedMatch?.status])
-
+  }, [selectedTx, selectedMatch, selectedTx?.id, selectedMatch?.id, selectedMatch?.status])
 
   const getStatusBadge = (status: string) => {
     switch (status.toLowerCase()) {
@@ -773,7 +768,6 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                         </div>
                       )}
 
-
                       {suggestion && !suggestionLoading && (
                         <div className="p-4 rounded-xl bg-gradient-to-r from-purple-950/30 to-indigo-950/30 border border-purple-500/30 space-y-3">
                           <div className="flex items-center justify-between">
@@ -823,15 +817,26 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                             </div>
                             <div className="divide-y divide-slate-800">
                               {suggestion.suggested_lines.map((line, idx) => (
-                                <div key={idx} className="px-3 py-2 flex items-center justify-between text-xs">
+                                <div
+                                  key={idx}
+                                  className="px-3 py-2 flex items-center justify-between text-xs"
+                                >
                                   <div>
-                                    <span className={`font-mono font-bold mr-1 ${ line.debit_amount > 0 ? 'text-emerald-400' : 'text-slate-400' }`}>
+                                    <span
+                                      className={`font-mono font-bold mr-1 ${line.debit_amount > 0 ? 'text-emerald-400' : 'text-slate-400'}`}
+                                    >
                                       [{line.debit_amount > 0 ? 'DR' : 'CR'}]
                                     </span>
-                                    <span className="text-white font-medium">{line.account_code}</span>
-                                    <span className="text-slate-400 ml-1">• {line.account_name}</span>
+                                    <span className="text-white font-medium">
+                                      {line.account_code}
+                                    </span>
+                                    <span className="text-slate-400 ml-1">
+                                      • {line.account_name}
+                                    </span>
                                   </div>
-                                  <span className={`font-mono font-semibold ${ line.debit_amount > 0 ? 'text-emerald-400' : 'text-slate-300' }`}>
+                                  <span
+                                    className={`font-mono font-semibold ${line.debit_amount > 0 ? 'text-emerald-400' : 'text-slate-300'}`}
+                                  >
                                     {line.debit_amount > 0
                                       ? formatCardAmount(line.debit_amount, suggestion.currency)
                                       : formatCardAmount(line.credit_amount, suggestion.currency)}
@@ -946,7 +951,8 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                             Journal Description
                           </span>
                           <span className="font-semibold text-slate-100">
-                            {selectedMatch.journal_entry?.description || 'Matched General Ledger Entry'}
+                            {selectedMatch.journal_entry?.description ||
+                              'Matched General Ledger Entry'}
                           </span>
                         </div>
                       </div>
@@ -955,7 +961,10 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                       {actionLoading && (
                         <div className="p-3 rounded-xl bg-purple-950/40 border border-purple-500/30 text-purple-200 text-xs flex items-center gap-2.5 animate-pulse">
                           <Loader2 className="w-4 h-4 animate-spin text-purple-400 shrink-0" />
-                          <span>Unmatching transaction and invoking BookkeepingAgent to generate COA suggestions…</span>
+                          <span>
+                            Unmatching transaction and invoking BookkeepingAgent to generate COA
+                            suggestions…
+                          </span>
                         </div>
                       )}
 
@@ -1074,7 +1083,8 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                           Journal Description
                         </span>
                         <span className="font-semibold text-slate-100">
-                          {selectedMatch.journal_entry?.description || 'Proposed Candidate Journal Entry'}
+                          {selectedMatch.journal_entry?.description ||
+                            'Proposed Candidate Journal Entry'}
                         </span>
                       </div>
                     </div>
@@ -1310,7 +1320,8 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Customize double-entry accounts, amounts, or use AI prefilled recommendation before posting.
+                    Customize double-entry accounts, amounts, or use AI prefilled recommendation
+                    before posting.
                   </p>
                 </div>
               </div>
@@ -1345,7 +1356,9 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                   <span className="text-slate-400 font-semibold uppercase tracking-wider flex items-center gap-1.5">
                     <Building2 className="w-3.5 h-3.5 text-blue-400" /> Source Bank Mutation
                   </span>
-                  <span className="font-mono text-slate-500">Ref: {selectedTx.reference_number || 'N/A'}</span>
+                  <span className="font-mono text-slate-500">
+                    Ref: {selectedTx.reference_number || 'N/A'}
+                  </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
                   <div>
@@ -1354,11 +1367,15 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block">Transaction Date</span>
-                    <span className="font-mono text-slate-300 font-medium">{formatCardDate(selectedTx.transaction_date)}</span>
+                    <span className="font-mono text-slate-300 font-medium">
+                      {formatCardDate(selectedTx.transaction_date)}
+                    </span>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block">Mutation Amount</span>
-                    <span className={`font-mono font-bold ${selectedTx.amount < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                    <span
+                      className={`font-mono font-bold ${selectedTx.amount < 0 ? 'text-rose-400' : 'text-emerald-400'}`}
+                    >
                       {formatCardAmount(selectedTx.amount, selectedTx.currency)}
                     </span>
                   </div>
@@ -1443,7 +1460,9 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                             <input
                               type="text"
                               value={line.description || ''}
-                              onChange={(e) => handleLineFieldChange(idx, 'description', e.target.value)}
+                              onChange={(e) =>
+                                handleLineFieldChange(idx, 'description', e.target.value)
+                              }
                               placeholder="Line description"
                               className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-purple-500 transition-colors"
                             />
@@ -1456,7 +1475,9 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                               min="0"
                               step="any"
                               value={line.debit_amount || ''}
-                              onChange={(e) => handleLineFieldChange(idx, 'debit_amount', e.target.value)}
+                              onChange={(e) =>
+                                handleLineFieldChange(idx, 'debit_amount', e.target.value)
+                              }
                               placeholder="0"
                               className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-emerald-400 font-mono font-semibold text-right text-xs focus:outline-none focus:border-purple-500 transition-colors"
                             />
@@ -1469,7 +1490,9 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                               min="0"
                               step="any"
                               value={line.credit_amount || ''}
-                              onChange={(e) => handleLineFieldChange(idx, 'credit_amount', e.target.value)}
+                              onChange={(e) =>
+                                handleLineFieldChange(idx, 'credit_amount', e.target.value)
+                              }
                               placeholder="0"
                               className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 font-mono font-semibold text-right text-xs focus:outline-none focus:border-purple-500 transition-colors"
                             />
@@ -1482,7 +1505,11 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                               disabled={journalLines.length <= 2}
                               onClick={() => handleRemoveLine(idx)}
                               className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800 disabled:opacity-30 disabled:hover:text-slate-500 disabled:hover:bg-transparent transition-colors cursor-pointer"
-                              title={journalLines.length <= 2 ? 'Minimum 2 lines required' : 'Remove line'}
+                              title={
+                                journalLines.length <= 2
+                                  ? 'Minimum 2 lines required'
+                                  : 'Remove line'
+                              }
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -1520,13 +1547,17 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
                   {isBalanced ? (
                     <>
                       <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>Balanced! Double-entry mathematical equality verified (Debits == Credits).</span>
+                      <span>
+                        Balanced! Double-entry mathematical equality verified (Debits == Credits).
+                      </span>
                     </>
                   ) : (
                     <>
                       <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
                       <span>
-                        Unbalanced Journal Entry — Difference: <strong>{formatCardAmount(imbalance)}</strong>. Debits must equal Credits to post.
+                        Unbalanced Journal Entry — Difference:{' '}
+                        <strong>{formatCardAmount(imbalance)}</strong>. Debits must equal Credits to
+                        post.
                       </span>
                     </>
                   )}
@@ -1636,5 +1667,3 @@ export const Reconciliation2ColumnView: React.FC<Reconciliation2ColumnViewProps>
     </div>
   )
 }
-
-

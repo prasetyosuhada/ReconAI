@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
-    SECRET_KEY: str = "dev_secret_key_change_in_production"
+    SECRET_KEY: str | None = None
 
     # Database
     POSTGRES_USER: str = "postgres"

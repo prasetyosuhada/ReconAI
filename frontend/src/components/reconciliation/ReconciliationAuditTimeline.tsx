@@ -1,18 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import {
-  Activity,
-  Bot,
-  Clock,
-  History,
-  Loader2,
-  RefreshCw,
-  User,
-  X,
-} from 'lucide-react'
-import type {
-  AuditEventResponse,
-  BankStatementImportResponse,
-} from '../../services/api'
+import { Activity, Bot, Clock, History, Loader2, RefreshCw, User, X } from 'lucide-react'
+import type { AuditEventResponse, BankStatementImportResponse } from '../../services/api'
 import { fetchAuditEvents } from '../../services/api'
 
 interface ReconciliationAuditTimelineProps {
@@ -150,12 +138,9 @@ export const ReconciliationAuditTimeline: React.FC<ReconciliationAuditTimelinePr
           ) : auditEvents.length === 0 ? (
             <div className="py-12 text-center text-slate-400 space-y-2 bg-slate-950/40 rounded-xl border border-slate-800">
               <History className="w-8 h-8 text-slate-600 mx-auto" />
-              <p className="text-xs font-semibold text-slate-300">
-                No Audit Events Logged
-              </p>
+              <p className="text-xs font-semibold text-slate-300">No Audit Events Logged</p>
               <p className="text-[11px] text-slate-500">
-                Actions such as CSV import, matching, and match reviews will appear
-                here.
+                Actions such as CSV import, matching, and match reviews will appear here.
               </p>
             </div>
           ) : (
@@ -175,8 +160,7 @@ export const ReconciliationAuditTimeline: React.FC<ReconciliationAuditTimelinePr
                       </div>
                       <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
-                        {formatEventDate(evt.created_at)}{' '}
-                        {formatEventTime(evt.created_at)}
+                        {formatEventDate(evt.created_at)} {formatEventTime(evt.created_at)}
                       </span>
                     </div>
 

@@ -206,10 +206,14 @@ def test_list_journal_entries_with_search(client, db_session):
     res_desc = client.get("/api/v1/ledger/journal-entries?search=Server+Hosting")
     assert res_desc.status_code == 200
     assert len(res_desc.json()["items"]) == 1
-    assert res_desc.json()["items"][0]["description"] == "AWS Cloud Server Hosting Payment"
+    assert (
+        res_desc.json()["items"][0]["description"] == "AWS Cloud Server Hosting Payment"
+    )
 
     # Search date
     res_date = client.get("/api/v1/ledger/journal-entries?search=2026-08-12")
     assert res_date.status_code == 200
-    assert any(i["description"] == "Office Coffee Machine Restock" for i in res_date.json()["items"])
-
+    assert any(
+        i["description"] == "Office Coffee Machine Restock"
+        for i in res_date.json()["items"]
+    )

@@ -77,8 +77,7 @@ export const DropzoneUpload: React.FC<DropzoneUploadProps> = ({
 
     try {
       const res = await uploadDocument(selectedFile)
-      const filename =
-        res.original_filename || res.document?.original_filename || selectedFile.name
+      const filename = res.original_filename || res.document?.original_filename || selectedFile.name
       const docId = res.id || res.document?.id
 
       setSuccessMsg(

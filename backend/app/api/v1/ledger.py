@@ -6,11 +6,12 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import String, Text, cast, func, or_
+from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.coa import ChartOfAccount
+from app.models.document import Document
 from app.models.journal import JournalEntry, JournalEntryLine
 from app.schemas.ledger import (
     ChartOfAccountListResponse,
@@ -22,7 +23,6 @@ from app.schemas.ledger import (
     TrialBalanceAccountBalance,
     TrialBalanceResponse,
 )
-from app.models.document import Document
 from app.services.accounting import post_journal_entry_to_ledger
 from app.services.audit_service import log_event
 
@@ -97,7 +97,6 @@ def _to_journal_detail(entry: JournalEntry) -> JournalEntryDetailResponse:
     )
 
 
-
 @router.get(
     "",
     response_model=JournalEntryListResponse,
@@ -119,7 +118,10 @@ def list_journal_entries(
     ),
     document_id: str | None = Query(None, description="Filter by source document UUID"),
     search: str | None = Query(
-        None, description="Search description, entry date, #JE-ID, or linked document filename"
+        None,
+        description=(
+            "Search description, entry date, #JE-ID, or linked document filename"
+        ),
     ),
     limit: int = Query(50, ge=1, le=250, description="Pagination limit"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
@@ -152,10 +154,7 @@ def list_journal_entries(
         ]
         # Match JE ID or prefix like #JE-1234abcd
         id_part = (
-            s_clean.replace("#JE-", "")
-            .replace("JE-", "")
-            .replace("#", "")
-            .strip()
+            s_clean.replace("#JE-", "").replace("JE-", "").replace("#", "").strip()
         )
         if id_part:
             search_conds.append(cast(JournalEntry.id, String).ilike(f"%{id_part}%"))
@@ -273,7 +272,9 @@ def post_journal_entry(
         output_snapshot={
             "status": "posted",
             "journal_entry_id": str(entry.id),
-            "gl_period": entry.entry_date.strftime("%Y-%m") if entry.entry_date else None,
+            "gl_period": entry.entry_date.strftime("%Y-%m")
+            if entry.entry_date
+            else None,
             "document_id": str(entry.document_id) if entry.document_id else None,
         },
         rationale="Journal entry posted to general ledger.",

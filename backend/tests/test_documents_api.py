@@ -3,6 +3,7 @@ import uuid
 from unittest.mock import patch
 
 from app.models.audit import AuditEvent
+from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
@@ -67,6 +68,25 @@ def test_process_document_background_success(
     mock_session_class, mock_graph, db_session
 ):
     mock_session_class.return_value = db_session
+    db_session.add_all(
+        [
+            ChartOfAccount(
+                account_code="5100",
+                account_name="Supplies",
+                account_type="expense",
+                normal_balance="debit",
+                is_active=True,
+            ),
+            ChartOfAccount(
+                account_code="2000",
+                account_name="Accounts Payable",
+                account_type="liability",
+                normal_balance="credit",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
 
     doc_id = uuid.uuid4()
     doc = Document(
@@ -201,7 +221,9 @@ def test_process_document_background_review_required(
 
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
-def test_stream_document_processing_sse(mock_session_class, mock_graph, client, db_session):
+def test_stream_document_processing_sse(
+    mock_session_class, mock_graph, client, db_session
+):
     mock_session_class.return_value = db_session
 
     doc_id = uuid.uuid4()
@@ -331,6 +353,3 @@ def test_list_documents_status_filtering(client, db_session):
     assert res_proc.status_code == 200
     proc_items = res_proc.json()["items"]
     assert any(item["status"] == "extracting" for item in proc_items)
-
-
-

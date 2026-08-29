@@ -12,6 +12,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     UploadFile,
     status,
 )
@@ -47,6 +48,7 @@ ALLOWED_MIME_TYPES = {
 }
 
 UPLOAD_STORAGE_DIR = Path("./storage/uploads")
+MAX_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def _get_upload_dir() -> Path:
@@ -74,7 +76,6 @@ def stream_document_processing_endpoint(
     )
 
 
-
 @router.get(
     "",
     response_model=DocumentListResponse,
@@ -83,8 +84,8 @@ def stream_document_processing_endpoint(
 )
 def list_documents(
     status: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=250),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ) -> DocumentListResponse:
     """List uploaded documents in repository."""
@@ -93,12 +94,14 @@ def list_documents(
         s = status.strip().lower()
         if s in ("review_required", "needs_review"):
             query = query.filter(
-                Document.status.in_([
-                    "review_required",
-                    "needs_review",
-                    "extraction_review_required",
-                    "bookkeeping_review_required",
-                ])
+                Document.status.in_(
+                    [
+                        "review_required",
+                        "needs_review",
+                        "extraction_review_required",
+                        "bookkeeping_review_required",
+                    ]
+                )
             )
         elif s in ("processing", "extracting"):
             query = query.filter(Document.status.in_(["processing", "extracting"]))
@@ -284,6 +287,12 @@ async def upload_document(
 
     file_bytes = await file.read()
     file_size = len(file_bytes)
+
+    if file_size > MAX_DOCUMENT_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Uploaded document exceeds the 10 MB size limit.",
+        )
 
     if file_size == 0:
         raise HTTPException(
