@@ -84,10 +84,19 @@ def test_bookkeeping_agent_sensitive_account_routing(mock_get_llm):
         extraction_data={
             "vendor_name": "Acme",
             "transaction_date": "2026-07-20",
+            "subtotal_amount": 45000.0,
+            "tax_amount": 5000.0,
             "total_amount": 50000.0,
         },
         chart_of_accounts=MOCK_COA,
     )
+
+    system_prompt, user_prompt = mock_structured_llm.invoke.call_args.args[0]
+    assert (
+        "Handle recoverable Input VAT (PPN Masukan) explicitly" in system_prompt.content
+    )
+    assert "Subtotal Amount: 45000.0" in user_prompt.content
+    assert "Tax Amount (PPN): 5000.0" in user_prompt.content
 
     # 1010 Bank Account is sensitive -> MUST force status to needs_review!
     assert response.status == "needs_review"

@@ -50,6 +50,14 @@ INITIAL_COA = [
         "description": "Payments made in advance for services/goods.",
     },
     {
+        "account_code": "1400",
+        "account_name": "Input VAT",
+        "account_type": "asset",
+        "normal_balance": "debit",
+        "is_sensitive": False,
+        "description": "Recoverable input VAT/PPN paid to vendors on purchases.",
+    },
+    {
         "account_code": "2000",
         "account_name": "Accounts Payable",
         "account_type": "liability",

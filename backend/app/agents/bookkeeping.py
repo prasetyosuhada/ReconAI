@@ -100,6 +100,8 @@ def run_bookkeeping_agent(
             f"--- EXTRACTION DATA ---\n"
             f"Vendor Name: {extraction_data.get('vendor_name')}\n"
             f"Transaction Date: {extraction_data.get('transaction_date')}\n"
+            f"Subtotal Amount: {extraction_data.get('subtotal_amount')}\n"
+            f"Tax Amount (PPN): {extraction_data.get('tax_amount')}\n"
             f"Total Amount: {total_amount}\n"
             f"Currency: {extraction_data.get('currency', 'IDR')}\n"
             f"Document Type: {extraction_data.get('document_type', 'unknown')}\n"

@@ -42,6 +42,13 @@ def seed_coa_accounts(db):
             normal_balance="debit",
             is_active=True,
         ),
+        ChartOfAccount(
+            account_code="1400",
+            account_name="PPN Masukan (Input VAT)",
+            account_type="asset",
+            normal_balance="debit",
+            is_active=True,
+        ),
     ]
     for acc in accounts:
         db.add(acc)

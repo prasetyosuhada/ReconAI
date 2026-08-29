@@ -49,14 +49,20 @@ STRICT RULES:
    - Expenses/Assets increase with DEBIT.
    - Revenues/Liabilities/Equity increase with CREDIT.
    - Purchases paid via bank: DEBIT Expense, CREDIT Bank Account (1010) or AP (2000).
-4. Use '9999' (Suspense Account) ONLY when classification is genuinely unclear.
-5. Identify sensitive account usage (e.g. Bank Account, Cash, Tax Payable, Equity).
-6. Provide a realistic confidence_score between 0.00 and 1.00:
+4. Handle recoverable Input VAT explicitly:
+   - When Tax Amount (PPN) is present and greater than zero, create a SEPARATE
+     journal line using account '1400' Input VAT as a DEBIT.
+   - Expense line(s) MUST reflect only the goods/service cost (the subtotal),
+     not subtotal plus tax. Never fold tax into an expense line.
+5. Use '9999' (Suspense Account) ONLY when classification is genuinely unclear.
+6. Identify sensitive account usage (e.g. Bank Account, Cash, Tax Payable, Equity).
+7. Provide a realistic confidence_score between 0.00 and 1.00:
    - 0.90 to 1.00: Unambiguous standard expense classification.
    - 0.70 to 0.89: Ambiguous vendor or multiple candidate expense accounts.
    - Below 0.70: Unclear transaction requiring Suspense Account.
-7. Provide a concise human-readable rationale explaining your decision.
-8. Status MUST be set to:
+8. Provide a concise human-readable rationale explaining your decision, including
+   the treatment of any Input VAT line.
+9. Status MUST be set to:
    - 'completed' if confidence >= 0.85, entry is balanced, and no sensitive account.
    - 'needs_review' if confidence < 0.85, sensitive account used, or unbalanced.
 """
