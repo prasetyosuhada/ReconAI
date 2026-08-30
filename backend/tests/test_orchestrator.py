@@ -126,7 +126,7 @@ def test_route_after_reconciliation_review_required():
 
 @patch("app.agents.document_intake.get_llm")
 @patch("app.agents.bookkeeping.get_llm")
-def test_document_processing_graph_end_to_end_success(
+def test_document_processing_graph_splits_input_vat(
     mock_bookkeeping_llm, mock_intake_llm
 ):
     # Setup Document Intake Agent mock response
@@ -168,7 +168,13 @@ def test_document_processing_graph_end_to_end_success(
                 ProposedJournalLine(
                     account_code="5100",
                     account_name="Office Supplies Expense",
-                    debit_amount=555000.0,
+                    debit_amount=500000.0,
+                    credit_amount=0.0,
+                ),
+                ProposedJournalLine(
+                    account_code="1400",
+                    account_name="Input VAT",
+                    debit_amount=55000.0,
                     credit_amount=0.0,
                 ),
                 ProposedJournalLine(
@@ -197,6 +203,11 @@ def test_document_processing_graph_end_to_end_success(
                 "is_sensitive": False,
             },
             {
+                "account_code": "1400",
+                "account_name": "Input VAT",
+                "is_sensitive": False,
+            },
+            {
                 "account_code": "2000",
                 "account_name": "Accounts Payable",
                 "is_sensitive": False,
@@ -207,10 +218,27 @@ def test_document_processing_graph_end_to_end_success(
     final_state = document_processing_graph.invoke(initial_state)
 
     assert final_state["vendor_name"] == "PT Media Utama"
+    assert final_state["subtotal_amount"] == 500000.0
+    assert final_state["tax_amount"] == 55000.0
     assert final_state["total_amount"] == 555000.0
     assert final_state["status"] == "ready_to_post"
     assert final_state["needs_review"] is False
     assert final_state["proposed_journal"] == final_state["journal_lines"]
+
+    journal_lines = final_state["journal_lines"]
+    input_vat_lines = [line for line in journal_lines if line["account_code"] == "1400"]
+    assert len(input_vat_lines) == 1
+    assert input_vat_lines[0]["debit_amount"] == final_state["tax_amount"]
+    assert input_vat_lines[0]["credit_amount"] == 0.0
+
+    expense_lines = [line for line in journal_lines if line["account_code"] == "5100"]
+    assert (
+        sum(line["debit_amount"] for line in expense_lines)
+        == final_state["subtotal_amount"]
+    )
+    assert final_state["total_debit"] == final_state["total_credit"]
+    assert final_state["total_debit"] == final_state["total_amount"]
+    assert final_state["is_balanced"] is True
 
 
 def test_reconciliation_graph_end_to_end_unmatched():

@@ -16,6 +16,13 @@ MOCK_COA = [
         "is_sensitive": True,
     },
     {
+        "account_code": "1400",
+        "account_name": "Input VAT",
+        "account_type": "asset",
+        "normal_balance": "debit",
+        "is_sensitive": False,
+    },
+    {
         "account_code": "5100",
         "account_name": "Office Supplies Expense",
         "account_type": "expense",
@@ -60,7 +67,13 @@ def test_bookkeeping_agent_sensitive_account_routing(mock_get_llm):
                 ProposedJournalLine(
                     account_code="5100",
                     account_name="Office Supplies Expense",
-                    debit_amount=50000.0,
+                    debit_amount=45000.0,
+                    credit_amount=0.0,
+                ),
+                ProposedJournalLine(
+                    account_code="1400",
+                    account_name="Input VAT",
+                    debit_amount=5000.0,
                     credit_amount=0.0,
                 ),
                 ProposedJournalLine(
@@ -92,9 +105,9 @@ def test_bookkeeping_agent_sensitive_account_routing(mock_get_llm):
     )
 
     system_prompt, user_prompt = mock_structured_llm.invoke.call_args.args[0]
-    assert (
-        "Handle recoverable Input VAT (PPN Masukan) explicitly" in system_prompt.content
-    )
+    assert "Handle recoverable Input VAT explicitly" in system_prompt.content
+    assert "account '1400' Input VAT as a DEBIT" in system_prompt.content
+    assert "Never fold tax into an expense line" in system_prompt.content
     assert "Subtotal Amount: 45000.0" in user_prompt.content
     assert "Tax Amount (PPN): 5000.0" in user_prompt.content
 
