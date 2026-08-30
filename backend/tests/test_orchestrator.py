@@ -277,16 +277,71 @@ def test_reconciliation_graph_end_to_end_matched(mock_agent):
         ),
     )
 
-    final_state = reconciliation_graph.invoke(
-        {
-            "bank_transaction": {"id": "tx-101", "amount": 250000.0},
-            "candidate_journal_entries": [{"id": "je-101"}],
-        }
+    updates = list(
+        reconciliation_graph.stream(
+            {
+                "bank_transaction": {"id": "tx-101", "amount": 250000.0},
+                "candidate_journal_entries": [{"id": "je-101"}],
+            },
+            stream_mode="updates",
+        )
     )
 
-    assert final_state["status"] == "matched"
-    assert final_state["recommended_status"] == "matched"
-    assert final_state["needs_review"] is False
+    executed_nodes = [node_name for update in updates for node_name in update]
+    assert executed_nodes == ["reconciliation"]
+
+    reconciliation_state = updates[0]["reconciliation"]
+    assert reconciliation_state["status"] == "matched"
+    assert reconciliation_state["recommended_status"] == "matched"
+    assert reconciliation_state["needs_review"] is False
+
+
+@patch("app.agents.orchestrator.run_reconciliation_agent")
+def test_reconciliation_graph_low_confidence_runs_review_router(mock_agent):
+    mock_agent.return_value = ReconciliationResponse(
+        agent_name="reconciliation_agent",
+        status="completed",
+        confidence_score=0.75,
+        rationale="Candidate requires human review.",
+        result=ReconciliationResult(
+            bank_transaction_id="tx-103",
+            matches=[
+                ProposedMatchCandidate(
+                    journal_entry_id="je-103",
+                    match_type="fuzzy",
+                    confidence_score=0.75,
+                    amount_score=1.0,
+                    date_score=0.7,
+                    vendor_score=0.6,
+                    rationale="Amount matches but other signals are ambiguous.",
+                )
+            ],
+            recommended_status="possible_match_review_required",
+        ),
+    )
+
+    updates = list(
+        reconciliation_graph.stream(
+            {
+                "bank_transaction": {"id": "tx-103", "amount": 250000.0},
+                "candidate_journal_entries": [{"id": "je-103"}],
+            },
+            stream_mode="updates",
+        )
+    )
+
+    executed_nodes = [node_name for update in updates for node_name in update]
+    assert executed_nodes == ["reconciliation", "review_router"]
+
+    reconciliation_state = updates[0]["reconciliation"]
+    assert (
+        reconciliation_state["recommended_status"] == "possible_match_review_required"
+    )
+    assert reconciliation_state["needs_review"] is True
+    assert updates[1]["review_router"] == {
+        "needs_review": True,
+        "warnings": ["Routed to human review queue for manual verification."],
+    }
 
 
 @patch("app.agents.orchestrator.run_reconciliation_agent")
