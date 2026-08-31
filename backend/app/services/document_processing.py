@@ -6,14 +6,14 @@ from datetime import date, datetime
 from typing import Any
 
 from app.agents.orchestrator import document_processing_graph
+from app.agents.schemas import BookkeepingOutcome
 from app.db.session import SessionLocal
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
-from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
-from app.services.accounting import save_journal_entry_safely
 from app.services.audit_service import log_event
+from app.services.bookkeeping_persistence import persist_bookkeeping_outcome
 from app.services.document_extraction import extract_document_content
 
 logger = logging.getLogger(__name__)
@@ -342,10 +342,10 @@ def stream_document_processing(
             )
             db.add(extraction)
 
-        db.commit()
+        db.flush()
         db.refresh(extraction)
 
-        # 2. Save the proposed journal entry with deterministic guardrails.
+        # 2. Persist bookkeeping through the shared, caller-transactional service.
         proposed_journal = (
             final_state.get("journal_entry")
             or final_state.get("proposed_journal")
@@ -353,123 +353,100 @@ def stream_document_processing(
         )
         saved_journal_id = None
         save_errors: list[str] = []
-        journal_desc = f"Journal for {fname} ({vendor})"
-        journal_entry_date = (
-            _parse_date(final_state.get("transaction_date")) or date.today()
+        bookkeeping_persistence = None
+        bookkeeping_attempted = proposed_journal is not None or final_status in (
+            "ready_to_post",
+            "bookkeeping_review_required",
         )
-
-        existing_je = (
-            db.query(JournalEntry).filter(JournalEntry.document_id == doc.id).first()
-        )
-
-        if existing_je:
-            saved_journal_id = str(existing_je.id)
-            logger.info(
-                "JournalEntry already exists for document %s (#JE-%s). "
-                "Skipping duplicate insert.",
-                doc.id,
-                saved_journal_id[:8],
+        if bookkeeping_attempted:
+            bookkeeping_status = (
+                final_status
+                if final_status
+                in {"ready_to_post", "bookkeeping_review_required", "failed"}
+                else (
+                    "bookkeeping_review_required" if needs_review else "ready_to_post"
+                )
             )
-        elif proposed_journal:
-            journal_data = {
-                "document_id": doc.id,
-                "extraction_id": extraction.id,
-                "entry_date": journal_entry_date,
-                "description": journal_desc,
-                "status": "review_required" if needs_review else "draft",
-                "agent_name": "BookkeepingAgent",
-                "confidence_score": final_confidence,
-                "rationale": final_rationale,
-                "risk_flags": final_risk_flags,
-                "lines": proposed_journal,
-            }
-            save_res = save_journal_entry_safely(
-                journal_data,
-                db_session=db,
-                chart_of_accounts=coa_list,
+            lines = proposed_journal or []
+            outcome = BookkeepingOutcome(
+                entry_date=final_state.get("entry_date"),
+                entry_description=final_state.get("entry_description"),
+                journal_lines=lines,
+                total_debit=float(
+                    final_state.get("total_debit")
+                    or sum(float(line.get("debit_amount", 0.0)) for line in lines)
+                ),
+                total_credit=float(
+                    final_state.get("total_credit")
+                    or sum(float(line.get("credit_amount", 0.0)) for line in lines)
+                ),
+                is_balanced=bool(final_state.get("is_balanced", True)),
+                uses_sensitive_account=bool(
+                    final_state.get("uses_sensitive_account", False)
+                ),
+                risk_flags=final_risk_flags,
+                confidence_score=final_confidence,
+                rationale=final_rationale,
+                warnings=final_state.get("warnings", []) or [],
+                status=bookkeeping_status,
+                needs_review=needs_review,
             )
-            if save_res.success:
-                saved_journal_id = save_res.journal_entry_id
+            bookkeeping_persistence = persist_bookkeeping_outcome(
+                db=db,
+                document=doc,
+                extraction=extraction,
+                outcome=outcome,
+            )
+            if bookkeeping_persistence.success:
+                saved_journal_id = (
+                    str(bookkeeping_persistence.journal_entry_id)
+                    if bookkeeping_persistence.journal_entry_id
+                    else None
+                )
+                final_status = bookkeeping_persistence.status
             else:
-                save_errors = save_res.errors
+                save_errors = bookkeeping_persistence.errors
+                final_status = "failed"
+                needs_review = False
 
-        # 3. Handle Human-in-the-Loop Review Queue (idempotent check)
-        review_item_created = False
+        # 3. Extraction review remains wrapper-specific. Bookkeeping review is
+        # created and deduplicated by persist_bookkeeping_outcome().
+        review_item_created = bool(
+            bookkeeping_persistence and bookkeeping_persistence.review_item_created
+        )
+        review_item_queued = bool(
+            bookkeeping_persistence and bookkeeping_persistence.review_item_id
+        )
+        flags_str = ", ".join(final_risk_flags) if final_risk_flags else "None"
 
-        if (
-            needs_review
-            or final_status
-            in (
-                "extraction_review_required",
-                "bookkeeping_review_required",
-            )
-            or final_risk_flags
-        ):
-            review_type = (
-                "extraction"
-                if final_status == "extraction_review_required"
-                else "bookkeeping"
-            )
+        if final_status == "extraction_review_required":
             is_balanced = final_state.get("is_balanced", True)
             is_sensitive = "uses_sensitive_account" in final_risk_flags
             priority = "high" if is_sensitive or not is_balanced else "normal"
-
-            flags_str = ", ".join(final_risk_flags) if final_risk_flags else "None"
             review_summary = (
                 f"Agent flagged document. Conf: {final_confidence:.2f}, "
                 f"Flags: {flags_str}"
             )
-
-            if review_type == "bookkeeping" and saved_journal_id:
-                review_payload: dict = {
-                    "journal_entry_id": str(saved_journal_id),
-                    "vendor_name": final_state.get("vendor_name"),
-                    "transaction_date": str(final_state.get("transaction_date") or ""),
-                    "total_amount": final_state.get("total_amount"),
-                    "subtotal_amount": final_state.get("subtotal_amount"),
-                    "tax_amount": final_state.get("tax_amount"),
-                    "currency": final_state.get("currency", "IDR"),
-                    "line_items": final_state.get("line_items", []),
-                    "lines": proposed_journal,
-                    "entry_date": str(journal_entry_date),
-                    "description": journal_desc,
-                    "rationale": final_rationale,
-                    "risk_flags": final_risk_flags,
-                    "confidence_score": final_confidence,
-                    "is_balanced": final_state.get("is_balanced", True),
-                    "uses_sensitive_account": final_state.get(
-                        "uses_sensitive_account", False
-                    ),
-                }
-                review_source_type = "journal_entry"
-                review_source_id = (
-                    uuid.UUID(saved_journal_id)
-                    if isinstance(saved_journal_id, str)
-                    else saved_journal_id
-                )
-            else:
-                review_payload = {
-                    "vendor_name": final_state.get("vendor_name"),
-                    "transaction_date": str(final_state.get("transaction_date") or ""),
-                    "total_amount": final_state.get("total_amount"),
-                    "subtotal_amount": final_state.get("subtotal_amount"),
-                    "tax_amount": final_state.get("tax_amount"),
-                    "currency": final_state.get("currency", "IDR"),
-                    "line_items": final_state.get("line_items", []),
-                    "raw_text": final_state.get("raw_text"),
-                    "extraction_notes": final_state.get("extraction_notes"),
-                    "rationale": final_rationale,
-                    "risk_flags": final_risk_flags,
-                    "confidence_score": final_confidence,
-                }
-                review_source_type = "document"
-                review_source_id = doc.id
+            review_payload = {
+                "vendor_name": final_state.get("vendor_name"),
+                "transaction_date": str(final_state.get("transaction_date") or ""),
+                "total_amount": final_state.get("total_amount"),
+                "subtotal_amount": final_state.get("subtotal_amount"),
+                "tax_amount": final_state.get("tax_amount"),
+                "currency": final_state.get("currency", "IDR"),
+                "line_items": final_state.get("line_items", []),
+                "raw_text": final_state.get("raw_text"),
+                "extraction_notes": final_state.get("extraction_notes"),
+                "rationale": final_rationale,
+                "risk_flags": final_risk_flags,
+                "confidence_score": final_confidence,
+            }
 
             existing_review = (
                 db.query(ReviewItem)
                 .filter(
-                    ReviewItem.source_type == review_source_type,
-                    ReviewItem.source_id == review_source_id,
+                    ReviewItem.source_type == "document",
+                    ReviewItem.source_id == doc.id,
                     ReviewItem.status == "pending",
                 )
                 .first()
@@ -478,25 +455,21 @@ def stream_document_processing(
             if not existing_review:
                 review_item = ReviewItem(
                     id=uuid.uuid4(),
-                    review_type=review_type,
+                    review_type="extraction",
                     status="pending",
                     priority=priority,
-                    source_type=review_source_type,
-                    source_id=review_source_id,
+                    source_type="document",
+                    source_id=doc.id,
                     title=f"Review Needed: {fname}",
                     summary=review_summary,
                     suggested_action=(
                         "Review and correct the extracted data before bookkeeping."
-                        if review_type == "extraction"
-                        else (
-                            "Review the AI-generated journal entry account "
-                            "classification."
-                        )
                     ),
                     original_payload=review_payload,
                 )
                 db.add(review_item)
-            review_item_created = True
+                review_item_created = True
+            review_item_queued = True
 
             yield _sse_event(
                 {
@@ -508,7 +481,26 @@ def stream_document_processing(
                     ),
                 }
             )
-        else:
+        elif review_item_queued:
+            priority = (
+                "high"
+                if (
+                    final_state.get("uses_sensitive_account", False)
+                    or not final_state.get("is_balanced", True)
+                )
+                else "normal"
+            )
+            yield _sse_event(
+                {
+                    "stage": "review_queued",
+                    "percentage": 95,
+                    "message": (
+                        f"⚠️ Routed to Human Review Queue ({priority} priority). "
+                        f"Flags: {flags_str}"
+                    ),
+                }
+            )
+        elif saved_journal_id:
             je_ref = str(saved_journal_id)[:8] if saved_journal_id else "JE"
             yield _sse_event(
                 {
@@ -522,7 +514,6 @@ def stream_document_processing(
         extracted_document_type = final_state.get("document_type")
         if extracted_document_type in ("invoice", "receipt"):
             doc.document_type = extracted_document_type
-        db.commit()
 
         # 4. Audit Trail Event: extraction_completed (idempotent)
         existing_audit = (
@@ -562,15 +553,8 @@ def stream_document_processing(
                 rationale=final_rationale,
                 document_id=doc.id,
             )
-            db.commit()
 
         # 5. Audit Trail Event: bookkeeping_completed (if bookkeeping was executed)
-        bookkeeping_attempted = (
-            "bookkeeping" in final_state
-            or proposed_journal is not None
-            or bool(save_errors)
-            or final_status in ("ready_to_post", "bookkeeping_review_required")
-        )
         if bookkeeping_attempted:
             if saved_journal_id:
                 je_uuid = (
@@ -587,23 +571,6 @@ def stream_document_processing(
                     .first()
                 )
                 if not existing_bk_audit:
-                    decision_str = "Bookkeeping classified"
-                    if proposed_journal and isinstance(proposed_journal, list):
-                        debit_lines = [
-                            f"COA: {line.get('account_code')} - "
-                            f"{line.get('account_name', '')}".strip(" -")
-                            for line in proposed_journal
-                            if float(line.get("debit_amount", 0.0) or 0.0) > 0
-                        ]
-                        if debit_lines:
-                            decision_str = debit_lines[0]
-
-                    reasoning_list = []
-                    if final_rationale:
-                        reasoning_list.append(final_rationale)
-                    for rf in final_risk_flags:
-                        reasoning_list.append(f"Risk flag: {rf}")
-
                     log_event(
                         db=db,
                         event_type="bookkeeping_completed",
@@ -616,8 +583,8 @@ def stream_document_processing(
                             "extraction_id": str(extraction.id),
                         },
                         output_snapshot={
-                            "decision": decision_str,
-                            "reasoning": reasoning_list,
+                            "decision": bookkeeping_persistence.decision,
+                            "reasoning": bookkeeping_persistence.reasoning,
                             "journal_entry_id": str(saved_journal_id),
                             "status": "review_required" if needs_review else "draft",
                             "is_balanced": final_state.get("is_balanced", True),
@@ -626,7 +593,6 @@ def stream_document_processing(
                         rationale=final_rationale,
                         document_id=doc.id,
                     )
-                    db.commit()
             else:
                 # Failure case: bookkeeping ran but saving failed.
                 existing_bk_fail_audit = (
@@ -674,7 +640,10 @@ def stream_document_processing(
                         or "Bookkeeping classification failed validation.",
                         document_id=doc.id,
                     )
-                    db.commit()
+
+        # The extraction, journal, review item, document status, and wrapper-specific
+        # audit events become durable together.
+        db.commit()
 
         yield _sse_event(
             {

@@ -551,6 +551,7 @@ def save_journal_entry_safely(
     db_session: Any | None = None,
     chart_of_accounts: Sequence[Any] | None = None,
     raise_on_error: bool = False,
+    existing_entry: Any | None = None,
 ) -> SaveJournalEntryResult:
     """Validate and safely persist a journal entry to DB with strict guardrails.
 
@@ -566,6 +567,7 @@ def save_journal_entry_safely(
         db_session: Optional SQLAlchemy Session for persistence.
         chart_of_accounts: Optional sequence of COA entries for sensitive check.
         raise_on_error: If True, raise `UnbalancedJournalEntryError` on fail.
+        existing_entry: Optional draft/review JournalEntry to update in-place.
 
     Returns:
         SaveJournalEntryResult with validation breakdown and save status.
@@ -581,6 +583,7 @@ def save_journal_entry_safely(
         conf_score = journal_data.get("confidence_score", 1.0)
         rationale = journal_data.get("rationale")
         existing_flags = journal_data.get("risk_flags") or []
+        source_type = journal_data.get("source_type", "document")
     else:
         lines = getattr(journal_data, "lines", [])
         raw_status = getattr(journal_data, "status", "draft")
@@ -592,6 +595,7 @@ def save_journal_entry_safely(
         conf_score = getattr(journal_data, "confidence_score", 1.0)
         rationale = getattr(journal_data, "rationale", None)
         existing_flags = getattr(journal_data, "risk_flags", []) or []
+        source_type = getattr(journal_data, "source_type", "document")
 
     # 1. Double-Entry Validation Guardrail
     val_res = validate_double_entry(lines)
@@ -677,67 +681,72 @@ def save_journal_entry_safely(
                 ],
             )
 
-        new_entry = JournalEntry(
-            document_id=doc_id,
-            extraction_id=ext_id,
-            entry_date=entry_date,
-            description=description,
-            status=final_status,
-            agent_name=agent_name,
-            confidence_score=conf_score,
-            rationale=rationale,
-            risk_flags=merged_risk_flags,
-        )
-
-        for line_idx, line in enumerate(lines, start=1):
-            if isinstance(line, dict):
-                ac_code = str(line.get("account_code", ""))
-                deb = float(line.get("debit_amount", 0.0))
-                cred = float(line.get("credit_amount", 0.0))
-                l_desc = line.get("description")
-            else:
-                ac_code = str(getattr(line, "account_code", ""))
-                deb = float(getattr(line, "debit_amount", 0.0))
-                cred = float(getattr(line, "credit_amount", 0.0))
-                l_desc = getattr(line, "description", None)
-
+        resolved_coa = {}
+        for account_code in referenced_account_codes:
             coa_record = (
                 db_session.query(ChartOfAccount)
-                .filter(ChartOfAccount.account_code == ac_code)
+                .filter(ChartOfAccount.account_code == account_code)
                 .first()
             )
             if not coa_record:
                 logger.error(
                     "Active COA validation passed but account %s could not be loaded",
-                    ac_code,
+                    account_code,
                 )
-                db_session.rollback()
                 return SaveJournalEntryResult(
                     success=False,
                     journal_entry_id=None,
                     status="failed",
                     validation_result=val_res,
                     sensitive_check_result=sens_res,
-                    errors=[f"Chart of Accounts record not found for {ac_code}."],
+                    errors=[f"Chart of Accounts record not found for {account_code}."],
                 )
-
-            orm_line = JournalEntryLine(
-                line_number=line_idx,
-                account_id=coa_record.id,
-                debit_amount=deb,
-                credit_amount=cred,
-                description=l_desc,
-            )
-            new_entry.lines.append(orm_line)
+            resolved_coa[account_code] = coa_record
 
         try:
-            db_session.add(new_entry)
-            db_session.commit()
-            db_session.refresh(new_entry)
-            created_id = str(new_entry.id)
+            with db_session.begin_nested():
+                journal_entry = existing_entry or JournalEntry()
+                journal_entry.document_id = doc_id
+                journal_entry.extraction_id = ext_id
+                journal_entry.entry_date = entry_date
+                journal_entry.description = description
+                journal_entry.status = final_status
+                journal_entry.source_type = source_type
+                journal_entry.agent_name = agent_name
+                journal_entry.confidence_score = conf_score
+                journal_entry.rationale = rationale
+                journal_entry.risk_flags = merged_risk_flags
+
+                if existing_entry is not None:
+                    journal_entry.lines.clear()
+                    db_session.flush()
+
+                for line_idx, line in enumerate(lines, start=1):
+                    if isinstance(line, dict):
+                        ac_code = str(line.get("account_code", ""))
+                        deb = float(line.get("debit_amount", 0.0))
+                        cred = float(line.get("credit_amount", 0.0))
+                        l_desc = line.get("description")
+                    else:
+                        ac_code = str(getattr(line, "account_code", ""))
+                        deb = float(getattr(line, "debit_amount", 0.0))
+                        cred = float(getattr(line, "credit_amount", 0.0))
+                        l_desc = getattr(line, "description", None)
+
+                    orm_line = JournalEntryLine(
+                        line_number=line_idx,
+                        account_id=resolved_coa[ac_code].id,
+                        debit_amount=deb,
+                        credit_amount=cred,
+                        description=l_desc,
+                    )
+                    journal_entry.lines.append(orm_line)
+
+                db_session.add(journal_entry)
+                db_session.flush()
+            created_id = str(journal_entry.id)
         except Exception as e:
             logger.error("Database error saving journal entry: %s", str(e))
-            db_session.rollback()
             return SaveJournalEntryResult(
                 success=False,
                 journal_entry_id=None,

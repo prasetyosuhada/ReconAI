@@ -4,7 +4,7 @@ These models define the strict JSON schemas enforced when invoking Gemini/OpenAI
 structured output LLM calls across Document Intake, Bookkeeping, and Reconciliation.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -146,6 +146,24 @@ class BookkeepingResponse(BaseModel):
         default_factory=list, description="Classification warnings or risk notes"
     )
     result: BookkeepingResult = Field(..., description="Proposed journal entry payload")
+
+
+class BookkeepingOutcome(BaseModel):
+    """Normalized deterministic outcome of one bookkeeping classification step."""
+
+    entry_date: str | None = None
+    entry_description: str | None = None
+    journal_lines: list[dict[str, Any]] = Field(default_factory=list)
+    total_debit: float = 0.0
+    total_credit: float = 0.0
+    is_balanced: bool = False
+    uses_sensitive_account: bool = False
+    risk_flags: list[str] = Field(default_factory=list)
+    confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    rationale: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    status: Literal["ready_to_post", "bookkeeping_review_required", "failed"]
+    needs_review: bool = False
 
 
 # ==========================================

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.agents.orchestrator import bookkeeping_node
+from app.agents.bookkeeping import classify_bookkeeping
 from app.db.session import get_db
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
@@ -27,9 +27,12 @@ from app.schemas.review import (
 )
 from app.services.accounting import (
     post_journal_entry_to_ledger,
-    save_journal_entry_safely,
 )
 from app.services.audit_service import log_event
+from app.services.bookkeeping_persistence import (
+    load_active_chart_of_accounts,
+    persist_bookkeeping_outcome,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,20 +83,7 @@ def _merge_review_payload(
 
 
 def _chart_of_accounts_payload(db: Session) -> list[dict[str, Any]]:
-    coa_records = (
-        db.query(ChartOfAccount).filter(ChartOfAccount.is_active.is_(True)).all()
-    )
-    return [
-        {
-            "account_code": coa.account_code,
-            "account_name": coa.account_name,
-            "account_type": coa.account_type,
-            "normal_balance": coa.normal_balance,
-            "is_sensitive": coa.is_sensitive,
-            "description": coa.description,
-        }
-        for coa in coa_records
-    ]
+    return load_active_chart_of_accounts(db)
 
 
 def _upsert_reviewed_extraction(
@@ -146,14 +136,8 @@ def _continue_document_to_bookkeeping(
         )
 
     extraction = _upsert_reviewed_extraction(doc, payload, resolution_note, db)
-    state = {
-        "document_id": str(doc.id),
-        "original_filename": doc.original_filename,
-        "mime_type": doc.mime_type,
-        "stored_file_path": doc.stored_file_path,
-        "raw_text": extraction.raw_text,
+    extraction_data = {
         "extraction_notes": payload.get("extraction_notes"),
-        "extraction_id": str(extraction.id),
         "vendor_name": extraction.vendor_name,
         "transaction_date": extraction.transaction_date.isoformat()
         if extraction.transaction_date
@@ -170,138 +154,22 @@ def _continue_document_to_bookkeeping(
         "currency": extraction.currency,
         "document_type": doc.document_type,
         "line_items": extraction.line_items or [],
-        "chart_of_accounts": _chart_of_accounts_payload(db),
-        "status": "extracted",
-        "needs_review": False,
-        "risk_flags": [],
     }
-
-    final_state = bookkeeping_node(state)
-    proposed_journal = (
-        final_state.get("journal_entry")
-        or final_state.get("proposed_journal")
-        or final_state.get("journal_lines")
+    outcome = classify_bookkeeping(
+        extraction_data=extraction_data,
+        chart_of_accounts=_chart_of_accounts_payload(db),
     )
-
-    # Pin AI output fields once — both JournalEntry and ReviewItem MUST reference
-    # the exact same values across the GL and Review Queue modals.
-    final_rationale: str | None = final_state.get("rationale")
-    final_risk_flags: list[str] = final_state.get("risk_flags", []) or []
-    final_confidence: float = float(final_state.get("confidence_score", 0.0))
-
-    saved_journal_id = None
-    journal_entry_date = (
-        _parse_date_value(final_state.get("entry_date"))
-        or extraction.transaction_date
-        or date.today()
+    persistence = persist_bookkeeping_outcome(
+        db=db,
+        document=doc,
+        extraction=extraction,
+        outcome=outcome,
     )
-    journal_desc = (
-        final_state.get("entry_description") or f"Journal for {doc.original_filename}"
-    )
-
-    if proposed_journal:
-        journal_data = {
-            "document_id": doc.id,
-            "extraction_id": extraction.id,
-            "entry_date": journal_entry_date,
-            "description": journal_desc,
-            "status": "review_required" if final_state.get("needs_review") else "draft",
-            "agent_name": "BookkeepingAgent",
-            "confidence_score": final_confidence,
-            "rationale": final_rationale,
-            "risk_flags": final_risk_flags,
-            "lines": proposed_journal,
-        }
-        save_res = save_journal_entry_safely(
-            journal_data,
-            db_session=db,
-            chart_of_accounts=_chart_of_accounts_payload(db),
+    if not persistence.success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Journal save failed: {'; '.join(persistence.errors)}",
         )
-        if not save_res.success:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Journal save failed: {'; '.join(save_res.errors)}",
-            )
-        saved_journal_id = save_res.journal_entry_id
-
-    needs_review = final_state.get("needs_review", False)
-    next_status = final_state.get("status", "ready_to_post")
-
-    if needs_review or next_status == "bookkeeping_review_required" or final_risk_flags:
-        is_balanced = final_state.get("is_balanced", True)
-        is_sensitive = "uses_sensitive_account" in final_risk_flags
-        priority = "high" if is_sensitive or not is_balanced else "normal"
-
-        # Lean, pinned payload — mirrors what is stored in the JournalEntry.
-        review_payload: dict = {
-            "journal_entry_id": str(saved_journal_id) if saved_journal_id else None,
-            "vendor_name": extraction.vendor_name,
-            "transaction_date": str(extraction.transaction_date or ""),
-            "total_amount": float(extraction.total_amount)
-            if extraction.total_amount is not None
-            else None,
-            "subtotal_amount": float(extraction.subtotal_amount)
-            if extraction.subtotal_amount is not None
-            else None,
-            "tax_amount": float(extraction.tax_amount)
-            if extraction.tax_amount is not None
-            else None,
-            "currency": extraction.currency,
-            "line_items": extraction.line_items or [],
-            "lines": proposed_journal,
-            "entry_date": str(journal_entry_date),
-            "description": journal_desc,
-            # AI fields pinned from the same single agent run:
-            "rationale": final_rationale,
-            "risk_flags": final_risk_flags,
-            "confidence_score": final_confidence,
-            "is_balanced": is_balanced,
-            "uses_sensitive_account": final_state.get("uses_sensitive_account", False),
-        }
-
-        source_id_val = (
-            uuid.UUID(saved_journal_id)
-            if isinstance(saved_journal_id, str)
-            else (saved_journal_id if saved_journal_id else doc.id)
-        )
-        review_item = ReviewItem(
-            id=uuid.uuid4(),
-            review_type="bookkeeping",
-            status="pending",
-            priority=priority,
-            source_type="journal_entry" if saved_journal_id else "document",
-            source_id=source_id_val,
-            title=f"Review Needed: {doc.original_filename}",
-            summary=(
-                "Bookkeeping agent flagged reviewed extraction. "
-                f"Conf: {final_confidence:.2f}"
-            ),
-            suggested_action=(
-                "Review the AI-generated journal entry account classification."
-            ),
-            original_payload=review_payload,
-        )
-        db.add(review_item)
-
-    doc.status = next_status
-
-    decision_str = "Bookkeeping classified"
-    if proposed_journal and isinstance(proposed_journal, list):
-        debit_lines = [
-            f"COA: {line.get('account_code')} - {line.get('account_name', '')}".strip(
-                " -"
-            )
-            for line in proposed_journal
-            if float(line.get("debit_amount", 0.0) or 0.0) > 0
-        ]
-        if debit_lines:
-            decision_str = debit_lines[0]
-
-    reasoning_list = []
-    if final_rationale:
-        reasoning_list.append(final_rationale)
-    for rf in final_risk_flags:
-        reasoning_list.append(f"Risk flag: {rf}")
 
     log_event(
         db=db,
@@ -312,17 +180,19 @@ def _continue_document_to_bookkeeping(
         actor_name="BookkeepingAgent",
         input_snapshot={"review_item_id": str(item.id)},
         output_snapshot={
-            "decision": decision_str,
-            "reasoning": reasoning_list,
-            "status": next_status,
-            "journal_entry_id": str(saved_journal_id) if saved_journal_id else None,
-            "needs_review": needs_review,
+            "decision": persistence.decision,
+            "reasoning": persistence.reasoning,
+            "status": persistence.status,
+            "journal_entry_id": str(persistence.journal_entry_id)
+            if persistence.journal_entry_id
+            else None,
+            "needs_review": outcome.needs_review,
         },
-        confidence_score=final_confidence,
-        rationale=final_rationale,
+        confidence_score=outcome.confidence_score,
+        rationale=outcome.rationale,
         document_id=doc.id,
     )
-    return next_status
+    return persistence.status
 
 
 @router.get(

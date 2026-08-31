@@ -2,6 +2,8 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
+from app.agents.schemas import BookkeepingOutcome
+from app.api.v1.review_items import _continue_document_to_bookkeeping
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
@@ -296,9 +298,9 @@ def test_edit_review_item_success(client, db_session):
     assert posted_audit.output_snapshot["document_id"] == str(doc_id)
 
 
-@patch("app.api.v1.review_items.bookkeeping_node")
+@patch("app.api.v1.review_items.classify_bookkeeping")
 def test_edit_extraction_review_continues_to_bookkeeping(
-    mock_bookkeeping_node, client, db_session
+    mock_classify_bookkeeping, client, db_session
 ):
     doc_id = uuid.uuid4()
     doc = Document(
@@ -352,13 +354,10 @@ def test_edit_extraction_review_continues_to_bookkeeping(
     )
     db_session.commit()
 
-    mock_bookkeeping_node.return_value = {
-        "document_id": str(doc_id),
-        "vendor_name": "PT Blur",
-        "transaction_date": "2026-08-01",
-        "entry_date": "2026-08-01",
-        "entry_description": "Purchase from PT Blur",
-        "journal_lines": [
+    mock_classify_bookkeeping.return_value = BookkeepingOutcome(
+        entry_date="2026-08-01",
+        entry_description="Purchase from PT Blur",
+        journal_lines=[
             {
                 "account_code": "5100",
                 "account_name": "Supplies Expense",
@@ -372,13 +371,15 @@ def test_edit_extraction_review_continues_to_bookkeeping(
                 "credit_amount": 111000.0,
             },
         ],
-        "is_balanced": True,
-        "risk_flags": [],
-        "confidence_score": 0.91,
-        "rationale": "Human-reviewed extraction is bookkept.",
-        "status": "ready_to_post",
-        "needs_review": False,
-    }
+        total_debit=111000.0,
+        total_credit=111000.0,
+        is_balanced=True,
+        risk_flags=[],
+        confidence_score=0.91,
+        rationale="Human-reviewed extraction is bookkept.",
+        status="ready_to_post",
+        needs_review=False,
+    )
 
     response = client.post(
         f"/api/v1/review-items/{item_id}/edit",
@@ -412,8 +413,115 @@ def test_edit_extraction_review_continues_to_bookkeeping(
 
     db_session.refresh(doc)
     assert doc.status == "ready_to_post"
-    called_state = mock_bookkeeping_node.call_args.args[0]
-    assert called_state["tax_amount"] == 11000.0
+    called_extraction = mock_classify_bookkeeping.call_args.kwargs["extraction_data"]
+    assert called_extraction["tax_amount"] == 11000.0
+
+
+@patch("app.api.v1.review_items.classify_bookkeeping")
+def test_extraction_review_continuation_retry_is_idempotent(
+    mock_classify_bookkeeping, db_session
+):
+    doc = Document(
+        id=uuid.uuid4(),
+        original_filename="retry_invoice.pdf",
+        stored_file_path="/tmp/retry_invoice.pdf",
+        mime_type="application/pdf",
+        file_size_bytes=100,
+        document_type="invoice",
+        status="extraction_review_required",
+    )
+    extraction_review = ReviewItem(
+        id=uuid.uuid4(),
+        review_type="extraction",
+        status="pending",
+        priority="normal",
+        source_type="document",
+        source_id=doc.id,
+        title="Review retry extraction",
+    )
+    db_session.add_all(
+        [
+            doc,
+            extraction_review,
+            ChartOfAccount(
+                account_code="5100",
+                account_name="Supplies Expense",
+                account_type="expense",
+                normal_balance="debit",
+                is_active=True,
+            ),
+            ChartOfAccount(
+                account_code="2000",
+                account_name="Accounts Payable",
+                account_type="liability",
+                normal_balance="credit",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    mock_classify_bookkeeping.return_value = BookkeepingOutcome(
+        entry_date="2026-08-01",
+        entry_description="Retry-safe purchase",
+        journal_lines=[
+            {
+                "account_code": "5100",
+                "account_name": "Supplies Expense",
+                "debit_amount": 111000.0,
+                "credit_amount": 0.0,
+            },
+            {
+                "account_code": "2000",
+                "account_name": "Accounts Payable",
+                "debit_amount": 0.0,
+                "credit_amount": 111000.0,
+            },
+        ],
+        total_debit=111000.0,
+        total_credit=111000.0,
+        is_balanced=True,
+        risk_flags=["low_confidence_classification"],
+        confidence_score=0.75,
+        rationale="Needs a bookkeeping review.",
+        status="bookkeeping_review_required",
+        needs_review=True,
+    )
+    payload = {
+        "document_type": "invoice",
+        "vendor_name": "PT Retry",
+        "transaction_date": "2026-08-01",
+        "subtotal_amount": 100000.0,
+        "tax_amount": 11000.0,
+        "total_amount": 111000.0,
+        "currency": "IDR",
+        "line_items": [],
+    }
+
+    for _ in range(2):
+        next_status = _continue_document_to_bookkeeping(
+            item=extraction_review,
+            payload=payload,
+            resolution_note="Approved extraction retry.",
+            db=db_session,
+        )
+        assert next_status == "bookkeeping_review_required"
+        db_session.commit()
+
+    journals = (
+        db_session.query(JournalEntry).filter(JournalEntry.document_id == doc.id).all()
+    )
+    bookkeeping_reviews = (
+        db_session.query(ReviewItem)
+        .filter(
+            ReviewItem.review_type == "bookkeeping",
+            ReviewItem.status == "pending",
+        )
+        .all()
+    )
+    assert len(journals) == 1
+    assert len(bookkeeping_reviews) == 1
+    assert bookkeeping_reviews[0].source_id == journals[0].id
 
 
 def test_reject_review_item_success(client, db_session):

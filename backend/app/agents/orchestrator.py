@@ -10,11 +10,13 @@ from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agents.bookkeeping import run_bookkeeping_agent
+from app.agents.bookkeeping import (
+    classify_bookkeeping,
+    route_after_bookkeeping,
+)
 from app.agents.document_intake import run_document_intake_agent
 from app.agents.reconciliation import run_reconciliation_agent
 from app.agents.state import (
-    BookkeepingState,
     DocumentIntakeState,
     DocumentProcessingState,
     ReconciliationState,
@@ -24,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 # Threshold definitions according to ReconAI PRD & System Architecture
 CONFIDENCE_THRESHOLD_INTAKE = 0.85
-CONFIDENCE_THRESHOLD_BOOKKEEPING = 0.85
 CONFIDENCE_THRESHOLD_RECONCILIATION = 0.90
 
 
@@ -69,47 +70,6 @@ def route_after_extraction(
         return "extraction_review_required"
 
     return "proceed_to_bookkeeping"
-
-
-def route_after_bookkeeping(
-    state: BookkeepingState,
-) -> Literal["ready_to_post", "bookkeeping_review_required", "failed"]:
-    """Determine next workflow step after Bookkeeping Agent execution.
-
-    Rules:
-    - If status == 'failed' -> 'failed'
-    - If confidence < 0.85, sensitive account used, unbalanced entry,
-      needs_review == True, or risk_flags present -> 'bookkeeping_review_required'
-    - Else -> 'ready_to_post'
-    """
-    status = state.get("status")
-    confidence = state.get("confidence_score", 0.0)
-    uses_sensitive = state.get("uses_sensitive_account", False)
-    is_balanced = state.get("is_balanced", True)
-    needs_review = state.get("needs_review", False)
-    risk_flags = state.get("risk_flags", [])
-
-    if status == "failed":
-        return "failed"
-
-    if (
-        confidence < CONFIDENCE_THRESHOLD_BOOKKEEPING
-        or uses_sensitive
-        or not is_balanced
-        or needs_review
-        or status == "bookkeeping_review_required"
-        or bool(risk_flags)
-    ):
-        logger.info(
-            "Bookkeeping requires review: conf=%.2f, sens=%s, bal=%s, risk=%s",
-            confidence,
-            uses_sensitive,
-            is_balanced,
-            risk_flags,
-        )
-        return "bookkeeping_review_required"
-
-    return "ready_to_post"
 
 
 def route_after_reconciliation(
@@ -217,49 +177,27 @@ def bookkeeping_node(state: DocumentProcessingState) -> DocumentProcessingState:
 
     coa_list = state.get("chart_of_accounts", [])
 
-    response = run_bookkeeping_agent(
+    outcome = classify_bookkeeping(
         extraction_data=extraction_data,
         chart_of_accounts=coa_list,
     )
 
-    result = response.result
-    next_step = route_after_bookkeeping(
-        {
-            "status": response.status,
-            "confidence_score": response.confidence_score,
-            "uses_sensitive_account": result.uses_sensitive_account,
-            "is_balanced": result.is_balanced,
-            "needs_review": response.status == "needs_review",
-            "risk_flags": result.risk_flags,
-        }
-    )
-
-    new_status = (
-        "bookkeeping_review_required"
-        if next_step == "bookkeeping_review_required"
-        else ("ready_to_post" if next_step == "ready_to_post" else "failed")
-    )
-
-    journal_lines = [jl.model_dump() for jl in result.journal_lines]
-    total_debit = sum(line["debit_amount"] for line in journal_lines)
-    total_credit = sum(line["credit_amount"] for line in journal_lines)
-
     return {
         **state,
-        "entry_date": result.entry_date,
-        "entry_description": result.description,
-        "journal_lines": journal_lines,
-        "proposed_journal": journal_lines,
-        "total_debit": total_debit,
-        "total_credit": total_credit,
-        "is_balanced": result.is_balanced,
-        "uses_sensitive_account": result.uses_sensitive_account,
-        "risk_flags": result.risk_flags,
-        "confidence_score": response.confidence_score,
-        "rationale": response.rationale,
-        "warnings": response.warnings,
-        "status": new_status,
-        "needs_review": next_step == "bookkeeping_review_required",
+        "entry_date": outcome.entry_date,
+        "entry_description": outcome.entry_description,
+        "journal_lines": outcome.journal_lines,
+        "proposed_journal": outcome.journal_lines,
+        "total_debit": outcome.total_debit,
+        "total_credit": outcome.total_credit,
+        "is_balanced": outcome.is_balanced,
+        "uses_sensitive_account": outcome.uses_sensitive_account,
+        "risk_flags": outcome.risk_flags,
+        "confidence_score": outcome.confidence_score,
+        "rationale": outcome.rationale,
+        "warnings": outcome.warnings,
+        "status": outcome.status,
+        "needs_review": outcome.needs_review,
     }
 
 
