@@ -80,22 +80,28 @@ const accountTypeLabel = (type?: string) => {
   return map[type?.toLowerCase() || ''] || type || 'Account'
 }
 
-const roleLabel = (line: BookkeepingLine, index: number): string => {
-  const desc = line.description?.toLowerCase() || ''
-  if (desc.includes('expense') || desc.includes('cost') || desc.includes('supplies')) {
-    return 'Expense Account'
-  }
-  if (desc.includes('vat') || desc.includes('tax') || desc.includes('ppn')) {
-    return 'Tax Account'
-  }
-  if (desc.includes('bank') || desc.includes('cash') || desc.includes('payment')) {
+const TAX_ACCOUNT_CODES = new Set(['1400', '2100'])
+const CASH_BANK_ACCOUNT_CODES = new Set(['1000', '1010'])
+
+const roleLabel = (line: BookkeepingLine): string => {
+  const accountCode = String(line.account_code || '').trim()
+  const accountType = line.account_type?.toLowerCase()
+  const debitAmount = Number(line.debit_amount) || 0
+  const creditAmount = Number(line.credit_amount) || 0
+
+  if (TAX_ACCOUNT_CODES.has(accountCode)) return 'Tax Account'
+  if (accountType === 'expense') return 'Expense Account'
+  if (accountCode === '2000') return 'Payable Account'
+  if (accountType === 'liability') return 'Liability Account'
+  if (CASH_BANK_ACCOUNT_CODES.has(accountCode) && creditAmount > 0) {
     return 'Payment Account'
   }
-  if (line.debit_amount > 0 && line.credit_amount === 0) {
-    return index === 0 ? 'Expense Account' : 'Debit Account'
-  }
-  if (line.credit_amount > 0 && line.debit_amount === 0) return 'Payment Account'
-  return `Account ${index + 1}`
+  if (accountType === 'revenue') return 'Revenue Account'
+  if (accountType === 'equity') return 'Equity Account'
+  if (accountType === 'asset') return 'Asset Account'
+  if (debitAmount > 0 && creditAmount === 0) return 'Debit Account'
+  if (creditAmount > 0 && debitAmount === 0) return 'Credit Account'
+  return 'Account'
 }
 
 export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = ({
@@ -128,8 +134,31 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
       })
   }, [])
 
-  const totalDebits = lines.reduce((sum, line) => sum + (Number(line.debit_amount) || 0), 0)
-  const totalCredits = lines.reduce((sum, line) => sum + (Number(line.credit_amount) || 0), 0)
+  const coaByCode = React.useMemo(
+    () => new Map(dbCOA.map((account) => [account.account_code, account])),
+    [dbCOA]
+  )
+  const resolvedLines = React.useMemo(
+    () =>
+      lines.map((line) => {
+        const coa = coaByCode.get(String(line.account_code || '').trim())
+        if (!coa) return line
+
+        return {
+          ...line,
+          account_name: coa.account_name,
+          account_type: coa.account_type,
+          is_sensitive: coa.is_sensitive,
+        }
+      }),
+    [coaByCode, lines]
+  )
+
+  const totalDebits = resolvedLines.reduce((sum, line) => sum + (Number(line.debit_amount) || 0), 0)
+  const totalCredits = resolvedLines.reduce(
+    (sum, line) => sum + (Number(line.credit_amount) || 0),
+    0
+  )
   const balanceDiff = Math.abs(totalDebits - totalCredits)
   const isBalanced = balanceDiff < 0.01
 
@@ -227,9 +256,9 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
             </div>
           </div>
 
-          {lines.length > 0 ? (
+          {resolvedLines.length > 0 ? (
             <div className="space-y-3">
-              {lines.map((line, index) => {
+              {resolvedLines.map((line, index) => {
                 const rawConf = line.confidence ?? line.confidence_score ?? confidenceScore / 100
                 const pct = rawConf <= 1 ? Math.round(rawConf * 100) : Math.round(rawConf)
                 return (
@@ -240,7 +269,7 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-0.5">
-                          {roleLabel(line, index)}
+                          {roleLabel(line)}
                         </p>
                         <p className="text-sm font-bold text-white leading-snug truncate">
                           {line.account_name || 'Unknown Account'}
@@ -391,7 +420,7 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/80">
-              {lines.map((line, index) => (
+              {resolvedLines.map((line, index) => (
                 <tr
                   key={`${line.id || line.account_code}-${index}`}
                   className="hover:bg-slate-900/60 transition-colors"
