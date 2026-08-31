@@ -209,6 +209,15 @@ def stream_document_processing(
         }
 
         final_state: dict[str, Any] = dict(initial_state)
+        intake_confidence = 0.0
+        intake_rationale: str | None = None
+        intake_status = "failed"
+        intake_needs_review = False
+        bookkeeping_confidence = 0.0
+        bookkeeping_rationale: str | None = None
+        bookkeeping_status: str | None = None
+        bookkeeping_needs_review = False
+        bookkeeping_seen = False
 
         for step_output in document_processing_graph.stream(initial_state):
             logger.debug(
@@ -221,8 +230,25 @@ def stream_document_processing(
                 vendor = intake_data.get("vendor_name") or "Unknown Vendor"
                 tot_amount = intake_data.get("total_amount")
                 curr = intake_data.get("currency", "IDR")
-                conf = float(intake_data.get("confidence_score", 0.0))
-                needs_rev = intake_data.get("needs_review", False)
+                intake_confidence = float(
+                    intake_data.get(
+                        "intake_confidence_score",
+                        intake_data.get("confidence_score", 0.0),
+                    )
+                )
+                print("CONFICENCE SCORE INTAKE AGENT:", intake_confidence)
+                intake_rationale = intake_data.get(
+                    "intake_rationale", intake_data.get("rationale")
+                )
+                intake_status = intake_data.get(
+                    "intake_status", intake_data.get("status", "failed")
+                )
+                intake_needs_review = bool(
+                    intake_data.get(
+                        "intake_needs_review",
+                        intake_data.get("needs_review", False),
+                    )
+                )
 
                 yield _sse_event(
                     {
@@ -231,16 +257,16 @@ def stream_document_processing(
                         "vendor_name": vendor,
                         "total_amount": tot_amount,
                         "currency": curr,
-                        "confidence_score": conf,
+                        "confidence_score": intake_confidence,
                         "message": (
                             f"✓ Document Intake Agent: Extracted {vendor} • "
                             f"{curr} {tot_amount or 0:,.0f} "
-                            f"(Confidence: {int(conf * 100)}%)"
+                            f"(Confidence: {int(intake_confidence * 100)}%)"
                         ),
                     }
                 )
 
-                if not needs_rev:
+                if not intake_needs_review:
                     yield _sse_event(
                         {
                             "stage": "bookkeeping_agent",
@@ -256,6 +282,25 @@ def stream_document_processing(
             if "bookkeeping" in step_output:
                 bookkeeping_data = step_output["bookkeeping"]
                 final_state.update(bookkeeping_data)
+                bookkeeping_seen = True
+                bookkeeping_confidence = float(
+                    bookkeeping_data.get(
+                        "bookkeeping_confidence_score",
+                        bookkeeping_data.get("confidence_score", 0.0),
+                    )
+                )
+                bookkeeping_rationale = bookkeeping_data.get(
+                    "bookkeeping_rationale", bookkeeping_data.get("rationale")
+                )
+                bookkeeping_status = bookkeeping_data.get(
+                    "bookkeeping_status", bookkeeping_data.get("status")
+                )
+                bookkeeping_needs_review = bool(
+                    bookkeeping_data.get(
+                        "bookkeeping_needs_review",
+                        bookkeeping_data.get("needs_review", False),
+                    )
+                )
                 lines = bookkeeping_data.get("journal_lines") or []
                 is_bal = bookkeeping_data.get("is_balanced", True)
                 uses_sens = bookkeeping_data.get("uses_sensitive_account", False)
@@ -291,11 +336,11 @@ def stream_document_processing(
         vendor = final_state.get("vendor_name") or "Unknown Vendor"
         tot_amount = final_state.get("total_amount")
         curr = final_state.get("currency", "IDR")
-        final_confidence = float(final_state.get("confidence_score", 0.0))
         final_status = final_state.get("status", "extracted")
-        needs_review = final_state.get("needs_review", False)
         final_risk_flags = final_state.get("risk_flags", []) or []
-        final_rationale = final_state.get("rationale")
+        terminal_confidence = (
+            bookkeeping_confidence if bookkeeping_seen else intake_confidence
+        )
 
         provider_meta = {
             "low_confidence_fields": final_state.get("low_confidence_fields", [])
@@ -320,9 +365,9 @@ def stream_document_processing(
             extraction.line_items = final_state.get("line_items", [])
             extraction.raw_text = final_state.get("raw_text")
             extraction.provider_metadata = provider_meta
-            extraction.confidence_score = final_confidence
-            extraction.rationale = final_rationale
-            extraction.status = "extracted" if not needs_review else "draft"
+            extraction.confidence_score = intake_confidence
+            extraction.rationale = intake_rationale
+            extraction.status = "extracted" if intake_status == "extracted" else "draft"
         else:
             extraction = DocumentExtraction(
                 id=uuid.uuid4(),
@@ -336,9 +381,9 @@ def stream_document_processing(
                 line_items=final_state.get("line_items", []),
                 raw_text=final_state.get("raw_text"),
                 provider_metadata=provider_meta,
-                confidence_score=final_confidence,
-                rationale=final_rationale,
-                status="extracted" if not needs_review else "draft",
+                confidence_score=intake_confidence,
+                rationale=intake_rationale,
+                status="extracted" if intake_status == "extracted" else "draft",
             )
             db.add(extraction)
 
@@ -354,17 +399,16 @@ def stream_document_processing(
         saved_journal_id = None
         save_errors: list[str] = []
         bookkeeping_persistence = None
-        bookkeeping_attempted = proposed_journal is not None or final_status in (
-            "ready_to_post",
-            "bookkeeping_review_required",
-        )
+        bookkeeping_attempted = bookkeeping_seen
         if bookkeeping_attempted:
-            bookkeeping_status = (
-                final_status
-                if final_status
+            outcome_status = (
+                bookkeeping_status
+                if bookkeeping_status
                 in {"ready_to_post", "bookkeeping_review_required", "failed"}
                 else (
-                    "bookkeeping_review_required" if needs_review else "ready_to_post"
+                    "bookkeeping_review_required"
+                    if bookkeeping_needs_review
+                    else "ready_to_post"
                 )
             )
             lines = proposed_journal or []
@@ -385,11 +429,11 @@ def stream_document_processing(
                     final_state.get("uses_sensitive_account", False)
                 ),
                 risk_flags=final_risk_flags,
-                confidence_score=final_confidence,
-                rationale=final_rationale,
+                confidence_score=bookkeeping_confidence,
+                rationale=bookkeeping_rationale,
                 warnings=final_state.get("warnings", []) or [],
-                status=bookkeeping_status,
-                needs_review=needs_review,
+                status=outcome_status,
+                needs_review=bookkeeping_needs_review,
             )
             bookkeeping_persistence = persist_bookkeeping_outcome(
                 db=db,
@@ -407,24 +451,21 @@ def stream_document_processing(
             else:
                 save_errors = bookkeeping_persistence.errors
                 final_status = "failed"
-                needs_review = False
 
         # 3. Extraction review remains wrapper-specific. Bookkeeping review is
         # created and deduplicated by persist_bookkeeping_outcome().
-        review_item_created = bool(
-            bookkeeping_persistence and bookkeeping_persistence.review_item_created
-        )
+        extraction_review_item_created = False
         review_item_queued = bool(
             bookkeeping_persistence and bookkeeping_persistence.review_item_id
         )
         flags_str = ", ".join(final_risk_flags) if final_risk_flags else "None"
 
-        if final_status == "extraction_review_required":
+        if intake_status == "extraction_review_required":
             is_balanced = final_state.get("is_balanced", True)
             is_sensitive = "uses_sensitive_account" in final_risk_flags
             priority = "high" if is_sensitive or not is_balanced else "normal"
             review_summary = (
-                f"Agent flagged document. Conf: {final_confidence:.2f}, "
+                f"Agent flagged document. Conf: {intake_confidence:.2f}, "
                 f"Flags: {flags_str}"
             )
             review_payload = {
@@ -437,9 +478,9 @@ def stream_document_processing(
                 "line_items": final_state.get("line_items", []),
                 "raw_text": final_state.get("raw_text"),
                 "extraction_notes": final_state.get("extraction_notes"),
-                "rationale": final_rationale,
+                "rationale": intake_rationale,
                 "risk_flags": final_risk_flags,
-                "confidence_score": final_confidence,
+                "confidence_score": intake_confidence,
             }
 
             existing_review = (
@@ -468,7 +509,7 @@ def stream_document_processing(
                     original_payload=review_payload,
                 )
                 db.add(review_item)
-                review_item_created = True
+                extraction_review_item_created = True
             review_item_queued = True
 
             yield _sse_event(
@@ -537,20 +578,20 @@ def stream_document_processing(
                     "original_filename": fname,
                 },
                 output_snapshot={
-                    "status": final_status,
-                    "confidence_score": final_confidence,
-                    "needs_review": needs_review,
+                    "status": intake_status,
+                    "confidence_score": intake_confidence,
+                    "needs_review": intake_needs_review,
                     "extraction_id": str(extraction.id),
                     "journal_entry_id": (
                         str(saved_journal_id) if saved_journal_id else None
                     ),
-                    "review_item_created": review_item_created,
+                    "review_item_created": extraction_review_item_created,
                     "low_confidence_fields": final_state.get(
                         "low_confidence_fields", []
                     ),
                 },
-                confidence_score=final_confidence,
-                rationale=final_rationale,
+                confidence_score=intake_confidence,
+                rationale=intake_rationale,
                 document_id=doc.id,
             )
 
@@ -586,11 +627,15 @@ def stream_document_processing(
                             "decision": bookkeeping_persistence.decision,
                             "reasoning": bookkeeping_persistence.reasoning,
                             "journal_entry_id": str(saved_journal_id),
-                            "status": "review_required" if needs_review else "draft",
+                            "status": (
+                                "review_required"
+                                if bookkeeping_needs_review
+                                else "draft"
+                            ),
                             "is_balanced": final_state.get("is_balanced", True),
                         },
-                        confidence_score=final_confidence,
-                        rationale=final_rationale,
+                        confidence_score=bookkeeping_confidence,
+                        rationale=bookkeeping_rationale,
                         document_id=doc.id,
                     )
             else:
@@ -635,8 +680,8 @@ def stream_document_processing(
                             "status": "failed",
                             "journal_entry_id": None,
                         },
-                        confidence_score=final_confidence,
-                        rationale=final_rationale
+                        confidence_score=bookkeeping_confidence,
+                        rationale=bookkeeping_rationale
                         or "Bookkeeping classification failed validation.",
                         document_id=doc.id,
                     )
@@ -650,7 +695,7 @@ def stream_document_processing(
                 "stage": "completed",
                 "percentage": 100,
                 "status": final_status,
-                "confidence_score": final_confidence,
+                "confidence_score": terminal_confidence,
                 "vendor_name": vendor,
                 "total_amount": tot_amount,
                 "currency": curr,

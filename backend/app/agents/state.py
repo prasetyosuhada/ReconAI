@@ -128,6 +128,17 @@ class DocumentProcessingState(BookkeepingState, total=False):
     # Intake-only metadata that must remain available to bookkeeping and persistence.
     extraction_notes: str | None
 
+    # Stage-specific agent envelopes. The generic envelope fields inherited from
+    # BookkeepingState remain available for conditional routing compatibility.
+    intake_confidence_score: float
+    intake_rationale: str
+    intake_status: str
+    intake_needs_review: bool
+    bookkeeping_confidence_score: float
+    bookkeeping_rationale: str
+    bookkeeping_status: str
+    bookkeeping_needs_review: bool
+
 
 class ReconciliationState(TypedDict, total=False):
     """State schema for Reconciliation Agent & Workflow."""

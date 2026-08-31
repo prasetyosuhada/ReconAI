@@ -1,4 +1,5 @@
 import io
+import json
 import uuid
 from unittest.mock import patch
 
@@ -64,7 +65,7 @@ def test_upload_document_empty_file(client):
 
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
-def test_process_document_background_success(
+def test_process_document_background_separates_agent_metadata(
     mock_session_class, mock_graph, db_session
 ):
     mock_session_class.return_value = db_session
@@ -109,7 +110,7 @@ def test_process_document_background_success(
         "tax_amount": 11000.0,
         "total_amount": 111000.0,
         "currency": "IDR",
-        "confidence_score": 0.95,
+        "confidence_score": 0.96,
         "rationale": "High confidence extraction",
         "status": "extracted",
         "needs_review": False,
@@ -131,7 +132,11 @@ def test_process_document_background_success(
         ],
         "is_balanced": True,
         "uses_sensitive_account": False,
-        "status": "ready_to_post",
+        "risk_flags": ["low_confidence_classification"],
+        "confidence_score": 0.80,
+        "rationale": "Account classification requires review",
+        "status": "bookkeeping_review_required",
+        "needs_review": True,
     }
 
     mock_graph.stream.return_value = [
@@ -155,6 +160,9 @@ def test_process_document_background_success(
     )
     assert ext is not None
     assert ext.vendor_name == "Toko Gramedia"
+    assert float(ext.confidence_score) == 0.96
+    assert ext.rationale == "High confidence extraction"
+    assert ext.status == "extracted"
 
     # Verify Journal Entry created
     je = (
@@ -164,11 +172,36 @@ def test_process_document_background_success(
     )
     assert je is not None
     assert len(je.lines) == 2
+    assert float(je.confidence_score) == 0.80
+    assert je.rationale == "Account classification requires review"
 
-    # Verify Audit Event recorded
-    audit = db_session.query(AuditEvent).filter(AuditEvent.source_id == doc_id).first()
-    assert audit is not None
-    assert audit.event_type == "extraction_completed"
+    # Verify each audit event retains the metadata of its owning agent.
+    extraction_audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "extraction_completed",
+            AuditEvent.source_id == doc_id,
+        )
+        .one()
+    )
+    assert float(extraction_audit.confidence_score) == 0.96
+    assert extraction_audit.rationale == "High confidence extraction"
+    assert extraction_audit.output_snapshot["status"] == "extracted"
+    assert extraction_audit.output_snapshot["needs_review"] is False
+
+    bookkeeping_audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "bookkeeping_completed",
+            AuditEvent.source_id == je.id,
+        )
+        .one()
+    )
+    assert float(bookkeeping_audit.confidence_score) == 0.80
+    assert bookkeeping_audit.rationale == "Account classification requires review"
+
+    persisted_doc = db_session.query(Document).filter(Document.id == doc_id).one()
+    assert persisted_doc.status == "bookkeeping_review_required"
 
 
 @patch("app.services.document_processing.document_processing_graph")
@@ -195,6 +228,7 @@ def test_process_document_background_review_required(
         "document_id": str(doc_id),
         "vendor_name": "Unknown Vendor",
         "confidence_score": 0.60,
+        "rationale": "Extraction is uncertain",
         "status": "extraction_review_required",
         "needs_review": True,
         "risk_flags": ["low_confidence_extraction"],
@@ -217,6 +251,33 @@ def test_process_document_background_review_required(
     assert review is not None
     assert review.status == "pending"
     assert review.review_type == "extraction"
+
+    extraction = (
+        db_session.query(DocumentExtraction)
+        .filter(DocumentExtraction.document_id == doc_id)
+        .one()
+    )
+    assert float(extraction.confidence_score) == 0.60
+    assert extraction.rationale == "Extraction is uncertain"
+    assert extraction.status == "draft"
+
+    extraction_audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "extraction_completed",
+            AuditEvent.source_id == doc_id,
+        )
+        .one()
+    )
+    assert float(extraction_audit.confidence_score) == 0.60
+    assert extraction_audit.output_snapshot["status"] == "extraction_review_required"
+    assert extraction_audit.output_snapshot["needs_review"] is True
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.event_type == "bookkeeping_completed")
+        .count()
+        == 0
+    )
 
 
 @patch("app.services.document_processing.document_processing_graph")
@@ -268,7 +329,10 @@ def test_stream_document_processing_sse(
         ],
         "is_balanced": True,
         "uses_sensitive_account": True,
+        "confidence_score": 0.80,
+        "rationale": "Sensitive payment account requires review",
         "status": "bookkeeping_review_required",
+        "needs_review": True,
     }
 
     mock_graph.stream.return_value = [
@@ -280,6 +344,15 @@ def test_stream_document_processing_sse(
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")
     assert "data:" in response.text
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    intake_done = next(event for event in events if event["stage"] == "intake_done")
+    completed = next(event for event in events if event["stage"] == "completed")
+    assert intake_done["confidence_score"] == 0.95
+    assert completed["confidence_score"] == 0.80
 
 
 def test_list_documents_status_filtering(client, db_session):

@@ -224,6 +224,14 @@ def test_document_processing_graph_splits_input_vat(
     assert final_state["status"] == "ready_to_post"
     assert final_state["needs_review"] is False
     assert final_state["proposed_journal"] == final_state["journal_lines"]
+    assert final_state["intake_confidence_score"] == 0.95
+    assert final_state["intake_rationale"] == "High quality extraction"
+    assert final_state["intake_status"] == "extracted"
+    assert final_state["intake_needs_review"] is False
+    assert final_state["bookkeeping_confidence_score"] == 0.90
+    assert final_state["bookkeeping_rationale"] == "Office supplies classification"
+    assert final_state["bookkeeping_status"] == "ready_to_post"
+    assert final_state["bookkeeping_needs_review"] is False
 
     journal_lines = final_state["journal_lines"]
     input_vat_lines = [line for line in journal_lines if line["account_code"] == "1400"]
