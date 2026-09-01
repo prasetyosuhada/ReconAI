@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.bookkeeping import classify_bookkeeping
 from app.db.session import get_db
+from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry, JournalEntryLine
@@ -174,28 +175,44 @@ def _continue_document_to_bookkeeping(
             detail=f"Journal save failed: {'; '.join(persistence.errors)}",
         )
 
-    log_event(
-        db=db,
-        event_type="bookkeeping_continued_after_extraction_review",
-        source_type="document",
-        source_id=doc.id,
-        actor_type="agent",
-        actor_name="BookkeepingAgent",
-        input_snapshot={"review_item_id": str(item.id)},
-        output_snapshot={
-            "decision": persistence.decision,
-            "reasoning": persistence.reasoning,
-            "status": persistence.status,
-            "journal_entry_id": str(persistence.journal_entry_id)
-            if persistence.journal_entry_id
-            else None,
-            "needs_review": outcome.needs_review,
-            "processing_duration_ms": processing_duration_ms,
-        },
-        confidence_score=outcome.confidence_score,
-        rationale=outcome.rationale,
-        document_id=doc.id,
+    audit_source_id = persistence.journal_entry_id or doc.id
+    existing_bookkeeping_audit = (
+        db.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "bookkeeping_completed",
+            AuditEvent.source_id == audit_source_id,
+        )
+        .first()
     )
+    if not existing_bookkeeping_audit:
+        log_event(
+            db=db,
+            event_type="bookkeeping_completed",
+            source_type=(
+                "journal_entry" if persistence.journal_entry_id else "document"
+            ),
+            source_id=audit_source_id,
+            actor_type="agent",
+            actor_name="BookkeepingAgent",
+            input_snapshot={
+                "review_item_id": str(item.id),
+                "review_type": "extraction",
+                "triggered_by": "extraction_review_approval",
+            },
+            output_snapshot={
+                "decision": persistence.decision,
+                "reasoning": persistence.reasoning,
+                "status": persistence.status,
+                "journal_entry_id": str(persistence.journal_entry_id)
+                if persistence.journal_entry_id
+                else None,
+                "needs_review": outcome.needs_review,
+                "processing_duration_ms": processing_duration_ms,
+            },
+            confidence_score=outcome.confidence_score,
+            rationale=outcome.rationale,
+            document_id=doc.id,
+        )
     return persistence.status
 
 

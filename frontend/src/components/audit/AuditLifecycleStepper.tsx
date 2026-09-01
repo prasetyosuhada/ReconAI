@@ -58,20 +58,12 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
   // 1. Stage anchor events
   const uploadEvt = sorted.find((e) => e.event_type === 'document_uploaded')
   const intakeEvt = sorted.find((e) => e.event_type === 'extraction_completed')
-  const bookkeepingEvt = sorted.find(
-    (e) =>
-      e.event_type === 'bookkeeping_completed' ||
-      e.event_type === 'bookkeeping_continued_after_extraction_review'
-  )
+  const bookkeepingEvt = sorted.find((e) => e.event_type === 'bookkeeping_completed')
   const postedEvt = sorted.find((e) => e.event_type === 'journal_entry_posted')
   const reconEvts = sorted.filter((e) => e.event_type.startsWith('reconciliation_match_'))
 
   // Review events
-  const reviewEvts = sorted.filter(
-    (e) =>
-      e.event_type.startsWith('review_item_') ||
-      e.event_type === 'bookkeeping_continued_after_extraction_review'
-  )
+  const reviewEvts = sorted.filter((e) => e.event_type.startsWith('review_item_'))
 
   const intakeTs = intakeEvt ? new Date(intakeEvt.created_at).getTime() : null
   const bkTs = bookkeepingEvt ? new Date(bookkeepingEvt.created_at).getTime() : null
@@ -83,7 +75,6 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
     if (rType === 'bookkeeping') return 'bookkeeping'
     if (rType === 'reconciliation') return 'reconciliation'
 
-    if (evt.event_type === 'bookkeeping_continued_after_extraction_review') return 'intake'
     if (evt.source_type === 'document') return 'intake'
     if (evt.source_type === 'journal_entry') return 'bookkeeping'
     if (evt.source_type === 'bank_transaction' || evt.source_type === 'reconciliation_match') {
@@ -114,10 +105,7 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
     const intakeReviews = reviewEvts.filter((e) => getReviewStage(e) === 'intake')
     const hasIntakeReject = intakeReviews.some((e) => e.event_type === 'review_item_rejected')
     const intakeResolveEvt = intakeReviews.find(
-      (e) =>
-        e.event_type === 'review_item_approved' ||
-        e.event_type === 'review_item_edited' ||
-        e.event_type === 'bookkeeping_continued_after_extraction_review'
+      (e) => e.event_type === 'review_item_approved' || e.event_type === 'review_item_edited'
     )
 
     if (intakeSnap.status === 'failed') {

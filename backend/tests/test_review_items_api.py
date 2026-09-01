@@ -422,10 +422,14 @@ def test_edit_extraction_review_continues_to_bookkeeping(
     continuation_audit = (
         db_session.query(AuditEvent)
         .filter(
-            AuditEvent.event_type == "bookkeeping_continued_after_extraction_review",
-            AuditEvent.source_id == doc_id,
+            AuditEvent.event_type == "bookkeeping_completed",
+            AuditEvent.source_id == journal.id,
         )
         .one()
+    )
+    assert continuation_audit.source_type == "journal_entry"
+    assert continuation_audit.input_snapshot["triggered_by"] == (
+        "extraction_review_approval"
     )
     assert continuation_audit.output_snapshot["processing_duration_ms"] == 420.0
     assert mock_perf_counter.call_count == 2
@@ -536,6 +540,15 @@ def test_extraction_review_continuation_retry_is_idempotent(
     assert len(journals) == 1
     assert len(bookkeeping_reviews) == 1
     assert bookkeeping_reviews[0].source_id == journals[0].id
+    bookkeeping_audits = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "bookkeeping_completed",
+            AuditEvent.source_id == journals[0].id,
+        )
+        .all()
+    )
+    assert len(bookkeeping_audits) == 1
 
 
 def test_reject_review_item_success(client, db_session):
