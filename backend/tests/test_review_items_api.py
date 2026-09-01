@@ -298,9 +298,13 @@ def test_edit_review_item_success(client, db_session):
     assert posted_audit.output_snapshot["document_id"] == str(doc_id)
 
 
+@patch(
+    "app.api.v1.review_items.perf_counter",
+    side_effect=[500.0, 500.42],
+)
 @patch("app.api.v1.review_items.classify_bookkeeping")
 def test_edit_extraction_review_continues_to_bookkeeping(
-    mock_classify_bookkeeping, client, db_session
+    mock_classify_bookkeeping, mock_perf_counter, client, db_session
 ):
     doc_id = uuid.uuid4()
     doc = Document(
@@ -415,6 +419,16 @@ def test_edit_extraction_review_continues_to_bookkeeping(
     assert doc.status == "ready_to_post"
     called_extraction = mock_classify_bookkeeping.call_args.kwargs["extraction_data"]
     assert called_extraction["tax_amount"] == 11000.0
+    continuation_audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "bookkeeping_continued_after_extraction_review",
+            AuditEvent.source_id == doc_id,
+        )
+        .one()
+    )
+    assert continuation_audit.output_snapshot["processing_duration_ms"] == 420.0
+    assert mock_perf_counter.call_count == 2
 
 
 @patch("app.api.v1.review_items.classify_bookkeeping")

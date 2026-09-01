@@ -3,6 +3,7 @@ import logging
 import uuid
 from collections.abc import Generator
 from datetime import date, datetime
+from math import isfinite
 from typing import Any
 
 from app.agents.orchestrator import document_processing_graph
@@ -36,6 +37,17 @@ def _parse_date(d: Any) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def _optional_duration_ms(value: Any) -> float | None:
+    """Normalize an optional monotonic duration for audit serialization."""
+    try:
+        duration = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(duration) or duration < 0:
+        return None
+    return round(duration, 2)
 
 
 def stream_document_processing(
@@ -213,10 +225,12 @@ def stream_document_processing(
         intake_rationale: str | None = None
         intake_status = "failed"
         intake_needs_review = False
+        intake_processing_duration_ms: float | None = None
         bookkeeping_confidence = 0.0
         bookkeeping_rationale: str | None = None
         bookkeeping_status: str | None = None
         bookkeeping_needs_review = False
+        bookkeeping_processing_duration_ms: float | None = None
         bookkeeping_seen = False
 
         for step_output in document_processing_graph.stream(initial_state):
@@ -248,6 +262,9 @@ def stream_document_processing(
                         "intake_needs_review",
                         intake_data.get("needs_review", False),
                     )
+                )
+                intake_processing_duration_ms = _optional_duration_ms(
+                    intake_data.get("intake_processing_duration_ms")
                 )
 
                 yield _sse_event(
@@ -300,6 +317,9 @@ def stream_document_processing(
                         "bookkeeping_needs_review",
                         bookkeeping_data.get("needs_review", False),
                     )
+                )
+                bookkeeping_processing_duration_ms = _optional_duration_ms(
+                    bookkeeping_data.get("bookkeeping_processing_duration_ms")
                 )
                 lines = bookkeeping_data.get("journal_lines") or []
                 is_bal = bookkeeping_data.get("is_balanced", True)
@@ -586,6 +606,7 @@ def stream_document_processing(
                         str(saved_journal_id) if saved_journal_id else None
                     ),
                     "review_item_created": extraction_review_item_created,
+                    "processing_duration_ms": intake_processing_duration_ms,
                     "low_confidence_fields": final_state.get(
                         "low_confidence_fields", []
                     ),
@@ -634,6 +655,9 @@ def stream_document_processing(
                                 else "draft"
                             ),
                             "needs_review": bookkeeping_needs_review,
+                            "processing_duration_ms": (
+                                bookkeeping_processing_duration_ms
+                            ),
                             "is_balanced": final_state.get("is_balanced", True),
                         },
                         confidence_score=bookkeeping_confidence,
@@ -681,6 +705,9 @@ def stream_document_processing(
                             "reasoning": fail_reasoning,
                             "status": "failed",
                             "journal_entry_id": None,
+                            "processing_duration_ms": (
+                                bookkeeping_processing_duration_ms
+                            ),
                         },
                         confidence_score=bookkeeping_confidence,
                         rationale=bookkeeping_rationale

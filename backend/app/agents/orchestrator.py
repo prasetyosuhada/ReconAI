@@ -6,6 +6,7 @@ to enforce confidence thresholds (confidence < 0.85 -> needs_review) and risk ru
 """
 
 import logging
+from time import perf_counter
 from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
@@ -114,6 +115,7 @@ def route_after_reconciliation(
 def document_intake_node(state: DocumentProcessingState) -> DocumentProcessingState:
     """LangGraph node executing Document Intake Agent."""
     logger.info("Executing document_intake_node...")
+    started_at = perf_counter()
     response = run_document_intake_agent(
         raw_text=state.get("raw_text"),
         image_base64=state.get("image_base64"),
@@ -121,6 +123,7 @@ def document_intake_node(state: DocumentProcessingState) -> DocumentProcessingSt
         mime_type=state.get("mime_type", "application/pdf"),
         demo_currency=state.get("demo_currency", "IDR"),
     )
+    processing_duration_ms = round(max(0.0, (perf_counter() - started_at) * 1000), 2)
 
     result = response.result
     next_step = route_after_extraction(
@@ -154,6 +157,7 @@ def document_intake_node(state: DocumentProcessingState) -> DocumentProcessingSt
         "intake_rationale": response.rationale,
         "intake_status": new_status,
         "intake_needs_review": next_step == "extraction_review_required",
+        "intake_processing_duration_ms": processing_duration_ms,
         "confidence_score": response.confidence_score,
         "rationale": response.rationale,
         "warnings": response.warnings,
@@ -181,10 +185,12 @@ def bookkeeping_node(state: DocumentProcessingState) -> DocumentProcessingState:
 
     coa_list = state.get("chart_of_accounts", [])
 
+    started_at = perf_counter()
     outcome = classify_bookkeeping(
         extraction_data=extraction_data,
         chart_of_accounts=coa_list,
     )
+    processing_duration_ms = round(max(0.0, (perf_counter() - started_at) * 1000), 2)
 
     return {
         **state,
@@ -201,6 +207,7 @@ def bookkeeping_node(state: DocumentProcessingState) -> DocumentProcessingState:
         "bookkeeping_rationale": outcome.rationale,
         "bookkeeping_status": outcome.status,
         "bookkeeping_needs_review": outcome.needs_review,
+        "bookkeeping_processing_duration_ms": processing_duration_ms,
         "confidence_score": outcome.confidence_score,
         "rationale": outcome.rationale,
         "warnings": outcome.warnings,

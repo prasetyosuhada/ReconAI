@@ -124,10 +124,14 @@ def test_route_after_reconciliation_review_required():
     assert next_step == "reconciliation_review_required"
 
 
+@patch(
+    "app.agents.orchestrator.perf_counter",
+    side_effect=[100.0, 100.25, 200.0, 200.75],
+)
 @patch("app.agents.document_intake.get_llm")
 @patch("app.agents.bookkeeping.get_llm")
 def test_document_processing_graph_splits_input_vat(
-    mock_bookkeeping_llm, mock_intake_llm
+    mock_bookkeeping_llm, mock_intake_llm, mock_perf_counter
 ):
     # Setup Document Intake Agent mock response
     mock_intake_base = MagicMock()
@@ -228,10 +232,13 @@ def test_document_processing_graph_splits_input_vat(
     assert final_state["intake_rationale"] == "High quality extraction"
     assert final_state["intake_status"] == "extracted"
     assert final_state["intake_needs_review"] is False
+    assert final_state["intake_processing_duration_ms"] == 250.0
     assert final_state["bookkeeping_confidence_score"] == 0.90
     assert final_state["bookkeeping_rationale"] == "Office supplies classification"
     assert final_state["bookkeeping_status"] == "ready_to_post"
     assert final_state["bookkeeping_needs_review"] is False
+    assert final_state["bookkeeping_processing_duration_ms"] == 750.0
+    assert mock_perf_counter.call_count == 4
 
     journal_lines = final_state["journal_lines"]
     input_vat_lines = [line for line in journal_lines if line["account_code"] == "1400"]

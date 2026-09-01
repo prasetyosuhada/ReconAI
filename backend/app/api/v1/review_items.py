@@ -3,6 +3,7 @@
 import logging
 import uuid
 from datetime import UTC, date, datetime
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -155,10 +156,12 @@ def _continue_document_to_bookkeeping(
         "document_type": doc.document_type,
         "line_items": extraction.line_items or [],
     }
+    started_at = perf_counter()
     outcome = classify_bookkeeping(
         extraction_data=extraction_data,
         chart_of_accounts=_chart_of_accounts_payload(db),
     )
+    processing_duration_ms = round(max(0.0, (perf_counter() - started_at) * 1000), 2)
     persistence = persist_bookkeeping_outcome(
         db=db,
         document=doc,
@@ -187,6 +190,7 @@ def _continue_document_to_bookkeeping(
             if persistence.journal_entry_id
             else None,
             "needs_review": outcome.needs_review,
+            "processing_duration_ms": processing_duration_ms,
         },
         confidence_score=outcome.confidence_score,
         rationale=outcome.rationale,

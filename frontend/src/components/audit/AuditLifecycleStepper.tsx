@@ -35,16 +35,18 @@ export interface LifecycleStage {
   reviewedInfo?: ReviewedInfo
 }
 
-function formatDuration(startIso?: string, endIso?: string): string {
-  if (!startIso || !endIso) return '—'
-  const start = new Date(startIso).getTime()
-  const end = new Date(endIso).getTime()
-  const diffSec = Math.max(0, (end - start) / 1000)
+function formatProcessingDuration(value: unknown): string {
+  const durationMs = Number(value)
+  if (!Number.isFinite(durationMs) || durationMs < 0) return '—'
+  if (durationMs < 1) return '<1ms'
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`
 
-  if (diffSec < 1) return '< 1s'
-  if (diffSec < 60) return `${Math.round(diffSec)}s`
-  const mins = Math.floor(diffSec / 60)
-  const secs = Math.round(diffSec % 60)
+  const durationSeconds = durationMs / 1000
+  if (durationSeconds < 60) return `${Number(durationSeconds.toFixed(1))}s`
+
+  const totalSeconds = Math.round(durationSeconds)
+  const mins = Math.floor(totalSeconds / 60)
+  const secs = totalSeconds % 60
   return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`
 }
 
@@ -104,8 +106,8 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
   // --- 2. Stage: Intake Agent ---
   let intakeStatus: StageStatus = 'not_reached'
   let intakeReviewedInfo: ReviewedInfo | undefined = undefined
-  let intakeEventId = intakeEvt?.id
-  let intakeTimestamp = intakeEvt?.created_at
+  const intakeEventId = intakeEvt?.id
+  const intakeTimestamp = intakeEvt?.created_at
 
   if (intakeEvt) {
     const intakeSnap = intakeEvt.output_snapshot || {}
@@ -141,15 +143,14 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
         timestamp: intakeResolveEvt.created_at,
         eventId: intakeResolveEvt.id,
       }
-      intakeTimestamp = intakeResolveEvt.created_at
     }
   }
 
   // --- 3. Stage: Bookkeeping Agent ---
   let bkStatus: StageStatus = 'not_reached'
   let bkReviewedInfo: ReviewedInfo | undefined = undefined
-  let bkEventId = bookkeepingEvt?.id
-  let bkTimestamp = bookkeepingEvt?.created_at
+  const bkEventId = bookkeepingEvt?.id
+  const bkTimestamp = bookkeepingEvt?.created_at
 
   if (bookkeepingEvt) {
     const bkSnap = bookkeepingEvt.output_snapshot || {}
@@ -188,7 +189,6 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
         timestamp: bkResolveEvt.created_at,
         eventId: bkResolveEvt.id,
       }
-      bkTimestamp = bkResolveEvt.created_at
     }
   }
 
@@ -261,6 +261,7 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
     timestamp?: string
     eventId?: string
     reviewedInfo?: ReviewedInfo
+    processingDurationMs?: unknown
   }[] = [
     {
       key: 'upload',
@@ -282,6 +283,7 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
       timestamp: intakeTimestamp,
       eventId: intakeEventId,
       reviewedInfo: intakeReviewedInfo,
+      processingDurationMs: intakeEvt?.output_snapshot?.processing_duration_ms,
     },
     {
       key: 'bookkeeping',
@@ -293,6 +295,7 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
       timestamp: bkTimestamp,
       eventId: bkEventId,
       reviewedInfo: bkReviewedInfo,
+      processingDurationMs: bookkeepingEvt?.output_snapshot?.processing_duration_ms,
     },
     {
       key: 'posted',
@@ -350,9 +353,8 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
     }
   }
 
-  // Calculate durations between consecutive active stages
+  // Agent durations come from monotonic backend measurements, never event gaps.
   const finalStages: LifecycleStage[] = []
-  let previousTimestamp: string | undefined = undefined
 
   for (let i = 0; i < rawStages.length; i++) {
     const stage = rawStages[i]
@@ -367,22 +369,10 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
       if (stage.key === 'upload') {
         durationText = '0s'
       } else if (stage.key === 'intake' || stage.key === 'bookkeeping') {
-        let dur = '—'
-        if (stage.timestamp) {
-          if (previousTimestamp) {
-            dur = formatDuration(previousTimestamp, stage.timestamp)
-          } else if (uploadEvt?.created_at) {
-            dur = formatDuration(uploadEvt.created_at, stage.timestamp)
-          }
-        }
-        durationText = dur !== '—' ? `Processing: ${dur}` : undefined
+        durationText = `Processing: ${formatProcessingDuration(stage.processingDurationMs)}`
       } else {
         // Stage 4 'posted' and Stage 5 'reconciliation': duration removed as per spec
         durationText = undefined
-      }
-
-      if (stage.timestamp) {
-        previousTimestamp = stage.timestamp
       }
     }
 

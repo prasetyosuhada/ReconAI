@@ -152,6 +152,7 @@ def test_process_document_background_separates_agent_metadata(
         "rationale": "High confidence extraction",
         "status": "extracted",
         "needs_review": False,
+        "intake_processing_duration_ms": 1234.56,
     }
     bookkeeping_res = {
         "journal_lines": [
@@ -175,6 +176,7 @@ def test_process_document_background_separates_agent_metadata(
         "rationale": bookkeeping_rationale,
         "status": bookkeeping_status,
         "needs_review": bookkeeping_needs_review,
+        "bookkeeping_processing_duration_ms": 2345.67,
     }
 
     mock_graph.stream.return_value = [
@@ -227,6 +229,7 @@ def test_process_document_background_separates_agent_metadata(
     assert extraction_audit.rationale == "High confidence extraction"
     assert extraction_audit.output_snapshot["status"] == "extracted"
     assert extraction_audit.output_snapshot["needs_review"] is False
+    assert extraction_audit.output_snapshot["processing_duration_ms"] == 1234.56
 
     bookkeeping_audit = (
         db_session.query(AuditEvent)
@@ -243,6 +246,7 @@ def test_process_document_background_separates_agent_metadata(
         bookkeeping_audit.output_snapshot["journal_status"] == expected_journal_status
     )
     assert bookkeeping_audit.output_snapshot["needs_review"] is bookkeeping_needs_review
+    assert bookkeeping_audit.output_snapshot["processing_duration_ms"] == 2345.67
 
     persisted_doc = db_session.query(Document).filter(Document.id == doc_id).one()
     assert persisted_doc.status == bookkeeping_status
@@ -275,6 +279,7 @@ def test_process_document_background_review_required(
         "rationale": "Extraction is uncertain",
         "status": "extraction_review_required",
         "needs_review": True,
+        "intake_processing_duration_ms": 678.9,
         "risk_flags": ["low_confidence_extraction"],
     }
 
@@ -316,6 +321,7 @@ def test_process_document_background_review_required(
     assert float(extraction_audit.confidence_score) == 0.60
     assert extraction_audit.output_snapshot["status"] == "extraction_review_required"
     assert extraction_audit.output_snapshot["needs_review"] is True
+    assert extraction_audit.output_snapshot["processing_duration_ms"] == 678.9
     assert (
         db_session.query(AuditEvent)
         .filter(AuditEvent.event_type == "bookkeeping_completed")

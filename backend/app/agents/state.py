@@ -134,10 +134,12 @@ class DocumentProcessingState(BookkeepingState, total=False):
     intake_rationale: str
     intake_status: str
     intake_needs_review: bool
+    intake_processing_duration_ms: float
     bookkeeping_confidence_score: float
     bookkeeping_rationale: str
     bookkeeping_status: str
     bookkeeping_needs_review: bool
+    bookkeeping_processing_duration_ms: float
 
 
 class ReconciliationState(TypedDict, total=False):
