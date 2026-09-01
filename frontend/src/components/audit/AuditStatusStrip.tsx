@@ -103,6 +103,7 @@ function deriveStatusTransitions(events: AuditEventResponse[]): StatusTransition
 
   for (const evt of sorted) {
     const isDocSource = evt.source_type === 'document'
+    const isBookkeeping = evt.event_type === 'bookkeeping_completed'
     const isPosted = evt.event_type === 'journal_entry_posted'
     const isRejected =
       evt.event_type === 'review_item_rejected' ||
@@ -110,7 +111,7 @@ function deriveStatusTransitions(events: AuditEventResponse[]): StatusTransition
     const isReviewAction =
       evt.event_type === 'review_item_approved' || evt.event_type === 'review_item_edited'
 
-    if (!isDocSource && !isPosted && !isRejected && !isReviewAction) continue
+    if (!isDocSource && !isBookkeeping && !isPosted && !isRejected && !isReviewAction) continue
 
     const outSnap = evt.output_snapshot || {}
     let statusCandidate: string | null = null
@@ -131,7 +132,11 @@ function deriveStatusTransitions(events: AuditEventResponse[]): StatusTransition
 
     if (!statusCandidate) continue
 
-    const normalizedStatus = statusCandidate.toLowerCase().trim()
+    const rawNormalizedStatus = statusCandidate.toLowerCase().trim()
+    const normalizedStatus =
+      isBookkeeping && rawNormalizedStatus === 'review_required'
+        ? 'bookkeeping_review_required'
+        : rawNormalizedStatus
 
     // Deduplicate consecutive identical statuses
     if (normalizedStatus === lastStatus) continue
@@ -186,6 +191,9 @@ export const AuditStatusStrip: React.FC<AuditStatusStripProps> = ({
           const tone = getStatusTone(node.rawStatus)
           const isLatest = index === transitions.length - 1
           const isSelected = activeEventId === node.eventId
+          const isReviewRequired =
+            node.rawStatus === 'extraction_review_required' ||
+            node.rawStatus === 'bookkeeping_review_required'
 
           return (
             <React.Fragment key={node.eventId}>
@@ -196,11 +204,13 @@ export const AuditStatusStrip: React.FC<AuditStatusStripProps> = ({
                   isSelected
                     ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-950 scale-105'
                     : isLatest
-                      ? node.rawStatus === 'rejected'
-                        ? 'border-rose-500/60 shadow-rose-500/10'
-                        : node.rawStatus === 'edited'
-                          ? 'border-blue-500/60 shadow-blue-500/10'
-                          : 'border-emerald-500/50 shadow-emerald-500/10'
+                      ? isReviewRequired
+                        ? 'border-amber-500/60 shadow-amber-500/10'
+                        : node.rawStatus === 'rejected'
+                          ? 'border-rose-500/60 shadow-rose-500/10'
+                          : node.rawStatus === 'edited'
+                            ? 'border-blue-500/60 shadow-blue-500/10'
+                            : 'border-emerald-500/50 shadow-emerald-500/10'
                       : ''
                 }`}
                 title={`Event: ${node.eventType} by ${node.actorName} at ${new Date(node.timestamp).toLocaleTimeString()}`}

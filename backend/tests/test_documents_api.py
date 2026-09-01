@@ -3,6 +3,8 @@ import json
 import uuid
 from unittest.mock import patch
 
+import pytest
+
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
@@ -63,10 +65,46 @@ def test_upload_document_empty_file(client):
     assert "Uploaded file is empty" in data["detail"]
 
 
+@pytest.mark.parametrize(
+    (
+        "bookkeeping_confidence",
+        "bookkeeping_rationale",
+        "bookkeeping_status",
+        "bookkeeping_needs_review",
+        "risk_flags",
+        "expected_journal_status",
+    ),
+    [
+        (
+            0.80,
+            "Account classification requires review",
+            "bookkeeping_review_required",
+            True,
+            ["low_confidence_classification"],
+            "review_required",
+        ),
+        (
+            0.94,
+            "Account classification is ready to post",
+            "ready_to_post",
+            False,
+            [],
+            "draft",
+        ),
+    ],
+)
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
 def test_process_document_background_separates_agent_metadata(
-    mock_session_class, mock_graph, db_session
+    mock_session_class,
+    mock_graph,
+    db_session,
+    bookkeeping_confidence,
+    bookkeeping_rationale,
+    bookkeeping_status,
+    bookkeeping_needs_review,
+    risk_flags,
+    expected_journal_status,
 ):
     mock_session_class.return_value = db_session
     db_session.add_all(
@@ -132,11 +170,11 @@ def test_process_document_background_separates_agent_metadata(
         ],
         "is_balanced": True,
         "uses_sensitive_account": False,
-        "risk_flags": ["low_confidence_classification"],
-        "confidence_score": 0.80,
-        "rationale": "Account classification requires review",
-        "status": "bookkeeping_review_required",
-        "needs_review": True,
+        "risk_flags": risk_flags,
+        "confidence_score": bookkeeping_confidence,
+        "rationale": bookkeeping_rationale,
+        "status": bookkeeping_status,
+        "needs_review": bookkeeping_needs_review,
     }
 
     mock_graph.stream.return_value = [
@@ -172,8 +210,9 @@ def test_process_document_background_separates_agent_metadata(
     )
     assert je is not None
     assert len(je.lines) == 2
-    assert float(je.confidence_score) == 0.80
-    assert je.rationale == "Account classification requires review"
+    assert float(je.confidence_score) == bookkeeping_confidence
+    assert je.rationale == bookkeeping_rationale
+    assert je.status == expected_journal_status
 
     # Verify each audit event retains the metadata of its owning agent.
     extraction_audit = (
@@ -197,11 +236,16 @@ def test_process_document_background_separates_agent_metadata(
         )
         .one()
     )
-    assert float(bookkeeping_audit.confidence_score) == 0.80
-    assert bookkeeping_audit.rationale == "Account classification requires review"
+    assert float(bookkeeping_audit.confidence_score) == bookkeeping_confidence
+    assert bookkeeping_audit.rationale == bookkeeping_rationale
+    assert bookkeeping_audit.output_snapshot["status"] == bookkeeping_status
+    assert (
+        bookkeeping_audit.output_snapshot["journal_status"] == expected_journal_status
+    )
+    assert bookkeeping_audit.output_snapshot["needs_review"] is bookkeeping_needs_review
 
     persisted_doc = db_session.query(Document).filter(Document.id == doc_id).one()
-    assert persisted_doc.status == "bookkeeping_review_required"
+    assert persisted_doc.status == bookkeeping_status
 
 
 @patch("app.services.document_processing.document_processing_graph")

@@ -165,9 +165,13 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
       bkStatus = 'rejected'
     } else {
       const intakeSnap = intakeEvt?.output_snapshot || {}
+      const bookkeepingStatus = String(bkSnap.status || '')
+        .toLowerCase()
+        .trim()
       const bkFlagged =
         bkSnap.needs_review === true ||
-        bkSnap.status === 'bookkeeping_review_required' ||
+        bookkeepingStatus === 'bookkeeping_review_required' ||
+        bookkeepingStatus === 'review_required' ||
         intakeSnap.status === 'bookkeeping_review_required'
 
       if (bkFlagged && !bkResolveEvt) {

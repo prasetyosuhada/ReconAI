@@ -627,11 +627,13 @@ def stream_document_processing(
                             "decision": bookkeeping_persistence.decision,
                             "reasoning": bookkeeping_persistence.reasoning,
                             "journal_entry_id": str(saved_journal_id),
-                            "status": (
+                            "status": final_status,
+                            "journal_status": (
                                 "review_required"
                                 if bookkeeping_needs_review
                                 else "draft"
                             ),
+                            "needs_review": bookkeeping_needs_review,
                             "is_balanced": final_state.get("is_balanced", True),
                         },
                         confidence_score=bookkeeping_confidence,
