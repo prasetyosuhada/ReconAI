@@ -10,6 +10,7 @@ from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
+from app.services.audit_service import log_event
 from app.services.document_processing import process_document_background
 
 
@@ -184,13 +185,16 @@ def test_process_document_background_separates_agent_metadata(
         {"bookkeeping": bookkeeping_res},
     ]
 
-    process_document_background(
-        document_id=str(doc_id),
-        stored_file_path="/tmp/invoice_office.pdf",
-        mime_type="application/pdf",
-        original_filename="invoice_office.pdf",
-        document_type="invoice",
-    )
+    with patch(
+        "app.services.document_processing.log_event", wraps=log_event
+    ) as mock_log_event:
+        process_document_background(
+            document_id=str(doc_id),
+            stored_file_path="/tmp/invoice_office.pdf",
+            mime_type="application/pdf",
+            original_filename="invoice_office.pdf",
+            document_type="invoice",
+        )
 
     # Verify Extraction record created
     ext = (
@@ -247,6 +251,13 @@ def test_process_document_background_separates_agent_metadata(
     )
     assert bookkeeping_audit.output_snapshot["needs_review"] is bookkeeping_needs_review
     assert bookkeeping_audit.output_snapshot["processing_duration_ms"] == 2345.67
+    assert bookkeeping_audit.created_at >= extraction_audit.created_at
+    bookkeeping_log_call = next(
+        call
+        for call in mock_log_event.call_args_list
+        if call.kwargs["event_type"] == "bookkeeping_completed"
+    )
+    assert bookkeeping_log_call.kwargs["created_at"] is not None
 
     persisted_doc = db_session.query(Document).filter(Document.id == doc_id).one()
     assert persisted_doc.status == bookkeeping_status

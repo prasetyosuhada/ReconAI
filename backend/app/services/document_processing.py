@@ -2,7 +2,7 @@ import json
 import logging
 import uuid
 from collections.abc import Generator
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from math import isfinite
 from typing import Any
 
@@ -231,6 +231,7 @@ def stream_document_processing(
         bookkeeping_status: str | None = None
         bookkeeping_needs_review = False
         bookkeeping_processing_duration_ms: float | None = None
+        bookkeeping_completed_at: datetime | None = None
         bookkeeping_seen = False
 
         for step_output in document_processing_graph.stream(initial_state):
@@ -298,6 +299,7 @@ def stream_document_processing(
             # 2. Bookkeeping Agent Node
             if "bookkeeping" in step_output:
                 bookkeeping_data = step_output["bookkeeping"]
+                bookkeeping_completed_at = datetime.now(UTC)
                 final_state.update(bookkeeping_data)
                 bookkeeping_seen = True
                 bookkeeping_confidence = float(
@@ -663,6 +665,7 @@ def stream_document_processing(
                         confidence_score=bookkeeping_confidence,
                         rationale=bookkeeping_rationale,
                         document_id=doc.id,
+                        created_at=bookkeeping_completed_at,
                     )
             else:
                 # Failure case: bookkeeping ran but saving failed.
@@ -713,6 +716,7 @@ def stream_document_processing(
                         rationale=bookkeeping_rationale
                         or "Bookkeeping classification failed validation.",
                         document_id=doc.id,
+                        created_at=bookkeeping_completed_at,
                     )
 
         # The extraction, journal, review item, document status, and wrapper-specific

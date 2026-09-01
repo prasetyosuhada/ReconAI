@@ -163,6 +163,7 @@ def _continue_document_to_bookkeeping(
         chart_of_accounts=_chart_of_accounts_payload(db),
     )
     processing_duration_ms = round(max(0.0, (perf_counter() - started_at) * 1000), 2)
+    bookkeeping_completed_at = datetime.now(UTC)
     persistence = persist_bookkeeping_outcome(
         db=db,
         document=doc,
@@ -212,6 +213,7 @@ def _continue_document_to_bookkeeping(
             confidence_score=outcome.confidence_score,
             rationale=outcome.rationale,
             document_id=doc.id,
+            created_at=bookkeeping_completed_at,
         )
     return persistence.status
 

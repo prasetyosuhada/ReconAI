@@ -432,6 +432,7 @@ def test_edit_extraction_review_continues_to_bookkeeping(
         "extraction_review_approval"
     )
     assert continuation_audit.output_snapshot["processing_duration_ms"] == 420.0
+    assert continuation_audit.created_at > item.resolved_at
     assert mock_perf_counter.call_count == 2
 
 
