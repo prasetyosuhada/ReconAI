@@ -52,7 +52,7 @@ export const TrialBalanceSummaryCard: React.FC<TrialBalanceSummaryCardProps> = (
           {isBalanced ? (
             <div className="px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold flex items-center gap-1.5 shadow-sm shadow-emerald-500/10">
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              BALANCED (Debits == Credits)
+              BALANCED
             </div>
           ) : (
             <div className="px-3.5 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-bold flex items-center gap-1.5 shadow-sm shadow-rose-500/10">

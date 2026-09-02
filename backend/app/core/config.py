@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
-    SECRET_KEY: str = "dev_secret_key_change_in_production"
+    SECRET_KEY: str | None = None
 
     # Database
     POSTGRES_USER: str = "postgres"
@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     DATABASE_URL: str | None = None
+
+    # Redis Streams (live document-processing progress)
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     # LLM Provider API Keys
     OPENAI_API_KEY: str | None = None

@@ -14,10 +14,11 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+from app.agents.schemas import BookkeepingOutcome
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
-from app.models.journal import JournalEntry, JournalEntryLine
+from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
 from app.services.accounting import (
     post_journal_entry_to_ledger,
@@ -42,6 +43,13 @@ def seed_coa_accounts(db):
             normal_balance="debit",
             is_active=True,
         ),
+        ChartOfAccount(
+            account_code="1400",
+            account_name="PPN Masukan (Input VAT)",
+            account_type="asset",
+            normal_balance="debit",
+            is_active=True,
+        ),
     ]
     for acc in accounts:
         db.add(acc)
@@ -55,7 +63,9 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
     # -------------------------------------------------------------
     # STEP 1: Upload Low Quality / Blurry Document
     # -------------------------------------------------------------
-    pdf_path = Path("/home/pras/recon-ai/demo-data/invoices/invoice_06_blurry_low_confidence.pdf")
+    pdf_path = Path(
+        "/home/pras/recon-ai/demo-data/invoices/invoice_06_blurry_low_confidence.pdf"
+    )
     if pdf_path.exists():
         file_bytes = pdf_path.read_bytes()
     else:
@@ -139,7 +149,9 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
     pending_items = review_res.json()["items"]
     assert len(pending_items) >= 1
 
-    target_review = next((r for r in pending_items if r["id"] == str(review_item.id)), None)
+    target_review = next(
+        (r for r in pending_items if r["id"] == str(review_item.id)), None
+    )
     assert target_review is not None
     assert target_review["status"] == "pending"
     assert target_review["priority"] == "high"
@@ -156,56 +168,57 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
         "currency": "IDR",
     }
 
-    edit_res = client.post(
-        f"/api/v1/review-items/{review_item.id}/edit",
-        json={
-            "edited_payload": edited_payload,
-            "reviewer_notes": "Corrected vendor name from blurry photo.",
-        },
+    bookkeeping_outcome = BookkeepingOutcome(
+        entry_date="2026-08-10",
+        entry_description="Office Meeting Refreshment - Toko Kopi Sejahtera",
+        journal_lines=[
+            {
+                "account_code": "5200",
+                "account_name": "Office Expense",
+                "debit_amount": 50000.0,
+                "credit_amount": 0.0,
+            },
+            {
+                "account_code": "1400",
+                "account_name": "PPN Masukan (Input VAT)",
+                "debit_amount": 5000.0,
+                "credit_amount": 0.0,
+            },
+            {
+                "account_code": "1000",
+                "account_name": "Cash & Bank",
+                "debit_amount": 0.0,
+                "credit_amount": 55000.0,
+            },
+        ],
+        total_debit=55000.0,
+        total_credit=55000.0,
+        is_balanced=True,
+        uses_sensitive_account=True,
+        risk_flags=["uses_sensitive_account"],
+        confidence_score=0.80,
+        rationale="Human-corrected extraction classified deterministically.",
+        status="bookkeeping_review_required",
+        needs_review=True,
     )
+    with patch(
+        "app.api.v1.review_items.classify_bookkeeping",
+        return_value=bookkeeping_outcome,
+    ):
+        edit_res = client.post(
+            f"/api/v1/review-items/{review_item.id}/edit",
+            json={
+                "edited_payload": edited_payload,
+                "reviewer_notes": "Corrected vendor name from blurry photo.",
+            },
+        )
     assert edit_res.status_code == 200
     assert edit_res.json()["status"] in ["edited", "posted", "approved"]
 
     # -------------------------------------------------------------
     # STEP 5: Post Corrected Entry & Post to General Ledger
     # -------------------------------------------------------------
-    je = JournalEntry(
-        id=uuid.uuid4(),
-        document_id=doc_id,
-        extraction_id=extraction.id,
-        entry_date=date(2026, 8, 10),
-        description="Office Meeting Refreshment - Toko Kopi Sejahtera",
-        status="draft",
-        agent_name="Human Reviewer",
-        confidence_score=1.0,
-        rationale="Human verified blurry receipt extraction",
-    )
-    db_session.add(je)
-
-    acc_5200 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "5200").first()
-    acc_1000 = db_session.query(ChartOfAccount).filter(ChartOfAccount.account_code == "1000").first()
-
-    line_debit = JournalEntryLine(
-        id=uuid.uuid4(),
-        journal_entry_id=je.id,
-        line_number=1,
-        account_id=acc_5200.id,
-        debit_amount=55000.0,
-        credit_amount=0.0,
-        description="Office Expense Refreshment",
-    )
-    line_credit = JournalEntryLine(
-        id=uuid.uuid4(),
-        journal_entry_id=je.id,
-        line_number=2,
-        account_id=acc_1000.id,
-        debit_amount=0.0,
-        credit_amount=55000.0,
-        description="Cash Payment",
-    )
-    db_session.add(line_debit)
-    db_session.add(line_credit)
-    db_session.commit()
+    je = db_session.query(JournalEntry).filter(JournalEntry.document_id == doc_id).one()
 
     val_res = validate_double_entry(je.lines)
     assert val_res.is_valid is True
@@ -221,6 +234,8 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
     assert audit_res.status_code == 200
     audit_timeline = audit_res.json()["timeline"]
 
-    assert any(e["event_type"] == "low_confidence_routed_to_review" for e in audit_timeline)
+    assert any(
+        e["event_type"] == "low_confidence_routed_to_review" for e in audit_timeline
+    )
 
     print("\n✅ E2E Low Confidence Human Review Queue Test Passed Successfully!")

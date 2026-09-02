@@ -89,3 +89,97 @@ class MatchActionResponse(BaseModel):
     status: str
     resolved_at: datetime
     message: str
+
+
+class ReconciliationSummaryResponse(BaseModel):
+    """API response schema for bank reconciliation summary."""
+
+    bank_statement_import_id: uuid.UUID
+    statement_period_start: date | None = None
+    statement_period_end: date | None = None
+    bank_statement_balance: float
+    gl_balance: float
+    difference: float
+    is_balanced: bool
+    status: str  # reconciled, review_required, partially_reconciled, unreconciled
+    total_transactions: int
+    matched_count: int
+    proposed_count: int
+    unmatched_count: int
+    gl_only_count: int
+    progress_percentage: int
+
+
+class AdjustmentSuggestionRequest(BaseModel):
+    """Request schema for an adjusting journal suggestion."""
+
+    bank_transaction_id: uuid.UUID = Field(
+        ..., description="UUID of the unmatched bank transaction to classify"
+    )
+
+
+class SuggestedJournalLine(BaseModel):
+    """A proposed double-entry line for an adjusting journal entry."""
+
+    account_code: str
+    account_name: str
+    description: str | None = None
+    debit_amount: float
+    credit_amount: float
+
+
+class AdjustmentSuggestionResponse(BaseModel):
+    """API response schema for an adjusting journal suggestion."""
+
+    bank_transaction_id: str
+    transaction_description: str
+    transaction_date: str
+    transaction_amount: float
+    currency: str
+    confidence_score: float
+    rationale: str
+    is_balanced: bool
+    uses_sensitive_account: bool
+    risk_flags: list[str]
+    suggested_lines: list[SuggestedJournalLine]
+    agent_name: str = "bookkeeping_agent"
+
+
+class ManualMatchRequest(BaseModel):
+    """Request schema for manually linking a bank transaction to a journal entry."""
+
+    bank_transaction_id: uuid.UUID
+    journal_entry_id: uuid.UUID
+    resolution_note: str | None = Field(
+        None, description="Optional explanation for manual match"
+    )
+
+
+class CreateAdjustmentJournalRequest(BaseModel):
+    """Request schema for creating an adjusting journal from a bank mutation."""
+
+    bank_transaction_id: uuid.UUID = Field(
+        ..., description="UUID of the bank transaction to create journal entry for"
+    )
+    entry_date: date | None = Field(
+        None, description="Optional custom entry date (defaults to transaction date)"
+    )
+    description: str | None = Field(
+        None, description="Optional custom memo (defaults to transaction description)"
+    )
+    lines: list[SuggestedJournalLine] | None = Field(
+        None,
+        description="Optional custom journal lines (defaults to AI suggested lines)",
+    )
+
+
+class CreateAdjustmentJournalResponse(BaseModel):
+    """Response schema after creating and posting an adjusting journal entry."""
+
+    journal_entry_id: uuid.UUID
+    bank_transaction_id: uuid.UUID
+    reconciliation_match_id: uuid.UUID
+    status: str = Field(..., description="e.g. posted")
+    total_debit: float
+    total_credit: float
+    message: str

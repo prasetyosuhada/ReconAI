@@ -18,6 +18,8 @@ dependencies = [
     "sqlalchemy>=2.0.28",
     "alembic>=1.13.1",
     "psycopg2-binary>=2.9.9",
+    "pypdf>=6.15.0",
+    "redis>=5.0.0",
 ]
 
 [dependency-groups]
@@ -43,6 +45,7 @@ ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
 "alembic/versions/*" = ["E501"]
+"tests/*" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"

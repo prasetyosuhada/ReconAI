@@ -72,6 +72,20 @@ class ReviewItemDetailResponse(BaseModel):
     created_at: datetime = Field(..., description="Creation timestamp in UTC")
     updated_at: datetime = Field(..., description="Last update timestamp in UTC")
 
+    # Convenience fields populated from original_payload for the frontend modals.
+    # These guarantee consistency: both GL modal and Review Queue modal read the
+    # same values from a single authoritative source.
+    confidence_score: float | None = Field(
+        None, description="AI confidence score extracted from payload"
+    )
+    risk_flags: list[str] = Field(
+        default_factory=list, description="AI risk flags extracted from payload"
+    )
+    journal_entry_id: str | None = Field(
+        None,
+        description="UUID of the linked JournalEntry (for bookkeeping reviews)",
+    )
+
     model_config = ConfigDict(from_attributes=True)
 
 

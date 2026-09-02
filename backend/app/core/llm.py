@@ -38,7 +38,7 @@ def get_llm(
         if not settings.GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY is missing from environment variables.")
 
-        selected_model = model_name or "gemini-2.5-flash"
+        selected_model = model_name or "gemini-3.1-flash-lite"
         logger.info("Initializing Gemini LLM model: %s", selected_model)
         return ChatGoogleGenerativeAI(
             model=selected_model,

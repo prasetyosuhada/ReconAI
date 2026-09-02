@@ -1,11 +1,18 @@
 import io
+import json
 import uuid
 from unittest.mock import patch
 
+import pytest
+from redis.exceptions import RedisError
+
+from app.api.v1.documents import observe_document_progress
 from app.models.audit import AuditEvent
+from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
+from app.services.audit_service import log_event
 from app.services.document_processing import process_document_background
 
 
@@ -61,12 +68,69 @@ def test_upload_document_empty_file(client):
     assert "Uploaded file is empty" in data["detail"]
 
 
+@pytest.mark.parametrize(
+    (
+        "bookkeeping_confidence",
+        "bookkeeping_rationale",
+        "bookkeeping_status",
+        "bookkeeping_needs_review",
+        "risk_flags",
+        "expected_journal_status",
+    ),
+    [
+        (
+            0.80,
+            "Account classification requires review",
+            "bookkeeping_review_required",
+            True,
+            ["low_confidence_classification"],
+            "review_required",
+        ),
+        (
+            0.94,
+            "Account classification is ready to post",
+            "ready_to_post",
+            False,
+            [],
+            "draft",
+        ),
+    ],
+)
+@patch("app.services.document_processing.publish_document_progress")
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
-def test_process_document_background_success(
-    mock_session_class, mock_graph, db_session
+def test_process_document_background_separates_agent_metadata(
+    mock_session_class,
+    mock_graph,
+    mock_publish_progress,
+    db_session,
+    bookkeeping_confidence,
+    bookkeeping_rationale,
+    bookkeeping_status,
+    bookkeeping_needs_review,
+    risk_flags,
+    expected_journal_status,
 ):
     mock_session_class.return_value = db_session
+    db_session.add_all(
+        [
+            ChartOfAccount(
+                account_code="5100",
+                account_name="Supplies",
+                account_type="expense",
+                normal_balance="debit",
+                is_active=True,
+            ),
+            ChartOfAccount(
+                account_code="2000",
+                account_name="Accounts Payable",
+                account_type="liability",
+                normal_balance="credit",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
 
     doc_id = uuid.uuid4()
     doc = Document(
@@ -81,7 +145,7 @@ def test_process_document_background_success(
     db_session.add(doc)
     db_session.commit()
 
-    mock_graph.invoke.return_value = {
+    intake_res = {
         "document_id": str(doc_id),
         "vendor_name": "Toko Gramedia",
         "transaction_date": "2026-08-01",
@@ -89,11 +153,14 @@ def test_process_document_background_success(
         "tax_amount": 11000.0,
         "total_amount": 111000.0,
         "currency": "IDR",
-        "confidence_score": 0.95,
+        "confidence_score": 0.96,
         "rationale": "High confidence extraction",
         "status": "extracted",
         "needs_review": False,
-        "journal_entry": [
+        "intake_processing_duration_ms": 1234.56,
+    }
+    bookkeeping_res = {
+        "journal_lines": [
             {
                 "account_code": "5100",
                 "account_name": "Supplies",
@@ -107,15 +174,31 @@ def test_process_document_background_success(
                 "credit_amount": 111000.0,
             },
         ],
+        "is_balanced": True,
+        "uses_sensitive_account": False,
+        "risk_flags": risk_flags,
+        "confidence_score": bookkeeping_confidence,
+        "rationale": bookkeeping_rationale,
+        "status": bookkeeping_status,
+        "needs_review": bookkeeping_needs_review,
+        "bookkeeping_processing_duration_ms": 2345.67,
     }
 
-    process_document_background(
-        document_id=str(doc_id),
-        stored_file_path="/tmp/invoice_office.pdf",
-        mime_type="application/pdf",
-        original_filename="invoice_office.pdf",
-        document_type="invoice",
-    )
+    mock_graph.stream.return_value = [
+        {"document_intake": intake_res},
+        {"bookkeeping": bookkeeping_res},
+    ]
+
+    with patch(
+        "app.services.document_processing.log_event", wraps=log_event
+    ) as mock_log_event:
+        process_document_background(
+            document_id=str(doc_id),
+            stored_file_path="/tmp/invoice_office.pdf",
+            mime_type="application/pdf",
+            original_filename="invoice_office.pdf",
+            document_type="invoice",
+        )
 
     # Verify Extraction record created
     ext = (
@@ -125,6 +208,9 @@ def test_process_document_background_success(
     )
     assert ext is not None
     assert ext.vendor_name == "Toko Gramedia"
+    assert float(ext.confidence_score) == 0.96
+    assert ext.rationale == "High confidence extraction"
+    assert ext.status == "extracted"
 
     # Verify Journal Entry created
     je = (
@@ -134,17 +220,64 @@ def test_process_document_background_success(
     )
     assert je is not None
     assert len(je.lines) == 2
+    assert float(je.confidence_score) == bookkeeping_confidence
+    assert je.rationale == bookkeeping_rationale
+    assert je.status == expected_journal_status
 
-    # Verify Audit Event recorded
-    audit = db_session.query(AuditEvent).filter(AuditEvent.source_id == doc_id).first()
-    assert audit is not None
-    assert audit.event_type == "extraction_completed"
+    # Verify each audit event retains the metadata of its owning agent.
+    extraction_audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "extraction_completed",
+            AuditEvent.source_id == doc_id,
+        )
+        .one()
+    )
+    assert float(extraction_audit.confidence_score) == 0.96
+    assert extraction_audit.rationale == "High confidence extraction"
+    assert extraction_audit.output_snapshot["status"] == "extracted"
+    assert extraction_audit.output_snapshot["needs_review"] is False
+    assert extraction_audit.output_snapshot["processing_duration_ms"] == 1234.56
+
+    bookkeeping_audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "bookkeeping_completed",
+            AuditEvent.source_id == je.id,
+        )
+        .one()
+    )
+    assert float(bookkeeping_audit.confidence_score) == bookkeeping_confidence
+    assert bookkeeping_audit.rationale == bookkeeping_rationale
+    assert bookkeeping_audit.output_snapshot["status"] == bookkeeping_status
+    assert (
+        bookkeeping_audit.output_snapshot["journal_status"] == expected_journal_status
+    )
+    assert bookkeeping_audit.output_snapshot["needs_review"] is bookkeeping_needs_review
+    assert bookkeeping_audit.output_snapshot["processing_duration_ms"] == 2345.67
+    assert bookkeeping_audit.created_at >= extraction_audit.created_at
+    bookkeeping_log_call = next(
+        call
+        for call in mock_log_event.call_args_list
+        if call.kwargs["event_type"] == "bookkeeping_completed"
+    )
+    assert bookkeeping_log_call.kwargs["created_at"] is not None
+
+    persisted_doc = db_session.query(Document).filter(Document.id == doc_id).one()
+    assert persisted_doc.status == bookkeeping_status
+    assert mock_publish_progress.call_count > 0
+
+    published_event_count = mock_publish_progress.call_count
+    process_document_background(document_id=str(doc_id))
+    assert mock_graph.stream.call_count == 1
+    assert mock_publish_progress.call_count == published_event_count
 
 
+@patch("app.services.document_processing.publish_document_progress")
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
 def test_process_document_background_review_required(
-    mock_session_class, mock_graph, db_session
+    mock_session_class, mock_graph, mock_publish_progress, db_session
 ):
     mock_session_class.return_value = db_session
 
@@ -161,14 +294,21 @@ def test_process_document_background_review_required(
     db_session.add(doc)
     db_session.commit()
 
-    mock_graph.invoke.return_value = {
+    intake_res = {
         "document_id": str(doc_id),
         "vendor_name": "Unknown Vendor",
         "confidence_score": 0.60,
+        "rationale": "Extraction is uncertain",
         "status": "extraction_review_required",
         "needs_review": True,
+        "intake_processing_duration_ms": 678.9,
         "risk_flags": ["low_confidence_extraction"],
     }
+
+    mock_graph.stream.return_value = [
+        {"document_intake": intake_res},
+        {"review_router": {"needs_review": True}},
+    ]
 
     process_document_background(
         document_id=str(doc_id),
@@ -182,3 +322,183 @@ def test_process_document_background_review_required(
     assert review is not None
     assert review.status == "pending"
     assert review.review_type == "extraction"
+
+    extraction = (
+        db_session.query(DocumentExtraction)
+        .filter(DocumentExtraction.document_id == doc_id)
+        .one()
+    )
+    assert float(extraction.confidence_score) == 0.60
+    assert extraction.rationale == "Extraction is uncertain"
+    assert extraction.status == "draft"
+
+    extraction_audit = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "extraction_completed",
+            AuditEvent.source_id == doc_id,
+        )
+        .one()
+    )
+    assert float(extraction_audit.confidence_score) == 0.60
+    assert extraction_audit.output_snapshot["status"] == "extraction_review_required"
+    assert extraction_audit.output_snapshot["needs_review"] is True
+    assert extraction_audit.output_snapshot["processing_duration_ms"] == 678.9
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.event_type == "bookkeeping_completed")
+        .count()
+        == 0
+    )
+    assert mock_publish_progress.call_count > 0
+
+
+@patch("app.api.v1.documents.read_document_progress")
+def test_stream_document_processing_sse(mock_read_progress, db_session):
+    doc_id = uuid.uuid4()
+    doc = Document(
+        id=doc_id,
+        original_filename="stream_invoice.pdf",
+        stored_file_path="/tmp/stream_invoice.pdf",
+        mime_type="application/pdf",
+        file_size_bytes=1024,
+        document_type="invoice",
+        status="uploaded",
+    )
+    db_session.add(doc)
+    db_session.commit()
+
+    mock_read_progress.return_value = [
+        (
+            "1000-0",
+            {
+                "stage": "intake_done",
+                "confidence_score": 0.95,
+                "message": "Intake complete",
+            },
+        ),
+        (
+            "1001-0",
+            {
+                "stage": "completed",
+                "confidence_score": 0.80,
+                "message": "Pipeline complete",
+            },
+        ),
+    ]
+
+    response_text = "".join(observe_document_progress(doc_id, "999-0"))
+    assert "data:" in response_text
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response_text.splitlines()
+        if line.startswith("data: ")
+    ]
+    intake_done = next(event for event in events if event["stage"] == "intake_done")
+    completed = next(event for event in events if event["stage"] == "completed")
+    assert intake_done["confidence_score"] == 0.95
+    assert completed["confidence_score"] == 0.80
+    assert "id: 1000-0" in response_text
+    mock_read_progress.assert_called_once_with(doc_id, "999-0")
+
+
+@patch("app.api.v1.documents.read_document_progress")
+def test_stream_document_processing_reports_redis_unavailable(
+    mock_read_progress, db_session
+):
+    doc_id = uuid.uuid4()
+    db_session.add(
+        Document(
+            id=doc_id,
+            original_filename="redis_down.pdf",
+            stored_file_path="/tmp/redis_down.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=100,
+            document_type="invoice",
+            status="extracting",
+        )
+    )
+    db_session.commit()
+    mock_read_progress.side_effect = RedisError("connection refused")
+
+    response_text = "".join(observe_document_progress(doc_id))
+    event = next(
+        json.loads(line.removeprefix("data: "))
+        for line in response_text.splitlines()
+        if line.startswith("data: ")
+    )
+    assert event["stage"] == "error"
+    assert "continues in the background" in event["message"]
+
+
+def test_list_documents_status_filtering(client, db_session):
+    """Test filtering documents by umbrella and exact status values."""
+    docs = [
+        Document(
+            id=uuid.uuid4(),
+            original_filename="doc_ext_rev.pdf",
+            stored_file_path="/tmp/doc1.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            document_type="invoice",
+            status="extraction_review_required",
+        ),
+        Document(
+            id=uuid.uuid4(),
+            original_filename="doc_bk_rev.pdf",
+            stored_file_path="/tmp/doc2.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            document_type="invoice",
+            status="bookkeeping_review_required",
+        ),
+        Document(
+            id=uuid.uuid4(),
+            original_filename="doc_ready.pdf",
+            stored_file_path="/tmp/doc3.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            document_type="receipt",
+            status="ready_to_post",
+        ),
+        Document(
+            id=uuid.uuid4(),
+            original_filename="doc_proc.pdf",
+            stored_file_path="/tmp/doc4.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            document_type="invoice",
+            status="extracting",
+        ),
+    ]
+    for d in docs:
+        db_session.add(d)
+    db_session.commit()
+
+    # 1. Umbrella review_required filter (should match extraction_review_required and bookkeeping_review_required)
+    res = client.get("/api/v1/documents?status=review_required")
+    assert res.status_code == 200
+    items = res.json()["items"]
+    statuses = {item["status"] for item in items}
+    assert "extraction_review_required" in statuses
+    assert "bookkeeping_review_required" in statuses
+    assert "ready_to_post" not in statuses
+
+    # 2. Specific extraction_review_required filter
+    res_ext = client.get("/api/v1/documents?status=extraction_review_required")
+    assert res_ext.status_code == 200
+    ext_items = res_ext.json()["items"]
+    assert all(item["status"] == "extraction_review_required" for item in ext_items)
+
+    # 3. Specific ready_to_post filter
+    res_ready = client.get("/api/v1/documents?status=ready_to_post")
+    assert res_ready.status_code == 200
+    ready_items = res_ready.json()["items"]
+    assert all(item["status"] == "ready_to_post" for item in ready_items)
+    assert any(item["original_filename"] == "doc_ready.pdf" for item in ready_items)
+
+    # 4. Processing umbrella filter (matching 'extracting')
+    res_proc = client.get("/api/v1/documents?status=processing")
+    assert res_proc.status_code == 200
+    proc_items = res_proc.json()["items"]
+    assert any(item["status"] == "extracting" for item in proc_items)

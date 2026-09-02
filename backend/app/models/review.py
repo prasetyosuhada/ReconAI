@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Index, String, Text, func
+from sqlalchemy import DateTime, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,7 +11,18 @@ from app.db.base_class import Base
 
 class ReviewItem(Base):
     __tablename__ = "review_items"
-    __table_args__ = (Index("idx_review_items_source", "source_type", "source_id"),)
+    __table_args__ = (
+        Index("idx_review_items_source", "source_type", "source_id"),
+        Index(
+            "uq_review_items_pending_source",
+            "source_type",
+            "source_id",
+            "review_type",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

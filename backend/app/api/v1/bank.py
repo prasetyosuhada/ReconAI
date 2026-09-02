@@ -16,18 +16,19 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import func
+from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.audit import AuditEvent
 from app.models.reconciliation import BankStatementImport, BankTransaction
 from app.schemas.bank import (
     BankStatementImportListResponse,
     BankStatementImportResponse,
     BankTransactionListResponse,
+    BankTransactionResponse,
 )
+from app.services.audit_service import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ router = APIRouter(prefix="/bank-statements", tags=["Bank Statements"])
 bank_router = APIRouter(prefix="/bank", tags=["Bank Statements"])
 
 UPLOAD_STORAGE_DIR = Path("./storage/bank_imports")
+MAX_BANK_UPLOAD_BYTES = 5 * 1024 * 1024
 
 
 def _get_bank_storage_dir() -> Path:
@@ -87,6 +89,11 @@ async def upload_bank_statement_csv(
         )
 
     content_bytes = await file.read()
+    if len(content_bytes) > MAX_BANK_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Uploaded bank statement exceeds the 5 MB size limit.",
+        )
     if not content_bytes or len(content_bytes) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -197,7 +204,8 @@ async def upload_bank_statement_csv(
     db.add_all(tx_objects)
 
     # Audit Trail Event
-    audit = AuditEvent(
+    log_event(
+        db=db,
         event_type="bank_statement_imported",
         source_type="bank_statement_import",
         source_id=import_uuid,
@@ -209,7 +217,6 @@ async def upload_bank_statement_csv(
         },
         output_snapshot={"status": "imported", "row_count": len(tx_objects)},
     )
-    db.add(audit)
     db.commit()
 
     self_tx_link = f"{settings.API_V1_STR}/bank-statements/{import_uuid}/transactions"
@@ -259,6 +266,93 @@ def list_bank_statement_imports(
 
 
 @router.get(
+    "/transactions",
+    response_model=BankTransactionListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List all bank transactions with search",
+)
+@bank_router.get(
+    "/transactions",
+    response_model=BankTransactionListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List all bank transactions with search",
+)
+def list_all_bank_transactions(
+    search: str | None = Query(
+        None, description="Search description, reference number, #TX-ID, or amount"
+    ),
+    status_filter: str | None = Query(
+        None,
+        alias="status",
+        description="Filter by transaction status (imported, matched, unmatched)",
+    ),
+    bank_statement_import_id: str | None = Query(
+        None, description="Filter by bank statement import UUID"
+    ),
+    limit: int = Query(50, ge=1, le=250, description="Pagination limit"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    db: Session = Depends(get_db),
+) -> BankTransactionListResponse:
+    """Fetch paginated bank transactions across all imports with optional search."""
+    query = db.query(BankTransaction)
+
+    if bank_statement_import_id:
+        try:
+            imp_uuid = uuid.UUID(bank_statement_import_id)
+            query = query.filter(BankTransaction.bank_statement_import_id == imp_uuid)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid bank_statement_import_id UUID format.",
+            ) from None
+
+    if status_filter:
+        query = query.filter(BankTransaction.status == status_filter)
+
+    if search and search.strip():
+        s_clean = search.strip()
+        term = f"%{s_clean}%"
+        search_conds = [
+            BankTransaction.description.ilike(term),
+            BankTransaction.reference_number.ilike(term),
+        ]
+        # Match TX ID or prefix like #TX-1234abcd
+        id_part = (
+            s_clean.replace("#TX-", "").replace("TX-", "").replace("#", "").strip()
+        )
+        if id_part:
+            search_conds.append(cast(BankTransaction.id, String).ilike(f"%{id_part}%"))
+
+        # Check numeric amount match
+        amt_str = s_clean.replace(",", "").replace(".", "")
+        if amt_str.replace("-", "").isdigit():
+            try:
+                amt_val = float(s_clean.replace(",", ""))
+                search_conds.append(BankTransaction.amount == amt_val)
+            except ValueError:
+                pass
+
+        query = query.filter(or_(*search_conds))
+
+    total_count = query.with_entities(func.count(BankTransaction.id)).scalar() or 0
+    items = (
+        query.order_by(
+            BankTransaction.transaction_date.desc(), BankTransaction.created_at.desc()
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    return BankTransactionListResponse(
+        items=items,
+        total=total_count,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
     "/{bank_statement_import_id}/transactions",
     response_model=BankTransactionListResponse,
     status_code=status.HTTP_200_OK,
@@ -297,3 +391,37 @@ def list_bank_statement_transactions(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get(
+    "/transactions/{transaction_id}",
+    response_model=BankTransactionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get single bank transaction by ID",
+)
+@bank_router.get(
+    "/transactions/{transaction_id}",
+    response_model=BankTransactionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get single bank transaction by ID",
+)
+def get_bank_transaction(
+    transaction_id: str,
+    db: Session = Depends(get_db),
+) -> BankTransactionResponse:
+    """Fetch single bank transaction by UUID."""
+    try:
+        tx_uuid = uuid.UUID(transaction_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid bank transaction UUID format.",
+        ) from None
+
+    tx = db.query(BankTransaction).filter(BankTransaction.id == tx_uuid).first()
+    if not tx:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Bank transaction [{transaction_id}] not found.",
+        )
+    return tx

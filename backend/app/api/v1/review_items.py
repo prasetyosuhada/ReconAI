@@ -2,16 +2,19 @@
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from time import perf_counter
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from app.agents.bookkeeping import classify_bookkeeping
 from app.db.session import get_db
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
-from app.models.document import Document
+from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry, JournalEntryLine
 from app.models.review import ReviewItem
 from app.schemas.review import (
@@ -24,7 +27,14 @@ from app.schemas.review import (
     ReviewRejectRequest,
     ReviewRejectResponse,
 )
-from app.services.accounting import post_journal_entry_to_ledger
+from app.services.accounting import (
+    post_journal_entry_to_ledger,
+)
+from app.services.audit_service import log_event
+from app.services.bookkeeping_persistence import (
+    load_active_chart_of_accounts,
+    persist_bookkeeping_outcome,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +60,164 @@ def _get_review_item_or_404(review_item_id: str, db: Session) -> ReviewItem:
     return item
 
 
+def _parse_date_value(value: Any) -> date | None:
+    """Parse dates from review payloads without trusting client formatting."""
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str) and len(value) >= 10:
+        try:
+            return datetime.strptime(value[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+    return None
+
+
+def _merge_review_payload(
+    original_payload: dict[str, Any] | list[Any] | None,
+    edited_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Combine agent payload and human corrections for downstream workflow."""
+    payload = dict(original_payload) if isinstance(original_payload, dict) else {}
+    payload.update(edited_payload or {})
+    return payload
+
+
+def _chart_of_accounts_payload(db: Session) -> list[dict[str, Any]]:
+    return load_active_chart_of_accounts(db)
+
+
+def _upsert_reviewed_extraction(
+    doc: Document,
+    payload: dict[str, Any],
+    resolution_note: str | None,
+    db: Session,
+) -> DocumentExtraction:
+    extraction = (
+        db.query(DocumentExtraction)
+        .filter(DocumentExtraction.document_id == doc.id)
+        .order_by(DocumentExtraction.created_at.desc())
+        .first()
+    )
+
+    if not extraction:
+        extraction = DocumentExtraction(id=uuid.uuid4(), document_id=doc.id)
+        db.add(extraction)
+
+    if payload.get("document_type"):
+        doc.document_type = payload["document_type"]
+
+    extraction.vendor_name = payload.get("vendor_name")
+    extraction.transaction_date = _parse_date_value(payload.get("transaction_date"))
+    extraction.subtotal_amount = payload.get("subtotal_amount")
+    extraction.tax_amount = payload.get("tax_amount")
+    extraction.total_amount = payload.get("total_amount")
+    extraction.currency = payload.get("currency", "IDR")
+    extraction.line_items = payload.get("line_items", [])
+    extraction.raw_text = payload.get("raw_text")
+    extraction.confidence_score = payload.get("confidence_score", 1.0)
+    extraction.rationale = resolution_note or payload.get("rationale")
+    extraction.status = "extracted"
+    db.flush()
+    return extraction
+
+
+def _continue_document_to_bookkeeping(
+    item: ReviewItem,
+    payload: dict[str, Any],
+    resolution_note: str | None,
+    db: Session,
+) -> str:
+    """Continue a human-reviewed extraction directly into bookkeeping."""
+    doc = db.query(Document).filter(Document.id == item.source_id).first()
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document [{item.source_id}] not found.",
+        )
+
+    extraction = _upsert_reviewed_extraction(doc, payload, resolution_note, db)
+    extraction_data = {
+        "extraction_notes": payload.get("extraction_notes"),
+        "vendor_name": extraction.vendor_name,
+        "transaction_date": extraction.transaction_date.isoformat()
+        if extraction.transaction_date
+        else None,
+        "subtotal_amount": float(extraction.subtotal_amount)
+        if extraction.subtotal_amount is not None
+        else None,
+        "tax_amount": float(extraction.tax_amount)
+        if extraction.tax_amount is not None
+        else None,
+        "total_amount": float(extraction.total_amount)
+        if extraction.total_amount is not None
+        else None,
+        "currency": extraction.currency,
+        "document_type": doc.document_type,
+        "line_items": extraction.line_items or [],
+    }
+    started_at = perf_counter()
+    outcome = classify_bookkeeping(
+        extraction_data=extraction_data,
+        chart_of_accounts=_chart_of_accounts_payload(db),
+    )
+    processing_duration_ms = round(max(0.0, (perf_counter() - started_at) * 1000), 2)
+    bookkeeping_completed_at = datetime.now(UTC)
+    persistence = persist_bookkeeping_outcome(
+        db=db,
+        document=doc,
+        extraction=extraction,
+        outcome=outcome,
+    )
+    if not persistence.success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Journal save failed: {'; '.join(persistence.errors)}",
+        )
+
+    audit_source_id = persistence.journal_entry_id or doc.id
+    existing_bookkeeping_audit = (
+        db.query(AuditEvent)
+        .filter(
+            AuditEvent.event_type == "bookkeeping_completed",
+            AuditEvent.source_id == audit_source_id,
+        )
+        .first()
+    )
+    if not existing_bookkeeping_audit:
+        log_event(
+            db=db,
+            event_type="bookkeeping_completed",
+            source_type=(
+                "journal_entry" if persistence.journal_entry_id else "document"
+            ),
+            source_id=audit_source_id,
+            actor_type="agent",
+            actor_name="BookkeepingAgent",
+            input_snapshot={
+                "review_item_id": str(item.id),
+                "review_type": "extraction",
+                "triggered_by": "extraction_review_approval",
+            },
+            output_snapshot={
+                "decision": persistence.decision,
+                "reasoning": persistence.reasoning,
+                "status": persistence.status,
+                "journal_entry_id": str(persistence.journal_entry_id)
+                if persistence.journal_entry_id
+                else None,
+                "needs_review": outcome.needs_review,
+                "processing_duration_ms": processing_duration_ms,
+            },
+            confidence_score=outcome.confidence_score,
+            rationale=outcome.rationale,
+            document_id=doc.id,
+            created_at=bookkeeping_completed_at,
+        )
+    return persistence.status
+
+
 @router.get(
     "",
     response_model=ReviewItemListResponse,
@@ -66,6 +234,18 @@ def list_review_items(
         None,
         description="Filter by type e.g. extraction, bookkeeping, reconciliation",
     ),
+    priority: str | None = Query(
+        None,
+        description="Filter by priority e.g. high, normal, low",
+    ),
+    search: str | None = Query(
+        None,
+        description="Search title, summary, or ID",
+    ),
+    resolved_today: bool = Query(
+        False,
+        description="Filter items resolved/approved/posted today",
+    ),
     limit: int = Query(50, ge=1, le=250, description="Pagination limit"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     db: Session = Depends(get_db),
@@ -78,6 +258,30 @@ def list_review_items(
 
     if review_type:
         query = query.filter(ReviewItem.review_type == review_type)
+
+    if priority:
+        query = query.filter(ReviewItem.priority == priority)
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                ReviewItem.title.ilike(term),
+                ReviewItem.summary.ilike(term),
+            )
+        )
+
+    if resolved_today:
+        if not status_filter:
+            query = query.filter(
+                ReviewItem.status.in_(["approved", "posted", "edited"])
+            )
+        query = query.filter(ReviewItem.resolved_at.isnot(None))
+        today_date = datetime.now(UTC).date()
+        today_start = datetime.combine(today_date, datetime.min.time()).replace(
+            tzinfo=UTC
+        )
+        query = query.filter(ReviewItem.resolved_at >= today_start)
 
     total_count = query.with_entities(func.count(ReviewItem.id)).scalar() or 0
 
@@ -104,7 +308,72 @@ def get_review_item_detail(
     db: Session = Depends(get_db),
 ) -> ReviewItemDetailResponse:
     """Fetch review item details by UUID."""
-    return _get_review_item_or_404(review_item_id, db)
+    item = _get_review_item_or_404(review_item_id, db)
+
+    payload: dict = {}
+    if isinstance(item.original_payload, dict):
+        payload = dict(item.original_payload)
+
+    # Enrich with BankTransaction & ReconciliationMatch data if reconciliation item
+    if item.source_type == "bank_transaction" and item.source_id:
+        from app.models.reconciliation import BankTransaction, ReconciliationMatch
+
+        tx = (
+            db.query(BankTransaction)
+            .filter(BankTransaction.id == item.source_id)
+            .first()
+        )
+        if tx:
+            payload.setdefault("tx_id", str(tx.id))
+            payload.setdefault("transaction_date", str(tx.transaction_date))
+            payload.setdefault("amount", float(tx.amount))
+            payload.setdefault("description", tx.description)
+            payload.setdefault("currency", tx.currency or "IDR")
+            payload.setdefault("reference_number", tx.reference_number)
+
+            # Check if match candidate exists
+            match = (
+                db.query(ReconciliationMatch)
+                .filter(ReconciliationMatch.bank_transaction_id == tx.id)
+                .order_by(ReconciliationMatch.created_at.desc())
+                .first()
+            )
+            if match and match.journal_entry_id:
+                payload.setdefault(
+                    "proposed_journal_entry_id", str(match.journal_entry_id)
+                )
+                payload.setdefault("confidence_score", match.confidence_score)
+                payload.setdefault("amount_score", match.amount_score)
+                payload.setdefault("date_score", match.date_score)
+                payload.setdefault("vendor_score", match.vendor_score)
+                if match.rationale:
+                    payload.setdefault("rationale", match.rationale)
+
+    return ReviewItemDetailResponse(
+        id=item.id,
+        review_type=item.review_type,
+        status=item.status,
+        priority=item.priority,
+        source_type=item.source_type,
+        source_id=item.source_id,
+        title=item.title,
+        summary=item.summary,
+        suggested_action=item.suggested_action,
+        original_payload=payload,
+        edited_payload=item.edited_payload,
+        resolution_note=item.resolution_note,
+        resolved_by=item.resolved_by,
+        resolved_at=item.resolved_at,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+        # Convenience fields: populated from pinned payload for guaranteed consistency
+        confidence_score=float(payload["confidence_score"])
+        if "confidence_score" in payload and payload["confidence_score"] is not None
+        else None,
+        risk_flags=list(payload.get("risk_flags") or []),
+        journal_entry_id=payload.get("journal_entry_id")
+        or payload.get("proposed_journal_entry_id"),
+    )
 
 
 @router.post(
@@ -135,32 +404,102 @@ def approve_review_item(
     item.resolved_by = "human_user"
     item.resolved_at = now_utc
 
+    # Resolve document_id up-front (needed for the audit event logged below)
+    doc_id_to_pass = None
+    if item.source_type == "document":
+        doc_id_to_pass = item.source_id
+    elif item.source_type == "journal_entry":
+        je_rec = (
+            db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        )
+        if je_rec and je_rec.document_id:
+            doc_id_to_pass = je_rec.document_id
+
+    # --- Log the human action FIRST so it sorts before any downstream agent events ---
+    # _continue_document_to_bookkeeping (called below for extraction reviews) logs its
+    # own audit event within the same transaction. Both events can end up with identical
+    # microsecond timestamps, so we must write the human-action event before the agent
+    # event to guarantee the correct ordering in the audit trail.
+    log_event(
+        db=db,
+        event_type="review_item_approved",
+        source_type="review_item",
+        source_id=item.id,
+        actor_type="human",
+        actor_name="human_user",
+        human_action="approved",
+        input_snapshot={
+            "resolution_note": resolution_note,
+            "review_type": item.review_type,
+        },
+        output_snapshot={
+            "status": "approved",
+            # next_workflow_status will be determined by the workflow branch below;
+            # we set a preliminary value here — the strip reads it from the event_type,
+            # not from this field, so the exact value doesn't affect rendering.
+            "next_workflow_status": "approved",
+        },
+        document_id=doc_id_to_pass,
+        created_at=now_utc,
+    )
+
     next_workflow_status = "approved"
 
     # Advance workflow based on source entity
     if item.source_type == "document":
-        doc = db.query(Document).filter(Document.id == item.source_id).first()
-        je = (
-            db.query(JournalEntry)
-            .filter(JournalEntry.document_id == item.source_id)
-            .first()
-        )
-
-        if je:
-            post_res = post_journal_entry_to_ledger(
-                journal_entry=je, db_session=db, posted_by="human_user"
+        if item.review_type == "extraction":
+            payload = _merge_review_payload(item.original_payload)
+            next_workflow_status = _continue_document_to_bookkeeping(
+                item=item,
+                payload=payload,
+                resolution_note=resolution_note,
+                db=db,
             )
-            if not post_res.success:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Posting failed: {'; '.join(post_res.errors)}",
+        else:
+            doc = db.query(Document).filter(Document.id == item.source_id).first()
+            je = (
+                db.query(JournalEntry)
+                .filter(JournalEntry.document_id == item.source_id)
+                .first()
+            )
+
+            if je:
+                post_res = post_journal_entry_to_ledger(
+                    journal_entry=je, db_session=db, posted_by="human_user"
                 )
-            next_workflow_status = "posted"
-            if doc:
-                doc.status = "posted"
-        elif doc:
-            doc.status = "approved"
-            next_workflow_status = "approved"
+                if not post_res.success:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Posting failed: {'; '.join(post_res.errors)}",
+                    )
+                next_workflow_status = "posted"
+                if doc:
+                    doc.status = "posted"
+                log_event(
+                    db=db,
+                    event_type="journal_entry_posted",
+                    source_type="journal_entry",
+                    source_id=je.id,
+                    actor_type="human",
+                    actor_name="human_user",
+                    input_snapshot={"triggered_by": "review_item_approved"},
+                    output_snapshot={
+                        "status": "posted",
+                        "journal_entry_id": str(je.id),
+                        "gl_period": je.entry_date.strftime("%Y-%m")
+                        if je.entry_date
+                        else None,
+                        "document_id": str(item.source_id),
+                    },
+                    rationale=(
+                        "Journal entry posted automatically after bookkeeping "
+                        "review approval."
+                    ),
+                    document_id=item.source_id,
+                )
+            elif doc:
+                doc.status = "approved"
+                next_workflow_status = "approved"
 
     elif item.source_type == "journal_entry":
         je = db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
@@ -174,21 +513,56 @@ def approve_review_item(
                     detail=f"Posting failed: {'; '.join(post_res.errors)}",
                 )
             next_workflow_status = "posted"
+            _je_doc_id = getattr(je, "document_id", None)
+            if _je_doc_id:
+                doc = db.query(Document).filter(Document.id == _je_doc_id).first()
+                if doc:
+                    doc.status = "posted"
+            log_event(
+                db=db,
+                event_type="journal_entry_posted",
+                source_type="journal_entry",
+                source_id=je.id,
+                actor_type="human",
+                actor_name="human_user",
+                input_snapshot={"triggered_by": "review_item_approved"},
+                output_snapshot={
+                    "status": "posted",
+                    "journal_entry_id": str(je.id),
+                    "gl_period": je.entry_date.strftime("%Y-%m")
+                    if je.entry_date
+                    else None,
+                    "document_id": str(_je_doc_id) if _je_doc_id else None,
+                },
+                rationale=(
+                    "Journal entry posted automatically after bookkeeping "
+                    "review approval."
+                ),
+                document_id=_je_doc_id,
+            )
 
-    # Audit Trail Event
-    audit = AuditEvent(
-        event_type="review_item_approved",
-        source_type="review_item",
-        source_id=item.id,
-        actor_type="human",
-        actor_name="human_user",
-        input_snapshot={"resolution_note": resolution_note},
-        output_snapshot={
-            "status": "approved",
-            "next_workflow_status": next_workflow_status,
-        },
-    )
-    db.add(audit)
+    elif item.source_type == "bank_transaction":
+        from app.models.reconciliation import BankTransaction, ReconciliationMatch
+
+        tx = (
+            db.query(BankTransaction)
+            .filter(BankTransaction.id == item.source_id)
+            .first()
+        )
+        match = (
+            db.query(ReconciliationMatch)
+            .filter(ReconciliationMatch.bank_transaction_id == item.source_id)
+            .first()
+        )
+        if match:
+            match.status = "accepted"
+            match.updated_at = now_utc
+            if tx:
+                tx.status = "matched"
+            next_workflow_status = "matched"
+        elif tx:
+            next_workflow_status = "approved"
+
     db.commit()
 
     return ReviewApproveResponse(
@@ -227,7 +601,49 @@ def edit_review_item(
     item.resolved_by = "human_user"
     item.resolved_at = now_utc
 
+    # Resolve document_id up-front (needed for the audit event logged below)
+    doc_id_to_pass_edit: uuid.UUID | None = None
+    if item.source_type == "document":
+        doc_id_to_pass_edit = item.source_id
+    elif item.source_type == "journal_entry":
+        _je_edit = (
+            db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        )
+        if _je_edit and _je_edit.document_id:
+            doc_id_to_pass_edit = _je_edit.document_id
+
+    # --- Log the human action FIRST (same ordering fix as approve endpoint) ---
+    log_event(
+        db=db,
+        event_type="review_item_edited",
+        source_type="review_item",
+        source_id=item.id,
+        actor_type="human",
+        actor_name="human_user",
+        human_action="edited",
+        input_snapshot={
+            "edited_payload": req.edited_payload,
+            "resolution_note": req.resolution_note,
+            "review_type": item.review_type,
+        },
+        output_snapshot={
+            "status": "edited",
+            "next_workflow_status": "edited",
+        },
+        document_id=doc_id_to_pass_edit,
+        created_at=now_utc,
+    )
+
     next_workflow_status = "edited"
+
+    if item.source_type == "document" and item.review_type == "extraction":
+        payload = _merge_review_payload(item.original_payload, req.edited_payload)
+        next_workflow_status = _continue_document_to_bookkeeping(
+            item=item,
+            payload=payload,
+            resolution_note=req.resolution_note,
+            db=db,
+        )
 
     # If editing journal lines in payload, update JournalEntry model
     je = None
@@ -294,24 +710,32 @@ def edit_review_item(
                 detail=f"Posting failed: {'; '.join(post_res.errors)}",
             )
         next_workflow_status = "posted"
+        _edit_je_doc_id = getattr(je, "document_id", None)
+        if _edit_je_doc_id:
+            doc = db.query(Document).filter(Document.id == _edit_je_doc_id).first()
+            if doc:
+                doc.status = "posted"
+        log_event(
+            db=db,
+            event_type="journal_entry_posted",
+            source_type="journal_entry",
+            source_id=je.id,
+            actor_type="human",
+            actor_name="human_user",
+            input_snapshot={"triggered_by": "review_item_edited"},
+            output_snapshot={
+                "status": "posted",
+                "journal_entry_id": str(je.id),
+                "gl_period": je.entry_date.strftime("%Y-%m") if je.entry_date else None,
+                "document_id": str(_edit_je_doc_id) if _edit_je_doc_id else None,
+            },
+            rationale=(
+                "Journal entry posted automatically after bookkeeping review "
+                "edit and approval."
+            ),
+            document_id=_edit_je_doc_id,
+        )
 
-    # Audit Event
-    audit = AuditEvent(
-        event_type="review_item_edited",
-        source_type="review_item",
-        source_id=item.id,
-        actor_type="human",
-        actor_name="human_user",
-        input_snapshot={
-            "edited_payload": req.edited_payload,
-            "resolution_note": req.resolution_note,
-        },
-        output_snapshot={
-            "status": "edited",
-            "next_workflow_status": next_workflow_status,
-        },
-    )
-    db.add(audit)
     db.commit()
 
     return ReviewEditResponse(
@@ -369,17 +793,67 @@ def reject_review_item(
         if je:
             je.status = "rejected"
 
+    elif item.source_type == "bank_transaction":
+        from app.models.adjustment_suggestion import AdjustmentSuggestion
+        from app.models.reconciliation import BankTransaction, ReconciliationMatch
+        from app.services.reconciliation import compute_and_save_adjustment_suggestion
+
+        tx = (
+            db.query(BankTransaction)
+            .filter(BankTransaction.id == item.source_id)
+            .first()
+        )
+        match = (
+            db.query(ReconciliationMatch)
+            .filter(ReconciliationMatch.bank_transaction_id == item.source_id)
+            .first()
+        )
+        if match:
+            match.status = "rejected"
+            match.updated_at = now_utc
+        if tx:
+            tx.status = "imported"
+            existing_sug = (
+                db.query(AdjustmentSuggestion)
+                .filter(AdjustmentSuggestion.bank_transaction_id == tx.id)
+                .first()
+            )
+            if not existing_sug:
+                try:
+                    compute_and_save_adjustment_suggestion(tx=tx, db=db)
+                except Exception as e:
+                    logger.warning(
+                        "Could not generate eager suggestion on review item reject: %s",
+                        e,
+                    )
+
+    # Resolve document_id if available
+    doc_id_to_pass = None
+    if item.source_type == "document":
+        doc_id_to_pass = item.source_id
+    elif item.source_type == "journal_entry":
+        je_rec = (
+            db.query(JournalEntry).filter(JournalEntry.id == item.source_id).first()
+        )
+        if je_rec and je_rec.document_id:
+            doc_id_to_pass = je_rec.document_id
+
     # Audit Event
-    audit = AuditEvent(
+    log_event(
+        db=db,
         event_type="review_item_rejected",
         source_type="review_item",
         source_id=item.id,
         actor_type="human",
         actor_name="human_user",
-        input_snapshot={"resolution_note": resolution_note},
+        human_action="rejected",
+        input_snapshot={
+            "resolution_note": resolution_note,
+            "review_type": item.review_type,
+        },
         output_snapshot={"status": "rejected"},
+        document_id=doc_id_to_pass,
     )
-    db.add(audit)
     db.commit()
 
     return ReviewRejectResponse(

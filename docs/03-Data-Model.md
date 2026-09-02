@@ -494,6 +494,7 @@ The first demo should use a small but realistic chart of accounts.
 | `1100` | Accounts Receivable | Asset | Debit | No |
 | `1200` | Inventory | Asset | Debit | No |
 | `1300` | Prepaid Expenses | Asset | Debit | No |
+| `1400` | PPN Masukan (Input VAT) | Asset | Debit | No |
 | `2000` | Accounts Payable | Liability | Credit | No |
 | `2100` | Tax Payable | Liability | Credit | Yes |
 | `2200` | Loans Payable | Liability | Credit | Yes |

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 def run_document_intake_agent(
     raw_text: str | None = None,
+    image_base64: str | None = None,
     original_filename: str = "document.pdf",
     mime_type: str = "application/pdf",
     demo_currency: str = "IDR",
@@ -27,6 +28,7 @@ def run_document_intake_agent(
 
     Args:
         raw_text: Raw text or OCR output from the document.
+        image_base64: Optional base64-encoded image for vision-capable providers.
         original_filename: Original file name.
         mime_type: MIME type of the uploaded file.
         demo_currency: Configured fallback demo currency (default "IDR").
@@ -38,7 +40,7 @@ def run_document_intake_agent(
     """
     logger.info("Executing Document Intake Agent for file: %s", original_filename)
 
-    if not raw_text or not raw_text.strip():
+    if not raw_text and not image_base64:
         logger.warning("Empty text input provided to Document Intake Agent.")
         return DocumentIntakeResponse(
             agent_name="document_intake_agent",
@@ -70,19 +72,50 @@ def run_document_intake_agent(
             f"--- DOCUMENT TEXT END ---"
         )
 
+        human_content: str | list[dict[str, object]] = user_content
+        if image_base64:
+            human_content = [
+                {"type": "text", "text": user_content},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
+                },
+            ]
+
         messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(content=user_content),
+            HumanMessage(content=human_content),
         ]
+
+        logger.info(
+            "Sending document text (%d chars) to LLM (%s)...",
+            len(raw_text or ""),
+            provider or "default",
+        )
 
         response: DocumentIntakeResponse = structured_llm.invoke(messages)
 
-        # Post-process & enforce deterministic confidence heuristics
+        logger.info(
+            "🤖 [LLM Intake] Vendor: '%s' | Total: %s %s | Conf: %.2f | Rationale: %s",
+            response.result.vendor_name,
+            response.result.total_amount,
+            response.result.currency,
+            response.confidence_score,
+            response.rationale,
+        )
         result = response.result
         warnings = list(response.warnings or [])
+        low_confidence_fields = list(response.low_confidence_fields or [])
 
         # Heuristic 1: Check missing essential fields
         if not result.vendor_name or not result.total_amount:
+            if not result.vendor_name and "vendor_name" not in low_confidence_fields:
+                low_confidence_fields.append("vendor_name")
+            if (
+                result.total_amount is None
+                and "total_amount" not in low_confidence_fields
+            ):
+                low_confidence_fields.append("total_amount")
             if "Vendor name or total amount is missing." not in warnings:
                 warnings.append("Vendor name or total amount is missing.")
             status = "needs_review"
@@ -100,6 +133,8 @@ def run_document_intake_agent(
             expected_total = round(result.subtotal_amount + result.tax_amount, 2)
             actual_total = round(result.total_amount, 2)
             if abs(expected_total - actual_total) > 0.05:
+                if "tax_amount" not in low_confidence_fields:
+                    low_confidence_fields.append("tax_amount")
                 math_warning = (
                     f"Subtotal ({result.subtotal_amount}) + Tax "
                     f"({result.tax_amount}) = {expected_total}, "
@@ -116,6 +151,7 @@ def run_document_intake_agent(
             confidence_score=confidence,
             rationale=response.rationale,
             warnings=warnings,
+            low_confidence_fields=low_confidence_fields,
             result=result,
         )
 

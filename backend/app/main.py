@@ -16,8 +16,8 @@ if settings.CORS_ORIGINS:
         CORSMiddleware,
         allow_origins=[str(origin) for origin in settings.CORS_ORIGINS],
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Accept", "Authorization", "Content-Type", "Last-Event-ID"],
     )
 
 # Include API V1 Router

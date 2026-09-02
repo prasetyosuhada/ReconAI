@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import { ReviewQueueHeader } from './ReviewQueueHeader'
 import { ReviewQueueList } from './ReviewQueueList'
-import { ReviewDetailModal } from './ReviewDetailModal'
+import { ExtractionReviewModal } from './ExtractionReviewModal'
+import { BookkeepingReviewModal } from './BookkeepingReviewModal'
+import { ReconciliationReviewModal } from './ReconciliationReviewModal'
 import type { ReviewItemResponse } from '../../services/api'
-import { fetchReviewItems } from '../../services/api'
+import { fetchReviewItems, notifyReviewQueueUpdated } from '../../services/api'
 
 interface ReviewQueueViewProps {
   onInspectItem?: (item: ReviewItemResponse) => void
@@ -11,30 +13,58 @@ interface ReviewQueueViewProps {
 
 export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem }) => {
   const [items, setItems] = useState<ReviewItemResponse[]>([])
+  const [total, setTotal] = useState<number>(0)
   const [loading, setLoading] = useState<boolean>(true)
   const [statusFilter, setStatusFilter] = useState<string>('pending')
   const [typeFilter, setTypeFilter] = useState<string>('')
+  const [searchTerm, setSearchTerm] = useState<string>('')
+  const [page, setPage] = useState<number>(1)
+  const [pageSize, setPageSize] = useState<number>(10)
   const [selectedItem, setSelectedItem] = useState<ReviewItemResponse | null>(null)
 
-  const loadReviewItems = async () => {
+  // Header statistics state
+  const [pendingCount, setPendingCount] = useState<number>(0)
+  const [highPriorityCount, setHighPriorityCount] = useState<number>(0)
+  const [approvedCount, setApprovedCount] = useState<number>(0)
+
+  const loadReviewItems = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetchReviewItems({
-        status: statusFilter || undefined,
-        review_type: typeFilter || undefined,
-        limit: 50,
-      })
+      const [res, pendingRes, highRes, approvedRes] = await Promise.all([
+        fetchReviewItems({
+          status: statusFilter || undefined,
+          review_type: typeFilter || undefined,
+          search: searchTerm.trim() || undefined,
+          limit: pageSize,
+          offset: (page - 1) * pageSize,
+        }),
+        fetchReviewItems({ status: 'pending', limit: 1 }),
+        fetchReviewItems({ status: 'pending', priority: 'high', limit: 1 }),
+        fetchReviewItems({ resolved_today: true, limit: 1 }),
+      ])
       setItems(res.items)
+      setTotal(res.total)
+      setPendingCount(pendingRes.total)
+      setHighPriorityCount(highRes.total)
+      setApprovedCount(approvedRes.total)
     } catch (err: unknown) {
       console.error('Failed to load review queue items:', err)
     } finally {
       setLoading(false)
     }
-  }
+  }, [statusFilter, typeFilter, searchTerm, page, pageSize])
 
   useEffect(() => {
     loadReviewItems()
-  }, [statusFilter, typeFilter])
+
+    const handleExternalUpdate = () => {
+      loadReviewItems()
+    }
+    window.addEventListener('review-queue-updated', handleExternalUpdate)
+    return () => {
+      window.removeEventListener('review-queue-updated', handleExternalUpdate)
+    }
+  }, [loadReviewItems])
 
   const handleInspect = (item: ReviewItemResponse) => {
     setSelectedItem(item)
@@ -43,11 +73,28 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
     }
   }
 
-  const pendingCount = items.filter((i) => i.status === 'pending').length
-  const highPriorityCount = items.filter(
-    (i) => i.priority === 'high' && i.status === 'pending'
-  ).length
-  const approvedCount = items.filter((i) => i.status === 'posted').length
+  const handleStatusFilterChange = (newStatus: string) => {
+    setStatusFilter(newStatus)
+    setPage(1)
+  }
+
+  const handleTypeFilterChange = (newType: string) => {
+    setTypeFilter(newType)
+    setPage(1)
+  }
+
+  const handleSearchChange = (newSearch: string) => {
+    setSearchTerm(newSearch)
+    setPage(1)
+  }
+
+  const isBookkeepingItem = selectedItem?.review_type === 'bookkeeping'
+  const isReconciliationItem = selectedItem?.review_type === 'reconciliation'
+
+  const handleResolved = () => {
+    loadReviewItems()
+    notifyReviewQueueUpdated()
+  }
 
   return (
     <div className="space-y-6">
@@ -61,21 +108,49 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
       {/* Main Review Queue Dashboard */}
       <ReviewQueueList
         items={items}
+        total={total}
         loading={loading}
         onRefresh={loadReviewItems}
         onInspectItem={handleInspect}
         statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
+        onStatusFilterChange={handleStatusFilterChange}
         typeFilter={typeFilter}
-        onTypeFilterChange={setTypeFilter}
+        onTypeFilterChange={handleTypeFilterChange}
+        searchTerm={searchTerm}
+        onSearchChange={handleSearchChange}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={(newSize) => {
+          setPageSize(newSize)
+          setPage(1)
+        }}
       />
 
-      {/* Review Detail Modal */}
-      {selectedItem && (
-        <ReviewDetailModal
+      {/* Reconciliation Review Modal — for reconciliation type items */}
+      {selectedItem && isReconciliationItem && (
+        <ReconciliationReviewModal
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
-          onResolved={() => loadReviewItems()}
+          onResolved={handleResolved}
+        />
+      )}
+
+      {/* Bookkeeping Review Modal — for bookkeeping type items */}
+      {selectedItem && isBookkeepingItem && (
+        <BookkeepingReviewModal
+          item={selectedItem}
+          onClose={() => setSelectedItem(null)}
+          onResolved={handleResolved}
+        />
+      )}
+
+      {/* Extraction Review Modal — for extraction / other types */}
+      {selectedItem && !isBookkeepingItem && !isReconciliationItem && (
+        <ExtractionReviewModal
+          item={selectedItem}
+          onClose={() => setSelectedItem(null)}
+          onResolved={handleResolved}
         />
       )}
     </div>

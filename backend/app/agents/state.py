@@ -49,9 +49,11 @@ class DocumentIntakeState(TypedDict, total=False):
     stored_file_path: str
     demo_currency: str
     raw_text: str | None
+    image_base64: str | None
 
     # Extraction output
     extraction_id: str | None
+    document_type: str
     vendor_name: str | None
     transaction_date: str | None
     subtotal_amount: float | None
@@ -65,6 +67,7 @@ class DocumentIntakeState(TypedDict, total=False):
     confidence_score: float
     rationale: str
     warnings: Annotated[list[str], operator.add]
+    low_confidence_fields: list[str]
     status: str  # uploaded, extracting, extraction_review_required, extracted, failed
     needs_review: bool
     review_id: str | None
@@ -80,7 +83,9 @@ class BookkeepingState(TypedDict, total=False):
     stored_file_path: str
     demo_currency: str
     raw_text: str | None
+    image_base64: str | None
     extraction_id: str | None
+    document_type: str
     vendor_name: str | None
     transaction_date: str | None
     subtotal_amount: float | None
@@ -97,6 +102,7 @@ class BookkeepingState(TypedDict, total=False):
     entry_date: str | None
     entry_description: str | None
     journal_lines: list[dict[str, Any]]
+    proposed_journal: list[dict[str, Any]]
 
     # Validation & Risk
     is_balanced: bool
@@ -109,10 +115,31 @@ class BookkeepingState(TypedDict, total=False):
     confidence_score: float
     rationale: str
     warnings: Annotated[list[str], operator.add]
+    low_confidence_fields: list[str]
     status: str  # draft, bookkeeping_review_required, ready_to_post, posted, rejected
     needs_review: bool
     review_id: str | None
     error: str | None
+
+
+class DocumentProcessingState(BookkeepingState, total=False):
+    """Unified state for the document intake -> bookkeeping workflow."""
+
+    # Intake-only metadata that must remain available to bookkeeping and persistence.
+    extraction_notes: str | None
+
+    # Stage-specific agent envelopes. The generic envelope fields inherited from
+    # BookkeepingState remain available for conditional routing compatibility.
+    intake_confidence_score: float
+    intake_rationale: str
+    intake_status: str
+    intake_needs_review: bool
+    intake_processing_duration_ms: float
+    bookkeeping_confidence_score: float
+    bookkeeping_rationale: str
+    bookkeeping_status: str
+    bookkeeping_needs_review: bool
+    bookkeeping_processing_duration_ms: float
 
 
 class ReconciliationState(TypedDict, total=False):
@@ -129,6 +156,7 @@ class ReconciliationState(TypedDict, total=False):
     match_id: str | None
     matched_journal_entry_id: str | None
     match_type: str  # exact, fuzzy, manual, unmatched
+    recommended_status: str
     amount_score: float | None
     date_score: float | None
     vendor_score: float | None

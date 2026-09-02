@@ -184,3 +184,36 @@ def test_get_trial_balance_balanced(client, db_session):
     assert data["total_credits"] == 250000.0
     assert data["difference"] == 0.0
     assert len(data["accounts"]) == 2
+
+
+def test_list_journal_entries_with_search(client, db_session):
+    je1 = JournalEntry(
+        id=uuid.uuid4(),
+        entry_date=date(2026, 8, 10),
+        description="AWS Cloud Server Hosting Payment",
+        status="posted",
+    )
+    je2 = JournalEntry(
+        id=uuid.uuid4(),
+        entry_date=date(2026, 8, 12),
+        description="Office Coffee Machine Restock",
+        status="draft",
+    )
+    db_session.add_all([je1, je2])
+    db_session.commit()
+
+    # Search description
+    res_desc = client.get("/api/v1/ledger/journal-entries?search=Server+Hosting")
+    assert res_desc.status_code == 200
+    assert len(res_desc.json()["items"]) == 1
+    assert (
+        res_desc.json()["items"][0]["description"] == "AWS Cloud Server Hosting Payment"
+    )
+
+    # Search date
+    res_date = client.get("/api/v1/ledger/journal-entries?search=2026-08-12")
+    assert res_date.status_code == 200
+    assert any(
+        i["description"] == "Office Coffee Machine Restock"
+        for i in res_date.json()["items"]
+    )

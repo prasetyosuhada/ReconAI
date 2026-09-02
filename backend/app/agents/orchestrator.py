@@ -6,16 +6,20 @@ to enforce confidence thresholds (confidence < 0.85 -> needs_review) and risk ru
 """
 
 import logging
+from time import perf_counter
 from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agents.bookkeeping import run_bookkeeping_agent
+from app.agents.bookkeeping import (
+    classify_bookkeeping,
+    route_after_bookkeeping,
+)
 from app.agents.document_intake import run_document_intake_agent
 from app.agents.reconciliation import run_reconciliation_agent
 from app.agents.state import (
-    BookkeepingState,
     DocumentIntakeState,
+    DocumentProcessingState,
     ReconciliationState,
 )
 
@@ -23,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 # Threshold definitions according to ReconAI PRD & System Architecture
 CONFIDENCE_THRESHOLD_INTAKE = 0.85
-CONFIDENCE_THRESHOLD_BOOKKEEPING = 0.85
 CONFIDENCE_THRESHOLD_RECONCILIATION = 0.90
 
 
@@ -70,47 +73,6 @@ def route_after_extraction(
     return "proceed_to_bookkeeping"
 
 
-def route_after_bookkeeping(
-    state: BookkeepingState,
-) -> Literal["ready_to_post", "bookkeeping_review_required", "failed"]:
-    """Determine next workflow step after Bookkeeping Agent execution.
-
-    Rules:
-    - If status == 'failed' -> 'failed'
-    - If confidence < 0.85, sensitive account used, unbalanced entry,
-      needs_review == True, or risk_flags present -> 'bookkeeping_review_required'
-    - Else -> 'ready_to_post'
-    """
-    status = state.get("status")
-    confidence = state.get("confidence_score", 0.0)
-    uses_sensitive = state.get("uses_sensitive_account", False)
-    is_balanced = state.get("is_balanced", True)
-    needs_review = state.get("needs_review", False)
-    risk_flags = state.get("risk_flags", [])
-
-    if status == "failed":
-        return "failed"
-
-    if (
-        confidence < CONFIDENCE_THRESHOLD_BOOKKEEPING
-        or uses_sensitive
-        or not is_balanced
-        or needs_review
-        or status == "bookkeeping_review_required"
-        or bool(risk_flags)
-    ):
-        logger.info(
-            "Bookkeeping requires review: conf=%.2f, sens=%s, bal=%s, risk=%s",
-            confidence,
-            uses_sensitive,
-            is_balanced,
-            risk_flags,
-        )
-        return "bookkeeping_review_required"
-
-    return "ready_to_post"
-
-
 def route_after_reconciliation(
     state: ReconciliationState,
 ) -> Literal["matched", "reconciliation_review_required", "failed"]:
@@ -150,15 +112,18 @@ def route_after_reconciliation(
 # ==========================================
 
 
-def document_intake_node(state: DocumentIntakeState) -> DocumentIntakeState:
+def document_intake_node(state: DocumentProcessingState) -> DocumentProcessingState:
     """LangGraph node executing Document Intake Agent."""
     logger.info("Executing document_intake_node...")
+    started_at = perf_counter()
     response = run_document_intake_agent(
         raw_text=state.get("raw_text"),
+        image_base64=state.get("image_base64"),
         original_filename=state.get("original_filename", "document.pdf"),
         mime_type=state.get("mime_type", "application/pdf"),
         demo_currency=state.get("demo_currency", "IDR"),
     )
+    processing_duration_ms = round(max(0.0, (perf_counter() - started_at) * 1000), 2)
 
     result = response.result
     next_step = route_after_extraction(
@@ -179,6 +144,7 @@ def document_intake_node(state: DocumentIntakeState) -> DocumentIntakeState:
 
     return {
         **state,
+        "document_type": result.document_type,
         "vendor_name": result.vendor_name,
         "transaction_date": result.transaction_date,
         "subtotal_amount": result.subtotal_amount,
@@ -187,19 +153,26 @@ def document_intake_node(state: DocumentIntakeState) -> DocumentIntakeState:
         "currency": result.currency,
         "line_items": [li.model_dump() for li in result.line_items],
         "extraction_notes": result.extraction_notes,
+        "intake_confidence_score": response.confidence_score,
+        "intake_rationale": response.rationale,
+        "intake_status": new_status,
+        "intake_needs_review": next_step == "extraction_review_required",
+        "intake_processing_duration_ms": processing_duration_ms,
         "confidence_score": response.confidence_score,
         "rationale": response.rationale,
         "warnings": response.warnings,
+        "low_confidence_fields": response.low_confidence_fields,
         "status": new_status,
         "needs_review": next_step == "extraction_review_required",
     }
 
 
-def bookkeeping_node(state: BookkeepingState) -> BookkeepingState:
+def bookkeeping_node(state: DocumentProcessingState) -> DocumentProcessingState:
     """LangGraph node executing Bookkeeping Agent."""
     logger.info("Executing bookkeeping_node...")
 
     extraction_data = {
+        "document_type": state.get("document_type", "unknown"),
         "vendor_name": state.get("vendor_name"),
         "transaction_date": state.get("transaction_date"),
         "subtotal_amount": state.get("subtotal_amount"),
@@ -207,46 +180,39 @@ def bookkeeping_node(state: BookkeepingState) -> BookkeepingState:
         "total_amount": state.get("total_amount"),
         "currency": state.get("currency", "IDR"),
         "line_items": state.get("line_items", []),
+        "extraction_notes": state.get("extraction_notes"),
     }
 
     coa_list = state.get("chart_of_accounts", [])
 
-    response = run_bookkeeping_agent(
+    started_at = perf_counter()
+    outcome = classify_bookkeeping(
         extraction_data=extraction_data,
         chart_of_accounts=coa_list,
     )
-
-    result = response.result
-    next_step = route_after_bookkeeping(
-        {
-            "status": response.status,
-            "confidence_score": response.confidence_score,
-            "uses_sensitive_account": result.uses_sensitive_account,
-            "is_balanced": result.is_balanced,
-            "needs_review": response.status == "needs_review",
-            "risk_flags": result.risk_flags,
-        }
-    )
-
-    new_status = (
-        "bookkeeping_review_required"
-        if next_step == "bookkeeping_review_required"
-        else ("ready_to_post" if next_step == "ready_to_post" else "failed")
-    )
+    processing_duration_ms = round(max(0.0, (perf_counter() - started_at) * 1000), 2)
 
     return {
         **state,
-        "entry_date": result.entry_date,
-        "entry_description": result.description,
-        "journal_lines": [jl.model_dump() for jl in result.journal_lines],
-        "is_balanced": result.is_balanced,
-        "uses_sensitive_account": result.uses_sensitive_account,
-        "risk_flags": result.risk_flags,
-        "confidence_score": response.confidence_score,
-        "rationale": response.rationale,
-        "warnings": response.warnings,
-        "status": new_status,
-        "needs_review": next_step == "bookkeeping_review_required",
+        "entry_date": outcome.entry_date,
+        "entry_description": outcome.entry_description,
+        "journal_lines": outcome.journal_lines,
+        "proposed_journal": outcome.journal_lines,
+        "total_debit": outcome.total_debit,
+        "total_credit": outcome.total_credit,
+        "is_balanced": outcome.is_balanced,
+        "uses_sensitive_account": outcome.uses_sensitive_account,
+        "risk_flags": outcome.risk_flags,
+        "bookkeeping_confidence_score": outcome.confidence_score,
+        "bookkeeping_rationale": outcome.rationale,
+        "bookkeeping_status": outcome.status,
+        "bookkeeping_needs_review": outcome.needs_review,
+        "bookkeeping_processing_duration_ms": processing_duration_ms,
+        "confidence_score": outcome.confidence_score,
+        "rationale": outcome.rationale,
+        "warnings": outcome.warnings,
+        "status": outcome.status,
+        "needs_review": outcome.needs_review,
     }
 
 
@@ -275,25 +241,29 @@ def reconciliation_node(state: ReconciliationState) -> ReconciliationState:
     return {
         **state,
         "candidate_matches": [m.model_dump() for m in result.matches],
+        "recommended_status": result.recommended_status,
         "confidence_score": response.confidence_score,
         "rationale": response.rationale,
         "warnings": response.warnings,
-        "status": result.recommended_status,
+        "status": (
+            "failed" if response.status == "failed" else result.recommended_status
+        ),
         "needs_review": next_step == "reconciliation_review_required",
+        "error": response.rationale if response.status == "failed" else None,
     }
 
 
 def review_router_node(state: dict[str, Any]) -> dict[str, Any]:
     """LangGraph node capturing human review queue payloads when routing to review."""
     logger.info("Executing review_router_node - Routing to Human Review Queue...")
-    warnings = list(state.get("warnings", []))
-    if "Routed to human review queue for manual verification." not in warnings:
-        warnings.append("Routed to human review queue for manual verification.")
+    review_warning = "Routed to human review queue for manual verification."
+    warnings = state.get("warnings", [])
 
+    # `warnings` uses an additive reducer. Return only the new warning instead of
+    # copying the complete accumulated list, otherwise previous warnings duplicate.
     return {
-        **state,
         "needs_review": True,
-        "warnings": warnings,
+        "warnings": [] if review_warning in warnings else [review_warning],
     }
 
 
@@ -304,7 +274,7 @@ def review_router_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def build_document_processing_graph() -> Any:
     """Build and compile the Document Intake -> Bookkeeping LangGraph workflow DAG."""
-    builder = StateGraph(BookkeepingState)
+    builder = StateGraph(DocumentProcessingState)
 
     # 1. Add nodes
     builder.add_node("document_intake", document_intake_node)

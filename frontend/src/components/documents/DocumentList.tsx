@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React from 'react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -11,66 +11,103 @@ import {
   Loader2,
   RefreshCw,
 } from 'lucide-react'
-import { fetchDocuments } from '../../services/api'
 import type { DocumentResponse } from '../../services/api'
+import { Pagination } from '../shared/Pagination'
 
 interface DocumentListProps {
-  refreshTrigger: number
+  documents: DocumentResponse[]
+  total: number
+  loading: boolean
+  error?: string | null
+  statusFilter: string
+  onStatusFilterChange: (status: string) => void
+  page: number
+  pageSize: number
+  onPageChange: (page: number) => void
+  onPageSizeChange: (pageSize: number) => void
+  onRefresh: () => void
   onSelectDocument?: (docId: string) => void
 }
 
-export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSelectDocument }) => {
-  const [documents, setDocuments] = useState<DocumentResponse[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState<string>('')
-
-  const loadDocuments = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetchDocuments({
-        status: statusFilter || undefined,
-        limit: 50,
-      })
-      setDocuments(res.items)
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to load documents'
-      setError(message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadDocuments()
-  }, [refreshTrigger, statusFilter])
-
+export const DocumentList: React.FC<DocumentListProps> = ({
+  documents,
+  total,
+  loading,
+  error,
+  statusFilter,
+  onStatusFilterChange,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+  onRefresh,
+  onSelectDocument,
+}) => {
   const getStatusBadge = (status: string) => {
     switch (status.toLowerCase()) {
       case 'uploaded':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-700/50 border border-slate-600/50 text-slate-300 text-xs font-medium">
+            <Clock className="w-3 h-3 text-slate-400" />
+            Uploaded
+          </span>
+        )
       case 'processing':
       case 'extracting':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium animate-pulse">
             <Loader2 className="w-3 h-3 animate-spin" />
-            {status}
+            Processing
           </span>
         )
       case 'extracted':
-      case 'posted':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-teal-500/10 border border-teal-500/20 text-teal-400 text-xs font-medium">
             <CheckCircle2 className="w-3 h-3" />
-            {status}
+            Extracted
+          </span>
+        )
+      case 'ready_to_post':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-medium">
+            <CheckCircle2 className="w-3 h-3" />
+            Ready to Post
           </span>
         )
       case 'review_required':
+      case 'needs_review':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
+            <Clock className="w-3 h-3" />
+            Review Required
+          </span>
+        )
       case 'extraction_review_required':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
             <Clock className="w-3 h-3" />
-            Needs Review
+            Extraction Review
+          </span>
+        )
+      case 'bookkeeping_review_required':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
+            <Clock className="w-3 h-3" />
+            Bookkeeping Review
+          </span>
+        )
+      case 'approved':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-medium">
+            <CheckCircle2 className="w-3 h-3" />
+            Approved
+          </span>
+        )
+      case 'posted':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
+            <CheckCircle2 className="w-3 h-3" />
+            Posted
           </span>
         )
       case 'rejected':
@@ -78,13 +115,13 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-medium">
             <AlertCircle className="w-3 h-3" />
-            {status}
+            {status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' ')}
           </span>
         )
       default:
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium">
-            {status}
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium capitalize">
+            {status.replace(/_/g, ' ')}
           </span>
         )
     }
@@ -123,23 +160,28 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
             <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => onStatusFilterChange(e.target.value)}
               className="w-full sm:w-auto pl-8 pr-8 py-1.5 bg-slate-900/80 border border-slate-700/60 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500/50 transition-all appearance-none cursor-pointer"
             >
               <option value="">All Statuses</option>
               <option value="uploaded">Uploaded</option>
               <option value="processing">Processing</option>
               <option value="extracted">Extracted</option>
-              <option value="review_required">Review Required</option>
+              <option value="ready_to_post">Ready to Post</option>
+              <option value="review_required">Review Required (All)</option>
+              <option value="extraction_review_required">↳ Extraction Review</option>
+              <option value="bookkeeping_review_required">↳ Bookkeeping Review</option>
+              <option value="approved">Approved</option>
               <option value="posted">Posted</option>
               <option value="rejected">Rejected</option>
+              <option value="failed">Failed</option>
             </select>
           </div>
 
           {/* Refresh Button */}
           <button
             type="button"
-            onClick={loadDocuments}
+            onClick={onRefresh}
             disabled={loading}
             className="p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/60 text-slate-300 hover:text-white transition-all disabled:opacity-50"
             title="Refresh document list"
@@ -251,6 +293,15 @@ export const DocumentList: React.FC<DocumentListProps> = ({ refreshTrigger, onSe
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Footer */}
+      <Pagination
+        currentPage={page}
+        pageSize={pageSize}
+        totalItems={total}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+      />
     </div>
   )
 }

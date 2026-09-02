@@ -104,6 +104,24 @@ npm install
 npm run dev
 ```
 
+### Quick Start with Makefile 🛠️
+
+Alternatively, you can use `make` shortcuts to manage the workspace:
+
+```bash
+make setup        # Copy .env and install backend & frontend dependencies
+make db-up        # Start PostgreSQL container
+make migrate      # Run database migrations
+make seed         # Seed Chart of Accounts
+make demo-data    # Generate sample invoices & bank statements
+make dev-backend  # Run FastAPI server
+make dev-frontend # Run Vite frontend server
+make test         # Run pytest suite
+make lint         # Run linter checks
+make format       # Format codebases
+make clean        # Clean caches and temporary files
+```
+
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ---
