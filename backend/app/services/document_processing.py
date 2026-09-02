@@ -1,4 +1,3 @@
-import json
 import logging
 import uuid
 from collections.abc import Generator
@@ -16,13 +15,14 @@ from app.models.review import ReviewItem
 from app.services.audit_service import log_event
 from app.services.bookkeeping_persistence import persist_bookkeeping_outcome
 from app.services.document_extraction import extract_document_content
+from app.services.document_progress import publish_document_progress
 
 logger = logging.getLogger(__name__)
 
 
-def _sse_event(payload: dict[str, Any]) -> str:
-    """Serialize a payload as one Server-Sent Events message."""
-    return f"data: {json.dumps(payload, default=str)}\n\n"
+def _sse_event(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return one transport-neutral document-processing progress event."""
+    return payload
 
 
 def _parse_date(d: Any) -> date | None:
@@ -56,8 +56,8 @@ def stream_document_processing(
     mime_type: str | None = None,
     original_filename: str | None = None,
     document_type: str = "unknown",
-) -> Generator[str, None, None]:
-    """Execute the document workflow and yield real-time SSE events."""
+) -> Generator[dict[str, Any], None, None]:
+    """Execute the document workflow and yield transport-neutral progress events."""
     logger.info(
         "Starting streaming document processing for document ID: %s", document_id
     )
@@ -65,8 +65,21 @@ def stream_document_processing(
 
     db = SessionLocal()
     try:
-        doc = db.query(Document).filter(Document.id == doc_uuid).first()
-        if not doc:
+        claimed = (
+            db.query(Document)
+            .filter(Document.id == doc_uuid, Document.status == "uploaded")
+            .update({Document.status: "extracting"}, synchronize_session=False)
+        )
+        if claimed != 1:
+            db.rollback()
+            existing_doc = db.query(Document).filter(Document.id == doc_uuid).first()
+            if existing_doc is not None:
+                logger.info(
+                    "Document %s was not claimed (status=%s); skipping duplicate run.",
+                    document_id,
+                    existing_doc.status,
+                )
+                return
             logger.error("Document %s not found in DB.", document_id)
             yield _sse_event(
                 {
@@ -75,61 +88,12 @@ def stream_document_processing(
                 }
             )
             return
-
-        # Guard against duplicate concurrent execution or re-execution.
-        if doc.status in (
-            "extracted",
-            "ready_to_post",
-            "review_required",
-            "extraction_review_required",
-            "bookkeeping_review_required",
-        ):
-            logger.info(
-                "Document %s already processed (status=%s). Returning results.",
-                document_id,
-                doc.status,
-            )
-            existing_extraction = (
-                db.query(DocumentExtraction)
-                .filter(DocumentExtraction.document_id == doc.id)
-                .first()
-            )
-            vendor = (
-                existing_extraction.vendor_name if existing_extraction else "Document"
-            )
-            tot_amount = (
-                float(existing_extraction.total_amount)
-                if existing_extraction and existing_extraction.total_amount
-                else 0.0
-            )
-            curr = existing_extraction.currency if existing_extraction else "IDR"
-            conf = (
-                float(existing_extraction.confidence_score)
-                if existing_extraction
-                else 1.0
-            )
-            yield _sse_event(
-                {
-                    "stage": "completed",
-                    "percentage": 100,
-                    "status": doc.status,
-                    "confidence_score": conf,
-                    "vendor_name": vendor,
-                    "total_amount": tot_amount,
-                    "currency": curr,
-                    "message": (
-                        f'Document "{doc.original_filename}" is already processed.'
-                    ),
-                }
-            )
-            return
+        db.commit()
+        doc = db.query(Document).filter(Document.id == doc_uuid).one()
 
         file_path = stored_file_path or doc.stored_file_path
         effective_mime = mime_type or doc.mime_type
         fname = original_filename or doc.original_filename
-
-        doc.status = "extracting"
-        db.commit()
 
         yield _sse_event(
             {
@@ -251,7 +215,6 @@ def stream_document_processing(
                         intake_data.get("confidence_score", 0.0),
                     )
                 )
-                print("CONFICENCE SCORE INTAKE AGENT:", intake_confidence)
                 intake_rationale = intake_data.get(
                     "intake_rationale", intake_data.get("rationale")
                 )
@@ -761,8 +724,8 @@ def process_document_background(
     original_filename: str | None = None,
     document_type: str = "unknown",
 ) -> None:
-    """Execute the document workflow by consuming its stream generator."""
-    for _ in stream_document_processing(
+    """Execute the document workflow and publish progress to Redis Streams."""
+    for event in stream_document_processing(
         document_id, stored_file_path, mime_type, original_filename, document_type
     ):
-        pass
+        publish_document_progress(document_id, event)

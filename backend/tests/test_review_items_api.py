@@ -2,6 +2,9 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
+import pytest
+from sqlalchemy.exc import IntegrityError
+
 from app.agents.schemas import BookkeepingOutcome
 from app.api.v1.review_items import _continue_document_to_bookkeeping
 from app.models.audit import AuditEvent
@@ -19,6 +22,56 @@ def test_list_review_items_empty(client):
     assert data["total"] == 0
     assert data["limit"] == 50
     assert data["offset"] == 0
+
+
+def test_pending_review_item_is_unique_per_source_and_type(db_session):
+    source_id = uuid.uuid4()
+    db_session.add_all(
+        [
+            ReviewItem(
+                review_type="bookkeeping",
+                status="pending",
+                priority="normal",
+                source_type="journal_entry",
+                source_id=source_id,
+                title="First review",
+            ),
+            ReviewItem(
+                review_type="bookkeeping",
+                status="pending",
+                priority="normal",
+                source_type="journal_entry",
+                source_id=source_id,
+                title="Duplicate review",
+            ),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+    db_session.add_all(
+        [
+            ReviewItem(
+                review_type="bookkeeping",
+                status="approved",
+                priority="normal",
+                source_type="journal_entry",
+                source_id=source_id,
+                title="Historical review",
+            ),
+            ReviewItem(
+                review_type="bookkeeping",
+                status="pending",
+                priority="normal",
+                source_type="journal_entry",
+                source_id=source_id,
+                title="New review",
+            ),
+        ]
+    )
+    db_session.commit()
 
 
 def test_list_review_items_filtering(client, db_session):

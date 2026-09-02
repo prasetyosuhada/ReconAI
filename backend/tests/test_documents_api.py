@@ -4,7 +4,9 @@ import uuid
 from unittest.mock import patch
 
 import pytest
+from redis.exceptions import RedisError
 
+from app.api.v1.documents import observe_document_progress
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
@@ -94,11 +96,13 @@ def test_upload_document_empty_file(client):
         ),
     ],
 )
+@patch("app.services.document_processing.publish_document_progress")
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
 def test_process_document_background_separates_agent_metadata(
     mock_session_class,
     mock_graph,
+    mock_publish_progress,
     db_session,
     bookkeeping_confidence,
     bookkeeping_rationale,
@@ -261,12 +265,19 @@ def test_process_document_background_separates_agent_metadata(
 
     persisted_doc = db_session.query(Document).filter(Document.id == doc_id).one()
     assert persisted_doc.status == bookkeeping_status
+    assert mock_publish_progress.call_count > 0
+
+    published_event_count = mock_publish_progress.call_count
+    process_document_background(document_id=str(doc_id))
+    assert mock_graph.stream.call_count == 1
+    assert mock_publish_progress.call_count == published_event_count
 
 
+@patch("app.services.document_processing.publish_document_progress")
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
 def test_process_document_background_review_required(
-    mock_session_class, mock_graph, db_session
+    mock_session_class, mock_graph, mock_publish_progress, db_session
 ):
     mock_session_class.return_value = db_session
 
@@ -339,15 +350,11 @@ def test_process_document_background_review_required(
         .count()
         == 0
     )
+    assert mock_publish_progress.call_count > 0
 
 
-@patch("app.services.document_processing.document_processing_graph")
-@patch("app.services.document_processing.SessionLocal")
-def test_stream_document_processing_sse(
-    mock_session_class, mock_graph, client, db_session
-):
-    mock_session_class.return_value = db_session
-
+@patch("app.api.v1.documents.read_document_progress")
+def test_stream_document_processing_sse(mock_read_progress, db_session):
     doc_id = uuid.uuid4()
     doc = Document(
         id=doc_id,
@@ -361,59 +368,67 @@ def test_stream_document_processing_sse(
     db_session.add(doc)
     db_session.commit()
 
-    intake_res = {
-        "document_id": str(doc_id),
-        "vendor_name": "PLN Indonesia",
-        "transaction_date": "2026-08-01",
-        "subtotal_amount": 500000.0,
-        "tax_amount": 55000.0,
-        "total_amount": 555000.0,
-        "currency": "IDR",
-        "confidence_score": 0.95,
-        "status": "extracted",
-        "needs_review": False,
-    }
-    bookkeeping_res = {
-        "journal_lines": [
+    mock_read_progress.return_value = [
+        (
+            "1000-0",
             {
-                "account_code": "5200",
-                "account_name": "Electricity",
-                "debit_amount": 555000.0,
-                "credit_amount": 0.0,
+                "stage": "intake_done",
+                "confidence_score": 0.95,
+                "message": "Intake complete",
             },
+        ),
+        (
+            "1001-0",
             {
-                "account_code": "1010",
-                "account_name": "Bank Account",
-                "debit_amount": 0.0,
-                "credit_amount": 555000.0,
+                "stage": "completed",
+                "confidence_score": 0.80,
+                "message": "Pipeline complete",
             },
-        ],
-        "is_balanced": True,
-        "uses_sensitive_account": True,
-        "confidence_score": 0.80,
-        "rationale": "Sensitive payment account requires review",
-        "status": "bookkeeping_review_required",
-        "needs_review": True,
-    }
-
-    mock_graph.stream.return_value = [
-        {"document_intake": intake_res},
-        {"bookkeeping": bookkeeping_res},
+        ),
     ]
 
-    response = client.get(f"/api/v1/documents/stream/{doc_id}")
-    assert response.status_code == 200
-    assert "text/event-stream" in response.headers.get("content-type", "")
-    assert "data:" in response.text
+    response_text = "".join(observe_document_progress(doc_id, "999-0"))
+    assert "data:" in response_text
     events = [
         json.loads(line.removeprefix("data: "))
-        for line in response.text.splitlines()
+        for line in response_text.splitlines()
         if line.startswith("data: ")
     ]
     intake_done = next(event for event in events if event["stage"] == "intake_done")
     completed = next(event for event in events if event["stage"] == "completed")
     assert intake_done["confidence_score"] == 0.95
     assert completed["confidence_score"] == 0.80
+    assert "id: 1000-0" in response_text
+    mock_read_progress.assert_called_once_with(doc_id, "999-0")
+
+
+@patch("app.api.v1.documents.read_document_progress")
+def test_stream_document_processing_reports_redis_unavailable(
+    mock_read_progress, db_session
+):
+    doc_id = uuid.uuid4()
+    db_session.add(
+        Document(
+            id=doc_id,
+            original_filename="redis_down.pdf",
+            stored_file_path="/tmp/redis_down.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=100,
+            document_type="invoice",
+            status="extracting",
+        )
+    )
+    db_session.commit()
+    mock_read_progress.side_effect = RedisError("connection refused")
+
+    response_text = "".join(observe_document_progress(doc_id))
+    event = next(
+        json.loads(line.removeprefix("data: "))
+        for line in response_text.splitlines()
+        if line.startswith("data: ")
+    )
+    assert event["stage"] == "error"
+    assert "continues in the background" in event["message"]
 
 
 def test_list_documents_status_filtering(client, db_session):

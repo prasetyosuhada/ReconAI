@@ -11,17 +11,19 @@ from fastapi import (
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
     Query,
     UploadFile,
     status,
 )
 from fastapi.responses import StreamingResponse
+from redis.exceptions import RedisError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models.document import Document, DocumentExtraction
 from app.schemas.document import (
     DocumentDetailResponse,
@@ -32,8 +34,8 @@ from app.schemas.document import (
 from app.services.audit_service import log_event
 from app.services.document_processing import (
     process_document_background,
-    stream_document_processing,
 )
+from app.services.document_progress import read_document_progress, serialize_sse
 
 logger = logging.getLogger(__name__)
 
@@ -57,16 +59,103 @@ def _get_upload_dir() -> Path:
     return UPLOAD_STORAGE_DIR
 
 
+def observe_document_progress(document_id: uuid.UUID, last_event_id: str | None = None):
+    """Yield Redis-backed SSE messages without invoking document processing."""
+    cursor = last_event_id or "0-0"
+    while True:
+        try:
+            events = read_document_progress(document_id, cursor)
+        except RedisError as exc:
+            logger.warning(
+                "Redis progress unavailable document_id=%s: %s", document_id, exc
+            )
+            yield serialize_sse(
+                {
+                    "stage": "error",
+                    "message": (
+                        "Live processing progress is unavailable. "
+                        "Document processing continues in the background."
+                    ),
+                }
+            )
+            return
+
+        if events:
+            for event_id, payload in events:
+                cursor = event_id
+                yield serialize_sse(payload, event_id)
+                if payload.get("stage") in {"completed", "error"}:
+                    return
+            continue
+
+        # A terminal document with no remaining stream data has either expired
+        # or completed while the observer was disconnected.
+        status_db = SessionLocal()
+        try:
+            current_doc = (
+                status_db.query(Document).filter(Document.id == document_id).first()
+            )
+            current_status = current_doc.status if current_doc else "failed"
+        finally:
+            status_db.close()
+
+        terminal_statuses = {
+            "extracted",
+            "ready_to_post",
+            "review_required",
+            "extraction_review_required",
+            "bookkeeping_review_required",
+            "posted",
+            "failed",
+            "error",
+        }
+        if current_status in terminal_statuses:
+            if last_event_id is None:
+                terminal_stage = (
+                    "error" if current_status in {"failed", "error"} else "completed"
+                )
+                yield serialize_sse(
+                    {
+                        "stage": terminal_stage,
+                        "percentage": 100,
+                        "status": current_status,
+                        "message": (
+                            "Stored processing progress has expired; "
+                            f"document status is {current_status}."
+                        ),
+                    }
+                )
+            return
+
+        yield ": heartbeat\n\n"
+
+
 @router.get(
     "/stream/{document_id}",
     summary="Stream live document processing events via Server-Sent Events (SSE)",
 )
 def stream_document_processing_endpoint(
     document_id: str,
+    last_event_id: str | None = Header(None, alias="Last-Event-ID"),
+    db: Session = Depends(get_db),
 ) -> StreamingResponse:
-    """Run/stream live document intake and bookkeeping progress events via SSE."""
+    """Observe Redis-backed document progress without executing the pipeline."""
+    try:
+        doc_uuid = uuid.UUID(document_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid document UUID format.",
+        ) from None
+
+    if db.query(Document.id).filter(Document.id == doc_uuid).first() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document [{document_id}] not found.",
+        )
+
     return StreamingResponse(
-        stream_document_processing(document_id),
+        observe_document_progress(doc_uuid, last_event_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

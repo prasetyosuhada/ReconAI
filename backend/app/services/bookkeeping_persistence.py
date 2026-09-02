@@ -5,6 +5,7 @@ from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.agents.schemas import BookkeepingOutcome
@@ -203,12 +204,13 @@ def persist_bookkeeping_outcome(
             .filter(
                 ReviewItem.source_type == "journal_entry",
                 ReviewItem.source_id == journal_id,
+                ReviewItem.review_type == "bookkeeping",
                 ReviewItem.status == "pending",
             )
             .first()
         )
         if review_item is None:
-            review_item = ReviewItem(
+            candidate = ReviewItem(
                 id=uuid.uuid4(),
                 review_type="bookkeeping",
                 status="pending",
@@ -225,9 +227,25 @@ def persist_bookkeeping_outcome(
                 ),
                 original_payload=review_payload,
             )
-            db.add(review_item)
-            review_item_created = True
-        else:
+            try:
+                with db.begin_nested():
+                    db.add(candidate)
+                    db.flush()
+                review_item = candidate
+                review_item_created = True
+            except IntegrityError:
+                review_item = (
+                    db.query(ReviewItem)
+                    .filter(
+                        ReviewItem.source_type == "journal_entry",
+                        ReviewItem.source_id == journal_id,
+                        ReviewItem.review_type == "bookkeeping",
+                        ReviewItem.status == "pending",
+                    )
+                    .one()
+                )
+
+        if not review_item_created:
             review_item.priority = priority
             review_item.summary = (
                 f"Agent flagged document. Conf: {outcome.confidence_score:.2f}, "

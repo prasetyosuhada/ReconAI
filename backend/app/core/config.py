@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int = 5432
     DATABASE_URL: str | None = None
 
+    # Redis Streams (live document-processing progress)
+    REDIS_URL: str = "redis://localhost:6379/0"
+
     # LLM Provider API Keys
     OPENAI_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
