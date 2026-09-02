@@ -10,10 +10,11 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from app.agents.schemas import BookkeepingOutcome
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
-from app.models.journal import JournalEntry, JournalEntryLine
+from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
 from app.services.accounting import (
     post_journal_entry_to_ledger,
@@ -28,6 +29,13 @@ def seed_coa_accounts(db):
         ChartOfAccount(
             account_code="1000",
             account_name="Cash & Bank",
+            account_type="asset",
+            normal_balance="debit",
+            is_active=True,
+        ),
+        ChartOfAccount(
+            account_code="1400",
+            account_name="PPN Masukan (Input VAT)",
             account_type="asset",
             normal_balance="debit",
             is_active=True,
@@ -144,62 +152,52 @@ def test_e2e_happy_path_workflow(client, db_session):
     # -------------------------------------------------------------
     # STEP 3: Human Review Queue Approval
     # -------------------------------------------------------------
-    approve_res = client.post(
-        f"/api/v1/review-items/{review_item.id}/approve",
-        json={"reviewer_notes": "Extraction verified clean."},
+    bookkeeping_outcome = BookkeepingOutcome(
+        entry_date="2026-08-01",
+        entry_description="AWS Cloud Services Subscription",
+        journal_lines=[
+            {
+                "account_code": "5100",
+                "account_name": "Software Subscriptions",
+                "debit_amount": 1351351.0,
+                "credit_amount": 0.0,
+            },
+            {
+                "account_code": "1400",
+                "account_name": "PPN Masukan (Input VAT)",
+                "debit_amount": 148649.0,
+                "credit_amount": 0.0,
+            },
+            {
+                "account_code": "2000",
+                "account_name": "Accounts Payable",
+                "debit_amount": 0.0,
+                "credit_amount": 1500000.0,
+            },
+        ],
+        total_debit=1500000.0,
+        total_credit=1500000.0,
+        is_balanced=True,
+        confidence_score=0.95,
+        rationale="AWS cloud expense and input VAT classification.",
+        status="ready_to_post",
+        needs_review=False,
     )
+    with patch(
+        "app.api.v1.review_items.classify_bookkeeping",
+        return_value=bookkeeping_outcome,
+    ):
+        approve_res = client.post(
+            f"/api/v1/review-items/{review_item.id}/approve",
+            json={"reviewer_notes": "Extraction verified clean."},
+        )
     assert approve_res.status_code == 200
     assert approve_res.json()["status"] == "approved"
 
     # -------------------------------------------------------------
     # STEP 4: Auto Bookkeeping Agent & Double-Entry Guardrail
     # -------------------------------------------------------------
-    # Proposed Journal Entry
-    je = JournalEntry(
-        id=uuid.uuid4(),
-        document_id=doc_id,
-        extraction_id=extraction.id,
-        entry_date=date(2026, 8, 1),
-        description="AWS Cloud Services Subscription",
-        status="draft",
-        agent_name="Bookkeeping Agent",
-        confidence_score=0.95,
-        rationale="AWS Cloud hosting categorized as Software Subscriptions expense",
-    )
-    db_session.add(je)
-
-    acc_5100 = (
-        db_session.query(ChartOfAccount)
-        .filter(ChartOfAccount.account_code == "5100")
-        .first()
-    )
-    acc_2000 = (
-        db_session.query(ChartOfAccount)
-        .filter(ChartOfAccount.account_code == "2000")
-        .first()
-    )
-
-    line_debit = JournalEntryLine(
-        id=uuid.uuid4(),
-        journal_entry_id=je.id,
-        line_number=1,
-        account_id=acc_5100.id,
-        debit_amount=1500000.0,
-        credit_amount=0.0,
-        description="AWS EC2 & S3 Compute Capacity",
-    )
-    line_credit = JournalEntryLine(
-        id=uuid.uuid4(),
-        journal_entry_id=je.id,
-        line_number=2,
-        account_id=acc_2000.id,
-        debit_amount=0.0,
-        credit_amount=1500000.0,
-        description="Accounts Payable AWS",
-    )
-    db_session.add(line_debit)
-    db_session.add(line_credit)
-    db_session.commit()
+    je = db_session.query(JournalEntry).filter(JournalEntry.document_id == doc_id).one()
 
     # Test Deterministic Double-Entry Validation
     val_res = validate_double_entry(je.lines)
