@@ -104,7 +104,9 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
   const handleInspect = (item: ReviewItemResponse) => {
     setSelectedItem(item)
     setDetailError(null)
-    navigate(`/review/${item.id}`, { state: { fromReviewQueue: true } })
+    if (reviewItemId !== item.id) {
+      navigate(`/review/${item.id}`, { state: { fromReviewQueue: true } })
+    }
     if (onInspectItem) {
       onInspectItem(item)
     }

@@ -305,7 +305,10 @@ export const ReviewQueueList: React.FC<ReviewQueueListProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => onInspectItem(item)}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onInspectItem(item)
+                        }}
                         className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-md shadow-indigo-600/20 flex items-center gap-1"
                       >
                         Inspect & Edit
