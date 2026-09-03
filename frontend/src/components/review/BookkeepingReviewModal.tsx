@@ -2,11 +2,11 @@ import React, { useEffect, useState } from 'react'
 import {
   AlertCircle,
   AlertTriangle,
-  ArrowLeft,
   CheckCircle2,
   Loader2,
   ShieldAlert,
   Sparkles,
+  X,
 } from 'lucide-react'
 import type { JournalLineEditPayload, ReviewItemResponse } from '../../services/api'
 import {
@@ -217,15 +217,6 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
       <div className="relative w-full max-w-7xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden flex flex-col my-4 sm:my-6">
         <div className="px-4 sm:px-6 py-4 bg-slate-950 border-b border-slate-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              id="bookkeeping-review-back-btn"
-              onClick={onClose}
-              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all shrink-0"
-              title="Back to review queue"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">
                 Review Queue
@@ -251,6 +242,16 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
                 {riskFlags.length} Flag{riskFlags.length > 1 ? 's' : ''}
               </span>
             )}
+            <button
+              type="button"
+              id="bookkeeping-review-close-btn"
+              onClick={onClose}
+              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all shrink-0"
+              title="Close bookkeeping review"
+              aria-label="Close bookkeeping review and return to review queue"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
 

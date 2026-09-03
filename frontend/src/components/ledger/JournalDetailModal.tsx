@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import {
   AlertTriangle,
-  ArrowLeft,
   BookOpen,
   CheckCircle2,
   ExternalLink,
@@ -9,6 +8,7 @@ import {
   Loader2,
   Send,
   Sparkles,
+  X,
 } from 'lucide-react'
 import type { DocumentExtractionResponse, JournalEntryResponse } from '../../services/api'
 import {
@@ -127,14 +127,6 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
       <div className="relative w-full max-w-7xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden flex flex-col my-4 sm:my-6">
         <div className="px-4 sm:px-6 py-4 bg-slate-950 border-b border-slate-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all shrink-0"
-              title="Back to general ledger"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">
                 General Ledger
@@ -160,6 +152,15 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
                 {detail.status.replace(/_/g, ' ')}
               </span>
             )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all shrink-0"
+              title="Close journal details"
+              aria-label="Close journal details and return to general ledger"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
 

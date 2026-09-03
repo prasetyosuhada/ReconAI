@@ -336,6 +336,8 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
             type="button"
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            title="Close reconciliation review"
+            aria-label="Close reconciliation review and return to review queue"
           >
             <X className="w-5 h-5" />
           </button>

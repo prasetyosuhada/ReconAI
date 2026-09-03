@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   AlertTriangle,
-  ArrowLeft,
   CheckCircle2,
   CircleDollarSign,
   ClipboardCheck,
@@ -14,6 +13,7 @@ import {
   ShieldAlert,
   Sparkles,
   Trash2,
+  X,
 } from 'lucide-react'
 import type {
   ChartOfAccountResponse,
@@ -546,14 +546,6 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
         {/* Header */}
         <div className="px-4 sm:px-6 py-4 bg-slate-950/90 border-b border-slate-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all shrink-0"
-              title="Back to documents"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
             <div className="min-w-0">
               <p className="text-[11px] uppercase tracking-wider text-slate-500 font-bold">
                 Documents
@@ -574,6 +566,15 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
             <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-800/80 text-slate-300 border border-slate-700 uppercase tracking-wider">
               {item.priority} Priority
             </span>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all shrink-0"
+              title="Close extraction review"
+              aria-label="Close extraction review and return to review queue"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
