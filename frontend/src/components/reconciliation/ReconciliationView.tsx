@@ -39,6 +39,9 @@ const refreshImports = async (
 export const ReconciliationView: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const initialSearchParams = useRef(new URLSearchParams(searchParams))
+  const setSearchParamsRef = useRef(setSearchParams)
+  const hasInitializedImports = useRef(false)
+  setSearchParamsRef.current = setSearchParams
   const [imports, setImports] = useState<BankStatementImportResponse[]>([])
   const [activeImportId, setActiveImportId] = useState<string | null>(searchParams.get('import'))
   const [transactions, setTransactions] = useState<BankTransactionResponse[]>([])
@@ -84,6 +87,9 @@ export const ReconciliationView: React.FC = () => {
 
   // On mount: fetch all bank statement imports and auto-select the latest one
   useEffect(() => {
+    if (hasInitializedImports.current) return
+    hasInitializedImports.current = true
+
     const init = async () => {
       try {
         const res = await fetchBankStatementImports({ limit: 50 })
@@ -100,7 +106,7 @@ export const ReconciliationView: React.FC = () => {
             nextParams.set('import', selectedImportId)
             nextParams.delete('transaction')
             nextParams.delete('journal')
-            setSearchParams(nextParams, { replace: true })
+            setSearchParamsRef.current(nextParams, { replace: true })
           }
         }
       } catch (err) {
@@ -108,7 +114,7 @@ export const ReconciliationView: React.FC = () => {
       }
     }
     init()
-  }, [setSearchParams])
+  }, [])
 
   // Reload when activeImportId changes (e.g., user switches batch via dropdown)
   useEffect(() => {
