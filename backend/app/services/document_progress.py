@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 STREAM_MAX_LENGTH = 200
 STREAM_TTL_SECONDS = 24 * 60 * 60
 STREAM_BLOCK_MS = 15_000
+REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS = 5.0
+REDIS_SOCKET_TIMEOUT_SECONDS = (STREAM_BLOCK_MS / 1000) + 5.0
 
 
 def document_progress_key(document_id: str | uuid.UUID) -> str:
@@ -26,7 +28,12 @@ def document_progress_key(document_id: str | uuid.UUID) -> str:
 @lru_cache(maxsize=1)
 def get_redis_client() -> Redis:
     """Create the process-wide Redis client used by publishers and observers."""
-    return Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    return Redis.from_url(
+        settings.REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS,
+        socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+    )
 
 
 def publish_document_progress(

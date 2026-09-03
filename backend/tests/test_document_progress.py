@@ -4,7 +4,11 @@ from unittest.mock import Mock, patch
 
 from redis.exceptions import RedisError
 
+from app.core.config import settings
 from app.services.document_progress import (
+    REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS,
+    REDIS_SOCKET_TIMEOUT_SECONDS,
+    STREAM_BLOCK_MS,
     STREAM_MAX_LENGTH,
     STREAM_TTL_SECONDS,
     document_progress_key,
@@ -12,6 +16,25 @@ from app.services.document_progress import (
     read_document_progress,
     serialize_sse,
 )
+
+
+@patch("app.services.document_progress.Redis.from_url")
+def test_redis_socket_timeout_exceeds_blocking_read(mock_from_url):
+    from app.services.document_progress import get_redis_client
+
+    get_redis_client.cache_clear()
+    try:
+        get_redis_client()
+    finally:
+        get_redis_client.cache_clear()
+
+    assert REDIS_SOCKET_TIMEOUT_SECONDS > STREAM_BLOCK_MS / 1000
+    mock_from_url.assert_called_once_with(
+        settings.REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS,
+        socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+    )
 
 
 @patch("app.services.document_progress.get_redis_client")
