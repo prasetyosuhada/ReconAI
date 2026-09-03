@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { TrialBalanceSummaryCard } from './TrialBalanceSummaryCard'
 import { JournalEntryListTable } from './JournalEntryListTable'
 import { JournalDetailModal } from './JournalDetailModal'
@@ -10,6 +11,9 @@ interface GeneralLedgerViewProps {
 }
 
 export const GeneralLedgerView: React.FC<GeneralLedgerViewProps> = ({ onNavigateToReview }) => {
+  const { journalEntryId } = useParams<{ journalEntryId: string }>()
+  const navigate = useNavigate()
+  const location = useLocation()
   const [entries, setEntries] = useState<JournalEntryResponse[]>([])
   const [total, setTotal] = useState<number>(0)
   const [trialBalance, setTrialBalance] = useState<TrialBalanceResponse | null>(null)
@@ -18,7 +22,14 @@ export const GeneralLedgerView: React.FC<GeneralLedgerViewProps> = ({ onNavigate
   const [searchTerm, setSearchTerm] = useState<string>('')
   const [page, setPage] = useState<number>(1)
   const [pageSize, setPageSize] = useState<number>(10)
-  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
+
+  const handleCloseDetail = () => {
+    if (location.state?.fromLedger) {
+      navigate(-1)
+    } else {
+      navigate('/ledger', { replace: true })
+    }
+  }
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -67,7 +78,7 @@ export const GeneralLedgerView: React.FC<GeneralLedgerViewProps> = ({ onNavigate
         total={total}
         loading={loading}
         onRefresh={loadData}
-        onSelectEntry={(id) => setSelectedEntryId(id)}
+        onSelectEntry={(id) => navigate(`/ledger/${id}`, { state: { fromLedger: true } })}
         statusFilter={statusFilter}
         onStatusFilterChange={handleStatusFilterChange}
         searchTerm={searchTerm}
@@ -82,10 +93,10 @@ export const GeneralLedgerView: React.FC<GeneralLedgerViewProps> = ({ onNavigate
       />
 
       {/* Journal Detail Modal */}
-      {selectedEntryId && (
+      {journalEntryId && (
         <JournalDetailModal
-          entryId={selectedEntryId}
-          onClose={() => setSelectedEntryId(null)}
+          entryId={journalEntryId}
+          onClose={handleCloseDetail}
           onPosted={loadData}
           onNavigateToReview={onNavigateToReview}
         />

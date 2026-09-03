@@ -1,12 +1,10 @@
 import React, { useState } from 'react'
+import { Outlet, useLocation } from 'react-router-dom'
 import { Navbar } from './Navbar'
 import { Sidebar } from './Sidebar'
 import type { NavTab } from './Sidebar'
 
 interface MainLayoutProps {
-  children: React.ReactNode
-  activeTab: NavTab
-  onSelectTab: (tab: NavTab) => void
   pendingReviewCount?: number
 }
 
@@ -19,20 +17,23 @@ const TAB_TITLES: Record<NavTab, string> = {
   audit: 'Audit Log & Document Traceability',
 }
 
-export const MainLayout: React.FC<MainLayoutProps> = ({
-  children,
-  activeTab,
-  onSelectTab,
-  pendingReviewCount = 0,
-}) => {
+const routeToTab = (pathname: string): NavTab => {
+  if (pathname.startsWith('/documents')) return 'documents'
+  if (pathname.startsWith('/review')) return 'review'
+  if (pathname.startsWith('/ledger')) return 'ledger'
+  if (pathname.startsWith('/reconciliation')) return 'reconciliation'
+  if (pathname.startsWith('/audit')) return 'audit'
+  return 'dashboard'
+}
+
+export const MainLayout: React.FC<MainLayoutProps> = ({ pendingReviewCount = 0 }) => {
   const [collapsed, setCollapsed] = useState(false)
+  const activeTab = routeToTab(useLocation().pathname)
 
   return (
     <div className="min-h-screen bg-slate-950 flex font-sans antialiased text-slate-100 selection:bg-indigo-500 selection:text-white">
       {/* Sidebar */}
       <Sidebar
-        activeTab={activeTab}
-        onSelectTab={onSelectTab}
         collapsed={collapsed}
         onToggleCollapse={() => setCollapsed(!collapsed)}
         pendingReviewCount={pendingReviewCount}
@@ -45,7 +46,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 
         {/* Main Content Container */}
         <main className="flex-1 overflow-y-auto p-6 md:p-8 max-w-7xl w-full mx-auto space-y-6">
-          {children}
+          <Outlet />
         </main>
       </div>
     </div>

@@ -1,17 +1,25 @@
 import React, { useEffect, useState, useCallback } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ReviewQueueHeader } from './ReviewQueueHeader'
 import { ReviewQueueList } from './ReviewQueueList'
 import { ExtractionReviewModal } from './ExtractionReviewModal'
 import { BookkeepingReviewModal } from './BookkeepingReviewModal'
 import { ReconciliationReviewModal } from './ReconciliationReviewModal'
 import type { ReviewItemResponse } from '../../services/api'
-import { fetchReviewItems, notifyReviewQueueUpdated } from '../../services/api'
+import {
+  fetchReviewItemDetail,
+  fetchReviewItems,
+  notifyReviewQueueUpdated,
+} from '../../services/api'
 
 interface ReviewQueueViewProps {
   onInspectItem?: (item: ReviewItemResponse) => void
 }
 
 export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem }) => {
+  const { reviewItemId } = useParams<{ reviewItemId: string }>()
+  const navigate = useNavigate()
+  const location = useLocation()
   const [items, setItems] = useState<ReviewItemResponse[]>([])
   const [total, setTotal] = useState<number>(0)
   const [loading, setLoading] = useState<boolean>(true)
@@ -21,6 +29,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
   const [page, setPage] = useState<number>(1)
   const [pageSize, setPageSize] = useState<number>(10)
   const [selectedItem, setSelectedItem] = useState<ReviewItemResponse | null>(null)
+  const [detailError, setDetailError] = useState<string | null>(null)
 
   // Header statistics state
   const [pendingCount, setPendingCount] = useState<number>(0)
@@ -66,10 +75,46 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
     }
   }, [loadReviewItems])
 
+  useEffect(() => {
+    if (!reviewItemId) {
+      setSelectedItem(null)
+      setDetailError(null)
+      return
+    }
+
+    let cancelled = false
+    fetchReviewItemDetail(reviewItemId)
+      .then((item) => {
+        if (!cancelled) {
+          setSelectedItem(item)
+          setDetailError(null)
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setSelectedItem(null)
+          setDetailError(err instanceof Error ? err.message : 'Failed to load review item')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reviewItemId])
+
   const handleInspect = (item: ReviewItemResponse) => {
     setSelectedItem(item)
+    setDetailError(null)
+    navigate(`/review/${item.id}`, { state: { fromReviewQueue: true } })
     if (onInspectItem) {
       onInspectItem(item)
+    }
+  }
+
+  const handleCloseDetail = () => {
+    if (location.state?.fromReviewQueue) {
+      navigate(-1)
+    } else {
+      navigate('/review', { replace: true })
     }
   }
 
@@ -98,6 +143,18 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
 
   return (
     <div className="space-y-6">
+      {detailError && (
+        <div className="rounded-xl border border-red-500/30 bg-red-950/30 p-4 text-sm text-red-300">
+          {detailError}{' '}
+          <button
+            type="button"
+            onClick={() => navigate('/review', { replace: true })}
+            className="font-semibold text-red-200 underline underline-offset-2"
+          >
+            Back to Review Queue
+          </button>
+        </div>
+      )}
       {/* Header Statistics */}
       <ReviewQueueHeader
         pendingCount={pendingCount}
@@ -131,7 +188,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
       {selectedItem && isReconciliationItem && (
         <ReconciliationReviewModal
           item={selectedItem}
-          onClose={() => setSelectedItem(null)}
+          onClose={handleCloseDetail}
           onResolved={handleResolved}
         />
       )}
@@ -140,7 +197,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
       {selectedItem && isBookkeepingItem && (
         <BookkeepingReviewModal
           item={selectedItem}
-          onClose={() => setSelectedItem(null)}
+          onClose={handleCloseDetail}
           onResolved={handleResolved}
         />
       )}
@@ -149,7 +206,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
       {selectedItem && !isBookkeepingItem && !isReconciliationItem && (
         <ExtractionReviewModal
           item={selectedItem}
-          onClose={() => setSelectedItem(null)}
+          onClose={handleCloseDetail}
           onResolved={handleResolved}
         />
       )}

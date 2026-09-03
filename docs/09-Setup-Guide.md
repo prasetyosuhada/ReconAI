@@ -122,6 +122,18 @@ npm run dev
 Application User Interface:
 - **Web App**: [http://localhost:5173](http://localhost:5173)
 
+The frontend uses browser-based routing. Its primary routes are `/documents`, `/review`,
+`/ledger`, `/reconciliation`, and `/audit`; entity detail routes can be bookmarked and opened
+directly. The Vite development server handles these deep links automatically.
+
+### Production SPA fallback
+
+When deploying the production build, configure the frontend web server to serve
+`frontend/dist/index.html` for every non-file, non-API route. For example, an Nginx frontend
+location should use `try_files $uri $uri/ /index.html;`, while `/api/` must continue to proxy to
+FastAPI. Without this fallback, refreshing a deep link such as `/review/<id>` or
+`/audit/document/<id>` will return a web-server 404 before React can load.
+
 ---
 
 ## 📁 4. Generating Demo Sample Dataset

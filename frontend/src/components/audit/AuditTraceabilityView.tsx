@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   AlertCircle,
   BookOpen,
@@ -55,6 +56,13 @@ const getDefaultEndDate = (): string => {
 }
 
 export const AuditTraceabilityView: React.FC = () => {
+  const { documentId, journalEntryId, bankTransactionId } = useParams<{
+    documentId: string
+    journalEntryId: string
+    bankTransactionId: string
+  }>()
+  const navigate = useNavigate()
+  const location = useLocation()
   const [traceMode, setTraceMode] = useState<TraceMode>('document')
 
   // Document mode state
@@ -97,6 +105,50 @@ export const AuditTraceabilityView: React.FC = () => {
   const journalDropdownRef = useRef<HTMLDivElement>(null)
   const bankDropdownRef = useRef<HTMLDivElement>(null)
 
+  // Hydrate the selected audit entity from the URL so refresh and deep links work.
+  useEffect(() => {
+    if (location.pathname === '/audit/global') {
+      setTraceMode('global')
+      return
+    }
+
+    if (documentId) {
+      setTraceMode('document')
+      setSelectedDocId(documentId)
+      return
+    }
+
+    if (journalEntryId) {
+      setTraceMode('journal_entry')
+      fetchJournalEntryDetail(journalEntryId)
+        .then((entry) => {
+          setSelectedJournalEntry(entry)
+          setJournalSearch(entry.description)
+        })
+        .catch((err: unknown) => {
+          setSelectedJournalEntry(null)
+          setError(err instanceof Error ? err.message : 'Journal entry not found')
+        })
+      return
+    }
+
+    if (bankTransactionId) {
+      setTraceMode('bank_transaction')
+      fetchBankTransactionDetail(bankTransactionId)
+        .then((transaction) => {
+          setSelectedBankTx(transaction)
+          setBankSearch(transaction.description)
+        })
+        .catch((err: unknown) => {
+          setSelectedBankTx(null)
+          setError(err instanceof Error ? err.message : 'Bank transaction not found')
+        })
+      return
+    }
+
+    setTraceMode('document')
+  }, [bankTransactionId, documentId, journalEntryId, location.pathname])
+
   // Default date range for Global mode on initial entry
   useEffect(() => {
     if (
@@ -132,14 +184,18 @@ export const AuditTraceabilityView: React.FC = () => {
         const res = await fetchDocuments({ limit: 50 })
         setDocuments(res.items)
         if (res.items.length > 0) {
-          setSelectedDocId((current) => current || res.items[0].id)
+          if (documentId) {
+            setSelectedDocId(documentId)
+          } else if (location.pathname === '/audit') {
+            navigate(`/audit/document/${res.items[0].id}`, { replace: true })
+          }
         }
       } catch (err: unknown) {
         console.error('Failed to fetch document list for audit selector:', err)
       }
     }
     loadDocList()
-  }, [])
+  }, [documentId, location.pathname, navigate])
 
   // Search journal entries for typeahead
   useEffect(() => {
@@ -295,47 +351,14 @@ export const AuditTraceabilityView: React.FC = () => {
   }
 
   // Inline Jump Handlers (Requirement 9)
-  const handleJumpToJournalEntry = async (jeId: string) => {
-    setTraceMode('journal_entry')
+  const handleJumpToJournalEntry = (jeId: string) => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
-    try {
-      const je = await fetchJournalEntryDetail(jeId)
-      setJournalSearch(je.description)
-      setSelectedJournalEntry(je)
-    } catch {
-      setJournalSearch(jeId)
-      setSelectedJournalEntry({
-        id: jeId,
-        description: `Journal Entry #${jeId.slice(0, 8)}`,
-        entry_date: '',
-        status: 'posted',
-        total_debit: 0,
-        total_credit: 0,
-        created_at: new Date().toISOString(),
-      })
-    }
+    navigate(`/audit/journal/${jeId}`)
   }
 
-  const handleJumpToBankTx = async (txId: string) => {
-    setTraceMode('bank_transaction')
+  const handleJumpToBankTx = (txId: string) => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
-    try {
-      const tx = await fetchBankTransactionDetail(txId)
-      setBankSearch(tx.description)
-      setSelectedBankTx(tx)
-    } catch {
-      setBankSearch(txId)
-      setSelectedBankTx({
-        id: txId,
-        bank_statement_import_id: '',
-        transaction_date: '',
-        description: `Bank Transaction #${txId.slice(0, 8)}`,
-        amount: 0,
-        currency: 'IDR',
-        status: 'matched',
-        created_at: new Date().toISOString(),
-      })
-    }
+    navigate(`/audit/bank-transaction/${txId}`)
   }
 
   return (
@@ -373,7 +396,7 @@ export const AuditTraceabilityView: React.FC = () => {
         <div className="flex flex-wrap items-center gap-1.5 p-1.5 rounded-xl bg-slate-950/80 border border-slate-800">
           <button
             type="button"
-            onClick={() => setTraceMode('document')}
+            onClick={() => navigate(selectedDocId ? `/audit/document/${selectedDocId}` : '/audit')}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               traceMode === 'document'
                 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -422,7 +445,7 @@ export const AuditTraceabilityView: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setTraceMode('global')}
+            onClick={() => navigate('/audit/global')}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               traceMode === 'global'
                 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -446,7 +469,11 @@ export const AuditTraceabilityView: React.FC = () => {
                 <FileText className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                 <select
                   value={selectedDocId}
-                  onChange={(e) => setSelectedDocId(e.target.value)}
+                  onChange={(e) => {
+                    const id = e.target.value
+                    setSelectedDocId(id)
+                    navigate(id ? `/audit/document/${id}` : '/audit')
+                  }}
                   className="w-full pl-9 pr-8 py-2 bg-slate-900/90 border border-slate-700/80 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-indigo-500 appearance-none cursor-pointer"
                 >
                   <option value="">View All System Audit Events</option>
@@ -527,6 +554,7 @@ export const AuditTraceabilityView: React.FC = () => {
                       setSelectedJournalEntry(null)
                       setJournalSearch('')
                       setDocAudit(null)
+                      navigate('/audit')
                     }}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
                   >
@@ -551,6 +579,7 @@ export const AuditTraceabilityView: React.FC = () => {
                           setSelectedJournalEntry(je)
                           setJournalSearch(je.description)
                           setShowJournalDropdown(false)
+                          navigate(`/audit/journal/${je.id}`)
                         }}
                         className={`w-full p-3 text-left hover:bg-slate-800/80 transition-colors flex items-center justify-between gap-3 cursor-pointer ${
                           selectedJournalEntry?.id === je.id ? 'bg-indigo-950/40' : ''
@@ -627,6 +656,7 @@ export const AuditTraceabilityView: React.FC = () => {
                       setSelectedBankTx(null)
                       setBankSearch('')
                       setDocAudit(null)
+                      navigate('/audit')
                     }}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
                   >
@@ -651,6 +681,7 @@ export const AuditTraceabilityView: React.FC = () => {
                           setSelectedBankTx(tx)
                           setBankSearch(tx.description)
                           setShowBankDropdown(false)
+                          navigate(`/audit/bank-transaction/${tx.id}`)
                         }}
                         className={`w-full p-3 text-left hover:bg-slate-800/80 transition-colors flex items-center justify-between gap-3 cursor-pointer ${
                           selectedBankTx?.id === tx.id ? 'bg-indigo-950/40' : ''

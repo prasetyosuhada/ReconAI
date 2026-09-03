@@ -1,6 +1,5 @@
-import { useState } from 'react'
+import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { MainLayout } from './components/layout/MainLayout'
-import type { NavTab } from './components/layout/Sidebar'
 import { DocumentIntakeView } from './components/documents/DocumentIntakeView'
 import { ReviewQueueView } from './components/review/ReviewQueueView'
 import { GeneralLedgerView } from './components/ledger/GeneralLedgerView'
@@ -159,61 +158,70 @@ function DashboardStatsCards({ stats, loading, error, onRefresh }: DashboardStat
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>('dashboard')
   const { stats, loading, error, refresh } = useDashboardStats()
+  const navigate = useNavigate()
 
   return (
-    <MainLayout
-      activeTab={activeTab}
-      onSelectTab={setActiveTab}
-      pendingReviewCount={stats?.pendingReviewCount ?? 0}
-    >
-      {activeTab === 'dashboard' && (
-        <div className="space-y-6">
-          <div className="p-6 rounded-2xl bg-gradient-to-r from-indigo-900/40 via-slate-900 to-slate-900 border border-indigo-500/20 shadow-xl backdrop-blur-sm relative overflow-hidden">
-            <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-gradient-to-l from-indigo-500/10 to-transparent pointer-events-none" />
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold uppercase tracking-wider mb-3">
-              <Sparkles className="w-3.5 h-3.5" /> ReconAI Agent Platform
+    <Routes>
+      <Route element={<MainLayout pendingReviewCount={stats?.pendingReviewCount ?? 0} />}>
+        <Route
+          index
+          element={
+            <div className="space-y-6">
+              <div className="p-6 rounded-2xl bg-gradient-to-r from-indigo-900/40 via-slate-900 to-slate-900 border border-indigo-500/20 shadow-xl backdrop-blur-sm relative overflow-hidden">
+                <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-gradient-to-l from-indigo-500/10 to-transparent pointer-events-none" />
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold uppercase tracking-wider mb-3">
+                  <Sparkles className="w-3.5 h-3.5" /> ReconAI Agent Platform
+                </div>
+                <h2 className="text-3xl font-extrabold text-white">
+                  AI-Powered Bookkeeping &amp; Reconciliation
+                </h2>
+                <p className="text-slate-400 text-sm max-w-2xl mt-2 leading-relaxed">
+                  Multi-agent accounting automation framework. Autonomous OCR intake, LLM journal
+                  entry suggestions with deterministic double-entry guardrails, and
+                  human-in-the-loop verification.
+                </p>
+              </div>
+
+              <DashboardStatsCards
+                stats={stats}
+                loading={loading}
+                error={error}
+                onRefresh={refresh}
+              />
             </div>
-            <h2 className="text-3xl font-extrabold text-white">
-              AI-Powered Bookkeeping &amp; Reconciliation
-            </h2>
-            <p className="text-slate-400 text-sm max-w-2xl mt-2 leading-relaxed">
-              Multi-agent accounting automation framework. Autonomous OCR intake, LLM journal entry
-              suggestions with deterministic double-entry guardrails, and human-in-the-loop
-              verification.
-            </p>
-          </div>
-
-          <DashboardStatsCards stats={stats} loading={loading} error={error} onRefresh={refresh} />
-        </div>
-      )}
-
-      {activeTab === 'documents' && (
-        <DocumentIntakeView
-          onSelectDocument={(docId) => {
-            console.log('Selected document:', docId)
-            setActiveTab('audit')
-          }}
+          }
         />
-      )}
-
-      {activeTab === 'review' && (
-        <ReviewQueueView
-          onInspectItem={(item) => {
-            console.log('Inspect review item:', item)
-          }}
+        <Route
+          path="documents"
+          element={
+            <DocumentIntakeView
+              onSelectDocument={(docId) => navigate(`/audit/document/${docId}`)}
+            />
+          }
         />
-      )}
-
-      {activeTab === 'ledger' && (
-        <GeneralLedgerView onNavigateToReview={() => setActiveTab('review')} />
-      )}
-
-      {activeTab === 'reconciliation' && <ReconciliationView />}
-
-      {activeTab === 'audit' && <AuditTraceabilityView />}
-    </MainLayout>
+        <Route path="review" element={<ReviewQueueView />} />
+        <Route path="review/:reviewItemId" element={<ReviewQueueView />} />
+        <Route
+          path="ledger"
+          element={<GeneralLedgerView onNavigateToReview={() => navigate('/review')} />}
+        />
+        <Route
+          path="ledger/:journalEntryId"
+          element={<GeneralLedgerView onNavigateToReview={() => navigate('/review')} />}
+        />
+        <Route path="reconciliation" element={<ReconciliationView />} />
+        <Route path="audit" element={<AuditTraceabilityView />} />
+        <Route path="audit/document/:documentId" element={<AuditTraceabilityView />} />
+        <Route path="audit/journal/:journalEntryId" element={<AuditTraceabilityView />} />
+        <Route
+          path="audit/bank-transaction/:bankTransactionId"
+          element={<AuditTraceabilityView />}
+        />
+        <Route path="audit/global" element={<AuditTraceabilityView />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
   )
 }
 

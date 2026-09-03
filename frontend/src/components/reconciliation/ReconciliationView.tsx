@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ReconciliationHeader } from './ReconciliationHeader'
 import { ReconciliationBalanceSummary } from './ReconciliationBalanceSummary'
 import { ReconciliationCompletionBanner } from './ReconciliationCompletionBanner'
@@ -36,16 +37,20 @@ const refreshImports = async (
 }
 
 export const ReconciliationView: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialSearchParams = useRef(new URLSearchParams(searchParams))
   const [imports, setImports] = useState<BankStatementImportResponse[]>([])
-  const [activeImportId, setActiveImportId] = useState<string | null>(null)
+  const [activeImportId, setActiveImportId] = useState<string | null>(searchParams.get('import'))
   const [transactions, setTransactions] = useState<BankTransactionResponse[]>([])
   const [matches, setMatches] = useState<ReconciliationMatchResponse[]>([])
   const [journalEntries, setJournalEntries] = useState<JournalEntryResponse[]>([])
   const [chartOfAccounts, setChartOfAccounts] = useState<ChartOfAccountResponse[]>([])
   const [loading, setLoading] = useState<boolean>(false)
   const [actionLoading, setActionLoading] = useState<boolean>(false)
-  const [selectedTxId, setSelectedTxId] = useState<string | null>(null)
-  const [selectedGLEntryId, setSelectedGLEntryId] = useState<string | null>(null)
+  const [selectedTxId, setSelectedTxId] = useState<string | null>(searchParams.get('transaction'))
+  const [selectedGLEntryId, setSelectedGLEntryId] = useState<string | null>(
+    searchParams.get('journal')
+  )
   const [activeFilter, setActiveFilter] = useState<ReconFilterType>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [showAuditTimeline, setShowAuditTimeline] = useState<boolean>(false)
@@ -85,28 +90,102 @@ export const ReconciliationView: React.FC = () => {
         setImports(res.items)
         if (res.items.length > 0) {
           // items are sorted by imported_at DESC from backend
-          const latestId = res.items[0].id
-          setActiveImportId(latestId)
-          await loadData(latestId)
+          const requestedImportId = initialSearchParams.current.get('import')
+          const selectedImportId = res.items.some((item) => item.id === requestedImportId)
+            ? requestedImportId!
+            : res.items[0].id
+          setActiveImportId(selectedImportId)
+          if (selectedImportId !== requestedImportId) {
+            const nextParams = new URLSearchParams(initialSearchParams.current)
+            nextParams.set('import', selectedImportId)
+            nextParams.delete('transaction')
+            nextParams.delete('journal')
+            setSearchParams(nextParams, { replace: true })
+          }
         }
       } catch (err) {
         console.error('Failed to load bank statement imports:', err)
       }
     }
     init()
-  }, [loadData])
+  }, [setSearchParams])
 
   // Reload when activeImportId changes (e.g., user switches batch via dropdown)
   useEffect(() => {
     if (activeImportId) {
-      setSelectedTxId(null)
       loadData(activeImportId)
     }
   }, [activeImportId, loadData])
 
+  // Restore selections when the browser moves backward or forward through query history.
+  useEffect(() => {
+    const importId = searchParams.get('import')
+    const transactionId = searchParams.get('transaction')
+    const journalId = searchParams.get('journal')
+    if (importId) setActiveImportId(importId)
+    setSelectedTxId(transactionId)
+    setSelectedGLEntryId(journalId)
+  }, [searchParams])
+
+  // Keep entity selections in the URL, falling back to the first available item.
+  useEffect(() => {
+    if (!activeImportId || loading) return
+
+    const validTxId = transactions.some((tx) => tx.id === selectedTxId)
+      ? selectedTxId
+      : (transactions[0]?.id ?? null)
+    const validJournalId = journalEntries.some((entry) => entry.id === selectedGLEntryId)
+      ? selectedGLEntryId
+      : (journalEntries[0]?.id ?? null)
+
+    if (validTxId !== selectedTxId) setSelectedTxId(validTxId)
+    if (validJournalId !== selectedGLEntryId) setSelectedGLEntryId(validJournalId)
+
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.set('import', activeImportId)
+    if (validTxId) nextParams.set('transaction', validTxId)
+    else nextParams.delete('transaction')
+    if (validJournalId) nextParams.set('journal', validJournalId)
+    else nextParams.delete('journal')
+
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true })
+    }
+  }, [
+    activeImportId,
+    journalEntries,
+    loading,
+    searchParams,
+    selectedGLEntryId,
+    selectedTxId,
+    setSearchParams,
+    transactions,
+  ])
+
+  const handleSelectImport = (id: string) => {
+    setActiveImportId(id)
+    setSelectedTxId(null)
+    setSelectedGLEntryId(null)
+    setSearchParams({ import: id })
+  }
+
+  const handleSelectTransaction = (id: string) => {
+    setSelectedTxId(id)
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.set('transaction', id)
+    setSearchParams(nextParams)
+  }
+
+  const handleSelectJournal = (id: string) => {
+    setSelectedGLEntryId(id)
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.set('journal', id)
+    setSearchParams(nextParams)
+  }
+
   const handleImportSuccess = (newImportId: string, newImport: BankStatementImportResponse) => {
     setImports((prev) => [newImport, ...prev])
-    setActiveImportId(newImportId)
+    handleSelectImport(newImportId)
   }
 
   const matchedCount = matches.filter(
@@ -290,7 +369,7 @@ export const ReconciliationView: React.FC = () => {
         activeImportId={activeImportId}
         imports={imports}
         transactions={transactions}
-        onSelectImport={(id) => setActiveImportId(id)}
+        onSelectImport={handleSelectImport}
         onImportSuccess={handleImportSuccess}
         onTriggerStreamRun={handleTriggerStreamRun}
         isStreaming={isStreamingRecon}
@@ -350,8 +429,8 @@ export const ReconciliationView: React.FC = () => {
         actionLoading={actionLoading}
         selectedTxId={selectedTxId}
         selectedGLEntryId={selectedGLEntryId}
-        onSelectTx={(txId) => setSelectedTxId(txId)}
-        onSelectGLEntry={(glId) => setSelectedGLEntryId(glId)}
+        onSelectTx={handleSelectTransaction}
+        onSelectGLEntry={handleSelectJournal}
         onAcceptMatch={handleAcceptMatch}
         onRejectMatch={handleRejectMatch}
         onRefresh={() => {

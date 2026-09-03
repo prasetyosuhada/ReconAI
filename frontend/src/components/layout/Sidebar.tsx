@@ -1,4 +1,5 @@
 import React from 'react'
+import { NavLink } from 'react-router-dom'
 import {
   ArrowLeftRight,
   BookOpen,
@@ -14,16 +15,12 @@ import {
 export type NavTab = 'dashboard' | 'documents' | 'review' | 'ledger' | 'reconciliation' | 'audit'
 
 interface SidebarProps {
-  activeTab: NavTab
-  onSelectTab: (tab: NavTab) => void
   collapsed: boolean
   onToggleCollapse: () => void
   pendingReviewCount?: number
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
-  activeTab,
-  onSelectTab,
   collapsed,
   onToggleCollapse,
   pendingReviewCount = 0,
@@ -31,16 +28,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const navItems = [
     {
       id: 'dashboard' as NavTab,
+      to: '/',
       label: 'Dashboard',
       icon: LayoutDashboard,
     },
     {
       id: 'documents' as NavTab,
+      to: '/documents',
       label: 'Document Intake',
       icon: UploadCloud,
     },
     {
       id: 'review' as NavTab,
+      to: '/review',
       label: 'Review Queue',
       icon: UserCheck,
       badge: pendingReviewCount > 0 ? pendingReviewCount : undefined,
@@ -48,16 +48,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'ledger' as NavTab,
+      to: '/ledger',
       label: 'General Ledger',
       icon: BookOpen,
     },
     {
       id: 'reconciliation' as NavTab,
+      to: '/reconciliation',
       label: 'Bank Reconciliation',
       icon: ArrowLeftRight,
     },
     {
       id: 'audit' as NavTab,
+      to: '/audit',
       label: 'Audit Traceability',
       icon: History,
     },
@@ -102,23 +105,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <nav className="p-3 space-y-1.5">
           {navItems.map((item) => {
             const Icon = item.icon
-            const isActive = activeTab === item.id
-
             return (
-              <button
+              <NavLink
                 key={item.id}
-                type="button"
-                onClick={() => onSelectTab(item.id)}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all duration-150 ${
-                  isActive
-                    ? 'bg-gradient-to-r from-indigo-600 to-indigo-700 text-white shadow-md shadow-indigo-600/30 font-semibold'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
-                }`}
+                to={item.to}
+                end={item.to === '/'}
+                className={({ isActive }) =>
+                  `w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all duration-150 ${
+                    isActive
+                      ? 'bg-gradient-to-r from-indigo-600 to-indigo-700 text-white shadow-md shadow-indigo-600/30 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+                  }`
+                }
                 title={collapsed ? item.label : undefined}
               >
-                <Icon
-                  className={`w-5 h-5 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`}
-                />
+                <Icon className="w-5 h-5 shrink-0 text-current" />
                 {!collapsed && <span className="truncate flex-1 text-left">{item.label}</span>}
                 {!collapsed && item.badge !== undefined && (
                   <span
@@ -127,7 +128,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {item.badge}
                   </span>
                 )}
-              </button>
+              </NavLink>
             )
           })}
         </nav>
