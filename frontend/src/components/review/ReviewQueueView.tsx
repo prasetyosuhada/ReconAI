@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Loader2 } from 'lucide-react'
 import { ReviewQueueHeader } from './ReviewQueueHeader'
 import { ReviewQueueList } from './ReviewQueueList'
 import { ExtractionReviewModal } from './ExtractionReviewModal'
@@ -29,6 +30,7 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
   const [page, setPage] = useState<number>(1)
   const [pageSize, setPageSize] = useState<number>(10)
   const [selectedItem, setSelectedItem] = useState<ReviewItemResponse | null>(null)
+  const [detailLoading, setDetailLoading] = useState<boolean>(false)
   const [detailError, setDetailError] = useState<string | null>(null)
 
   // Header statistics state
@@ -78,11 +80,14 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
   useEffect(() => {
     if (!reviewItemId) {
       setSelectedItem(null)
+      setDetailLoading(false)
       setDetailError(null)
       return
     }
 
     let cancelled = false
+    setDetailLoading(true)
+    setSelectedItem(null)
     fetchReviewItemDetail(reviewItemId)
       .then((item) => {
         if (!cancelled) {
@@ -96,16 +101,23 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
           setDetailError(err instanceof Error ? err.message : 'Failed to load review item')
         }
       })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false)
+      })
     return () => {
       cancelled = true
     }
   }, [reviewItemId])
 
   const handleInspect = (item: ReviewItemResponse) => {
-    setSelectedItem(item)
     setDetailError(null)
     if (reviewItemId !== item.id) {
+      setSelectedItem(null)
+      setDetailLoading(true)
       navigate(`/review/${item.id}`, { state: { fromReviewQueue: true } })
+    } else {
+      setSelectedItem(item)
+      setDetailLoading(false)
     }
     if (onInspectItem) {
       onInspectItem(item)
@@ -185,6 +197,15 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({ onInspectItem 
           setPage(1)
         }}
       />
+
+      {detailLoading && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="rounded-2xl border border-slate-700/80 bg-slate-900 px-8 py-10 text-center shadow-2xl">
+            <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin text-indigo-400" />
+            <p className="text-sm font-semibold text-slate-200">Loading review detail...</p>
+          </div>
+        </div>
+      )}
 
       {/* Reconciliation Review Modal — for reconciliation type items */}
       {selectedItem && isReconciliationItem && (

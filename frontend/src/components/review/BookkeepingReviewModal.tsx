@@ -9,12 +9,7 @@ import {
   X,
 } from 'lucide-react'
 import type { JournalLineEditPayload, ReviewItemResponse } from '../../services/api'
-import {
-  approveReviewItem,
-  editReviewItem,
-  fetchReviewItemDetail,
-  rejectReviewItem,
-} from '../../services/api'
+import { approveReviewItem, editReviewItem, rejectReviewItem } from '../../services/api'
 import { BookkeepingJournalPanel, type BookkeepingLine } from '../shared/BookkeepingJournalPanel'
 
 interface BookkeepingReviewModalProps {
@@ -33,8 +28,6 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
   onClose,
   onResolved,
 }) => {
-  const [detailItem, setDetailItem] = useState<ReviewItemResponse | null>(item)
-  const [loadingDetail, setLoadingDetail] = useState<boolean>(false)
   const [isEditing, setIsEditing] = useState(false)
   const [lines, setLines] = useState<JournalLineEditPayload[]>([])
   const [rejectionReason, setRejectionReason] = useState('')
@@ -43,39 +36,13 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   useEffect(() => {
-    let ignore = false
-    setDetailItem(item)
     setErrorMsg(null)
     setIsEditing(false)
     setShowRejectInput(false)
     setRejectionReason('')
+  }, [item?.id])
 
-    if (!item?.id) return
-
-    setLoadingDetail(true)
-    fetchReviewItemDetail(item.id)
-      .then((res) => {
-        if (!ignore) {
-          setDetailItem(res)
-        }
-      })
-      .catch((err: unknown) => {
-        if (!ignore) {
-          setErrorMsg(err instanceof Error ? err.message : 'Failed to load review detail')
-        }
-      })
-      .finally(() => {
-        if (!ignore) {
-          setLoadingDetail(false)
-        }
-      })
-
-    return () => {
-      ignore = true
-    }
-  }, [item])
-
-  const activeItem = detailItem || item
+  const activeItem = item
   const payload = activeItem?.original_payload || {}
   const currency: string = payload.currency || 'IDR'
   const vendorName: string = payload.vendor_name || payload.merchant_name || 'Unknown Vendor'
@@ -256,39 +223,32 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
         </div>
 
         <div className="max-h-[80vh] overflow-y-auto">
-          {loadingDetail ? (
-            <div className="py-16 text-center text-slate-400 space-y-2">
-              <Loader2 className="w-8 h-8 animate-spin text-indigo-400 mx-auto" />
-              <p className="text-xs">Loading bookkeeping review detail...</p>
-            </div>
-          ) : (
-            <BookkeepingJournalPanel
-              vendorName={vendorName}
-              transactionDate={transactionDate}
-              totalAmount={totalAmount}
-              currency={currency}
-              sourceLineItems={rawLineItems}
-              lines={lines}
-              confidenceScore={confidenceScore}
-              rationale={rationale}
-              riskFlags={riskFlags}
-              isEditing={isEditing}
-              onLineChange={handleLineChange}
-              onRemoveLine={(index) => setLines((prev) => prev.filter((_, i) => i !== index))}
-              onAddLine={() =>
-                setLines((prev) => [
-                  ...prev,
-                  {
-                    account_code: '',
-                    account_name: '',
-                    debit_amount: 0,
-                    credit_amount: 0,
-                    description: '',
-                  },
-                ])
-              }
-            />
-          )}
+          <BookkeepingJournalPanel
+            vendorName={vendorName}
+            transactionDate={transactionDate}
+            totalAmount={totalAmount}
+            currency={currency}
+            sourceLineItems={rawLineItems}
+            lines={lines}
+            confidenceScore={confidenceScore}
+            rationale={rationale}
+            riskFlags={riskFlags}
+            isEditing={isEditing}
+            onLineChange={handleLineChange}
+            onRemoveLine={(index) => setLines((prev) => prev.filter((_, i) => i !== index))}
+            onAddLine={() =>
+              setLines((prev) => [
+                ...prev,
+                {
+                  account_code: '',
+                  account_name: '',
+                  debit_amount: 0,
+                  credit_amount: 0,
+                  description: '',
+                },
+              ])
+            }
+          />
         </div>
 
         {errorMsg && (

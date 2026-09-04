@@ -22,7 +22,6 @@ import {
   createAdjustmentJournalEntry,
   fetchBankTransactionDetail,
   fetchJournalEntryDetail,
-  fetchReviewItemDetail,
   rejectReviewItem,
   suggestAdjustmentJournal,
 } from '../../services/api'
@@ -61,7 +60,6 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
   onClose,
   onResolved,
 }) => {
-  const [detailItem, setDetailItem] = useState<ReviewItemResponse | null>(item)
   const [loadingDetail, setLoadingDetail] = useState<boolean>(true)
   const [bankTxRecord, setBankTxRecord] = useState<BankTransactionResponse | null>(null)
   const [candidateJE, setCandidateJE] = useState<JournalEntryResponse | null>(null)
@@ -80,7 +78,7 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
 
-  const activeItem = detailItem || item
+  const activeItem = item
   const payload: Record<string, any> = activeItem?.original_payload || {}
 
   // Parse bank transaction attributes from bankTxRecord, payload, or activeItem
@@ -137,10 +135,9 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
     candidateJE?.lines?.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0) ||
     0
 
-  // Load detailed review item and candidate GL entry / bank transaction
+  // The parent owns review-detail loading; this effect only loads linked entities.
   useEffect(() => {
     let ignore = false
-    setDetailItem(item)
     setLoadingDetail(true)
     setErrorMsg(null)
     setSuccessMsg(null)
@@ -154,47 +151,41 @@ export const ReconciliationReviewModal: React.FC<ReconciliationReviewModalProps>
       return
     }
 
-    fetchReviewItemDetail(item.id)
-      .then((res) => {
-        if (!ignore) {
-          setDetailItem(res)
-          const p = res.original_payload || {}
-          const jeId = p.proposed_journal_entry_id || p.journal_entry_id || p.proposed_je_id
-          if (jeId) {
-            setLoadingCandidate(true)
-            fetchJournalEntryDetail(jeId)
-              .then((je) => {
-                if (!ignore) setCandidateJE(je)
-              })
-              .catch((err) => {
-                console.error('Failed to load candidate journal entry:', err)
-              })
-              .finally(() => {
-                if (!ignore) setLoadingCandidate(false)
-              })
-          }
+    const p = item.original_payload || {}
+    const requests: Promise<unknown>[] = []
+    const jeId = p.proposed_journal_entry_id || p.journal_entry_id || p.proposed_je_id
+    if (jeId) {
+      setLoadingCandidate(true)
+      requests.push(
+        fetchJournalEntryDetail(jeId)
+          .then((je) => {
+            if (!ignore) setCandidateJE(je)
+          })
+          .catch((err) => {
+            console.error('Failed to load candidate journal entry:', err)
+          })
+          .finally(() => {
+            if (!ignore) setLoadingCandidate(false)
+          })
+      )
+    }
 
-          // Fetch bank transaction entity if source_id is available
-          const txId = res.source_id || p.tx_id || p.id
-          if (res.source_type === 'bank_transaction' && txId) {
-            fetchBankTransactionDetail(String(txId))
-              .then((tx) => {
-                if (!ignore) setBankTxRecord(tx)
-              })
-              .catch((err) => {
-                console.warn('Could not fetch bank transaction detail:', err)
-              })
-          }
-        }
-      })
-      .catch((err: unknown) => {
-        if (!ignore) {
-          setErrorMsg(err instanceof Error ? err.message : 'Failed to load review detail')
-        }
-      })
-      .finally(() => {
-        if (!ignore) setLoadingDetail(false)
-      })
+    const txId = item.source_id || p.tx_id || p.id
+    if (item.source_type === 'bank_transaction' && txId) {
+      requests.push(
+        fetchBankTransactionDetail(String(txId))
+          .then((tx) => {
+            if (!ignore) setBankTxRecord(tx)
+          })
+          .catch((err) => {
+            console.warn('Could not fetch bank transaction detail:', err)
+          })
+      )
+    }
+
+    Promise.all(requests).finally(() => {
+      if (!ignore) setLoadingDetail(false)
+    })
 
     return () => {
       ignore = true
