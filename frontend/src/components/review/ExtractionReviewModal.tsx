@@ -540,11 +540,14 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
   const getLineAmount = (line: Record<string, any>) =>
     line.amount ?? line.total ?? line.line_total ?? line.debit_amount ?? line.credit_amount ?? 0
 
+  const displayedLineItemCount =
+    isEditing && isExtractionReview ? extractionDraft.line_items.length : lineItems.length
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="relative max-w-7xl w-full max-h-[94vh] bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col my-auto">
+      <div className="relative max-w-7xl w-full max-h-[94vh] xl:h-[94vh] bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col my-auto">
         {/* Header */}
-        <div className="px-4 sm:px-6 py-4 bg-slate-950/90 border-b border-slate-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="shrink-0 px-4 sm:px-6 py-4 bg-slate-950/90 border-b border-slate-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <div className="min-w-0">
               <p className="text-[11px] uppercase tracking-wider text-slate-500 font-bold">
@@ -579,10 +582,10 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
         </div>
 
         {/* Modal Scrollable Body */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(220px,0.9fr)_minmax(420px,1.55fr)_minmax(260px,0.95fr)]">
+        <div className="flex-1 min-h-0 overflow-y-auto xl:overflow-hidden">
+          <div className="grid grid-cols-1 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(220px,0.9fr)_minmax(420px,1.55fr)_minmax(260px,0.95fr)]">
             {/* Left Column: Source Document */}
-            <section className="min-h-[280px] xl:min-h-[620px] border-b xl:border-b-0 xl:border-r border-slate-800 bg-slate-950/40 p-4 sm:p-5">
+            <section className="min-h-[280px] xl:h-full xl:min-h-0 border-b xl:border-b-0 xl:border-r border-slate-800 bg-slate-950/40 p-4 sm:p-5">
               <div className="h-full rounded-xl border border-slate-800 bg-slate-950/70 overflow-hidden flex flex-col">
                 <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-3">
                   <div className="min-w-0">
@@ -647,7 +650,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
             </section>
 
             {/* Middle Column: Extracted Information */}
-            <section className="border-b xl:border-b-0 xl:border-r border-slate-800 bg-slate-900 p-4 sm:p-6">
+            <section className="border-b xl:h-full xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:border-b-0 xl:border-r border-slate-800 bg-slate-900 p-4 sm:p-6">
               <div className="flex items-center justify-between gap-4 mb-6">
                 <div>
                   <p className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-2">
@@ -774,13 +777,23 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
               </div>
 
               <div className="mt-8 space-y-3">
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                  Line Items
-                </h4>
+                <div className="flex items-center justify-between gap-3">
+                  <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                    Line Items
+                    <span className="ml-2 rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
+                      {displayedLineItemCount}
+                    </span>
+                  </h4>
+                  {displayedLineItemCount > 5 && (
+                    <span className="hidden xl:inline text-[10px] font-medium text-slate-500">
+                      Scroll to review all items
+                    </span>
+                  )}
+                </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
                   {isEditing && isExtractionReview ? (
-                    <div className="divide-y divide-slate-800/80">
-                      <div className="hidden sm:grid grid-cols-[minmax(0,1.5fr)_70px_110px_110px_36px] gap-2 px-4 py-2 bg-slate-950 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                    <div className="divide-y divide-slate-800/80 xl:max-h-[min(32vh,22rem)] xl:overflow-y-auto xl:overscroll-contain [scrollbar-gutter:stable]">
+                      <div className="hidden sm:grid xl:sticky xl:top-0 xl:z-10 grid-cols-[minmax(0,1.5fr)_70px_110px_110px_36px] gap-2 px-4 py-2 bg-slate-950 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
                         <span>Description</span>
                         <span>Qty</span>
                         <span>Unit Price</span>
@@ -855,7 +868,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                       </div>
                     </div>
                   ) : lineItems.length > 0 ? (
-                    <div className="divide-y divide-slate-800/80">
+                    <div className="divide-y divide-slate-800/80 xl:max-h-[min(32vh,22rem)] xl:overflow-y-auto xl:overscroll-contain [scrollbar-gutter:stable]">
                       {lineItems.map((line: Record<string, any>, index: number) => (
                         <div
                           key={`${getLineDescription(line, index)}-${index}`}
@@ -1118,7 +1131,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
             </section>
 
             {/* Right Column: AI Insights */}
-            <section className="bg-slate-950/55 p-4 sm:p-5">
+            <section className="bg-slate-950/55 p-4 sm:p-5 xl:h-full xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain">
               <div className="space-y-6">
                 <div>
                   <p className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-2">
@@ -1250,7 +1263,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
         )}
 
         {/* Footer Action Bar */}
-        <div className="px-4 sm:px-6 py-4 bg-slate-950/90 border-t border-slate-800 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
+        <div className="shrink-0 px-4 sm:px-6 py-4 bg-slate-950/90 border-t border-slate-800 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
           <p className="text-xs text-slate-400 max-w-xl">
             AI extracted this document. Review highlighted fields, then confirm or edit before
             proceeding to the next workflow stage.

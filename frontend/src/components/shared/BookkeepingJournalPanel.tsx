@@ -243,21 +243,31 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
             <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-1.5">
               <BookOpen className="w-3.5 h-3.5" />
               AI Accounting Classification
+              <span className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
+                {resolvedLines.length}
+              </span>
             </p>
-            <div
-              className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                isBalanced
-                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                  : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-              }`}
-            >
-              <Scale className="w-3 h-3" />
-              {isBalanced ? 'Balanced' : 'Unbalanced'}
+            <div className="flex items-center gap-2">
+              {resolvedLines.length > 4 && (
+                <span className="hidden xl:inline text-[10px] font-medium text-slate-500">
+                  Scroll to review all
+                </span>
+              )}
+              <div
+                className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                  isBalanced
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                    : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                }`}
+              >
+                <Scale className="w-3 h-3" />
+                {isBalanced ? 'Balanced' : 'Unbalanced'}
+              </div>
             </div>
           </div>
 
           {resolvedLines.length > 0 ? (
-            <div className="space-y-3">
+            <div className="space-y-3 xl:max-h-[min(52vh,34rem)] xl:overflow-y-auto xl:overscroll-contain xl:pr-1 [scrollbar-gutter:stable]">
               {resolvedLines.map((line, index) => {
                 const rawConf = line.confidence ?? line.confidence_score ?? confidenceScore / 100
                 const pct = rawConf <= 1 ? Math.round(rawConf * 100) : Math.round(rawConf)
@@ -394,176 +404,185 @@ export const BookkeepingJournalPanel: React.FC<BookkeepingJournalPanelProps> = (
           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
             <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
             Journal Entry
-          </p>
-          {onLineChange && (
-            <span
-              className={`px-2.5 py-1 rounded-full border text-[10px] font-bold ${
-                isEditing
-                  ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-400'
-              }`}
-            >
-              {isEditing ? 'Editing enabled' : 'Read only'}
+            <span className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
+              {resolvedLines.length}
             </span>
-          )}
+          </p>
+          <div className="flex items-center gap-2">
+            {resolvedLines.length > 5 && (
+              <span className="hidden xl:inline text-[10px] font-medium text-slate-500">
+                Scroll to review all lines
+              </span>
+            )}
+            {onLineChange && (
+              <span
+                className={`px-2.5 py-1 rounded-full border text-[10px] font-bold ${
+                  isEditing
+                    ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`}
+              >
+                {isEditing ? 'Editing enabled' : 'Read only'}
+              </span>
+            )}
+          </div>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-800">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="bg-slate-950 border-b border-slate-800 text-slate-400 text-xs font-bold uppercase tracking-wider">
-                <th className="py-3 px-4 w-60">Account (COA)</th>
-                <th className="py-3 px-4">Line Memo</th>
-                <th className="py-3 px-4 text-right w-44">Debit</th>
-                <th className="py-3 px-4 text-right w-44">Credit</th>
-                {isEditing && <th className="py-3 px-4 w-12 text-center">Action</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/80">
-              {resolvedLines.map((line, index) => (
-                <tr
-                  key={`${line.id || line.account_code}-${index}`}
-                  className="hover:bg-slate-900/60 transition-colors"
-                >
-                  <td className="py-3 px-4 align-top">
-                    {isEditing && onLineChange ? (
-                      <select
-                        value={line.account_code}
-                        onChange={(event) => {
-                          const newCode = event.target.value
-                          const found = dbCOA.find((c) => c.account_code === newCode)
-                          onLineChange(index, 'account_code', newCode)
-                          if (found) {
-                            onLineChange(index, 'account_name', found.account_name)
-                          }
-                        }}
-                        className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition-colors"
-                      >
-                        <option value="" disabled>
-                          Select COA Account...
-                        </option>
-                        {dbCOA.map((coa) => (
-                          <option key={coa.account_code} value={coa.account_code}>
-                            [{coa.account_code}] {coa.account_name} ({coa.account_type})
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="font-mono text-xs text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded">
-                        {line.account_code || '-'}
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 align-top">
-                    {isEditing && onLineChange ? (
-                      <div className="space-y-1">
-                        <input
-                          type="text"
-                          value={line.description || ''}
-                          onChange={(event) =>
-                            onLineChange(index, 'description', event.target.value)
-                          }
-                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500 placeholder-slate-600"
-                          placeholder="Line memo / description"
-                        />
-                      </div>
-                    ) : (
-                      <div>
-                        <p className="text-sm font-semibold text-slate-100">
-                          {line.account_name || 'Unknown Account'}
-                        </p>
-                        {line.description && (
-                          <p className="text-[11px] text-slate-500 truncate max-w-xs mt-0.5">
-                            {line.description}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 text-right align-top">
-                    {isEditing && onLineChange ? (
-                      <input
-                        type="number"
-                        step="any"
-                        value={line.debit_amount || ''}
-                        onChange={(event) =>
-                          onLineChange(index, 'debit_amount', event.target.value)
-                        }
-                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-emerald-400 font-bold text-right focus:outline-none focus:border-indigo-500"
-                      />
-                    ) : line.debit_amount > 0 ? (
-                      <span className="font-mono font-semibold text-slate-100 text-sm">
-                        {formatMoney(line.debit_amount, currency)}
-                      </span>
-                    ) : (
-                      <span className="text-slate-700">-</span>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 text-right align-top">
-                    {isEditing && onLineChange ? (
-                      <input
-                        type="number"
-                        step="any"
-                        value={line.credit_amount || ''}
-                        onChange={(event) =>
-                          onLineChange(index, 'credit_amount', event.target.value)
-                        }
-                        className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-indigo-400 font-bold text-right focus:outline-none focus:border-indigo-500"
-                      />
-                    ) : line.credit_amount > 0 ? (
-                      <span className="font-mono font-semibold text-slate-100 text-sm">
-                        {formatMoney(line.credit_amount, currency)}
-                      </span>
-                    ) : (
-                      <span className="text-slate-700">-</span>
-                    )}
-                  </td>
-                  {isEditing && (
-                    <td className="py-3 px-4 text-center align-top">
-                      <button
-                        type="button"
-                        onClick={() => onRemoveLine?.(index)}
-                        disabled={lines.length <= 2}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                        title={lines.length <= 2 ? 'Minimum 2 lines required' : 'Remove line'}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  )}
+        <div className="rounded-xl border border-slate-800 overflow-hidden">
+          <div className="overflow-x-auto xl:max-h-[min(32vh,22rem)] xl:overflow-y-auto xl:overscroll-contain [scrollbar-gutter:stable]">
+            <table className="w-full text-left text-sm">
+              <thead className="xl:sticky xl:top-0 xl:z-10">
+                <tr className="bg-slate-950 border-b border-slate-800 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                  <th className="py-3 px-4 w-60">Account (COA)</th>
+                  <th className="py-3 px-4">Line Memo</th>
+                  <th className="py-3 px-4 text-right w-44">Debit</th>
+                  <th className="py-3 px-4 text-right w-44">Credit</th>
+                  {isEditing && <th className="py-3 px-4 w-12 text-center">Action</th>}
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-slate-700 bg-slate-950/60 font-bold">
-                <td
-                  className="py-3 px-4 text-xs uppercase tracking-wider text-slate-400"
-                  colSpan={2}
+              </thead>
+              <tbody className="divide-y divide-slate-800/80">
+                {resolvedLines.map((line, index) => (
+                  <tr
+                    key={`${line.id || line.account_code}-${index}`}
+                    className="hover:bg-slate-900/60 transition-colors"
+                  >
+                    <td className="py-3 px-4 align-top">
+                      {isEditing && onLineChange ? (
+                        <select
+                          value={line.account_code}
+                          onChange={(event) => {
+                            const newCode = event.target.value
+                            const found = dbCOA.find((c) => c.account_code === newCode)
+                            onLineChange(index, 'account_code', newCode)
+                            if (found) {
+                              onLineChange(index, 'account_name', found.account_name)
+                            }
+                          }}
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition-colors"
+                        >
+                          <option value="" disabled>
+                            Select COA Account...
+                          </option>
+                          {dbCOA.map((coa) => (
+                            <option key={coa.account_code} value={coa.account_code}>
+                              [{coa.account_code}] {coa.account_name} ({coa.account_type})
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="font-mono text-xs text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded">
+                          {line.account_code || '-'}
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-4 align-top">
+                      {isEditing && onLineChange ? (
+                        <div className="space-y-1">
+                          <input
+                            type="text"
+                            value={line.description || ''}
+                            onChange={(event) =>
+                              onLineChange(index, 'description', event.target.value)
+                            }
+                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 focus:outline-none focus:border-indigo-500 placeholder-slate-600"
+                            placeholder="Line memo / description"
+                          />
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="text-sm font-semibold text-slate-100">
+                            {line.account_name || 'Unknown Account'}
+                          </p>
+                          {line.description && (
+                            <p className="text-[11px] text-slate-500 truncate max-w-xs mt-0.5">
+                              {line.description}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-3 px-4 text-right align-top">
+                      {isEditing && onLineChange ? (
+                        <input
+                          type="number"
+                          step="any"
+                          value={line.debit_amount || ''}
+                          onChange={(event) =>
+                            onLineChange(index, 'debit_amount', event.target.value)
+                          }
+                          className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-emerald-400 font-bold text-right focus:outline-none focus:border-indigo-500"
+                        />
+                      ) : line.debit_amount > 0 ? (
+                        <span className="font-mono font-semibold text-slate-100 text-sm">
+                          {formatMoney(line.debit_amount, currency)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-700">-</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-4 text-right align-top">
+                      {isEditing && onLineChange ? (
+                        <input
+                          type="number"
+                          step="any"
+                          value={line.credit_amount || ''}
+                          onChange={(event) =>
+                            onLineChange(index, 'credit_amount', event.target.value)
+                          }
+                          className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-indigo-400 font-bold text-right focus:outline-none focus:border-indigo-500"
+                        />
+                      ) : line.credit_amount > 0 ? (
+                        <span className="font-mono font-semibold text-slate-100 text-sm">
+                          {formatMoney(line.credit_amount, currency)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-700">-</span>
+                      )}
+                    </td>
+                    {isEditing && (
+                      <td className="py-3 px-4 text-center align-top">
+                        <button
+                          type="button"
+                          onClick={() => onRemoveLine?.(index)}
+                          disabled={lines.length <= 2}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                          title={lines.length <= 2 ? 'Minimum 2 lines required' : 'Remove line'}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="border-t-2 border-slate-700 bg-slate-950/80 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 font-bold">
+            <span className="text-xs uppercase tracking-wider text-slate-400">Total</span>
+            <div className="flex flex-wrap items-center justify-end gap-x-6 gap-y-1 text-right">
+              <span className="text-[10px] uppercase tracking-wider text-slate-500">
+                Debit{' '}
+                <strong
+                  className={`ml-1 font-mono text-sm ${
+                    isBalanced ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
                 >
-                  Total
-                </td>
-                <td className="py-3 px-4 text-right">
-                  <span
-                    className={`font-mono text-sm font-bold ${
-                      isBalanced ? 'text-emerald-400' : 'text-rose-400'
-                    }`}
-                  >
-                    {formatMoney(totalDebits, currency)}
-                  </span>
-                </td>
-                <td className="py-3 px-4 text-right">
-                  <span
-                    className={`font-mono text-sm font-bold ${
-                      isBalanced ? 'text-emerald-400' : 'text-rose-400'
-                    }`}
-                  >
-                    {formatMoney(totalCredits, currency)}
-                  </span>
-                </td>
-                {isEditing && <td />}
-              </tr>
-            </tfoot>
-          </table>
+                  {formatMoney(totalDebits, currency)}
+                </strong>
+              </span>
+              <span className="text-[10px] uppercase tracking-wider text-slate-500">
+                Credit{' '}
+                <strong
+                  className={`ml-1 font-mono text-sm ${
+                    isBalanced ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  {formatMoney(totalCredits, currency)}
+                </strong>
+              </span>
+            </div>
+          </div>
         </div>
 
         <div className="mt-3 flex items-center justify-between gap-3">
