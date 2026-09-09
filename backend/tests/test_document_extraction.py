@@ -73,7 +73,7 @@ def test_extract_document_content_renders_scanned_pdf_page(tmp_path):
     content = extract_document_content(str(pdf_file), "application/pdf")
 
     assert content.extraction_method == DocumentExtractionMethod.PDF_VISION
-    assert content.text.startswith("[SCANNED PDF]")
+    assert content.text == ""
     assert content.warnings == []
     assert len(content.visual_pages) == 1
     visual_page = content.visual_pages[0]
@@ -152,11 +152,17 @@ def test_extract_document_content_limits_rendered_page_resolution(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("suffix", "mime_type"),
-    [(".jpg", "image/jpeg"), (".png", "image/png"), (".webp", "image/webp")],
+    ("suffix", "mime_type", "expected_mime_type"),
+    [
+        (".jpg", "image/jpeg", "image/jpeg"),
+        (".jpg", "image/jpg", "image/jpeg"),
+        (".png", "image/png", "image/png"),
+        (".webp", "image/webp", "image/webp"),
+        (".jpeg", "application/octet-stream", "image/jpeg"),
+    ],
 )
 def test_extract_document_content_returns_visual_page_for_image(
-    tmp_path, suffix, mime_type
+    tmp_path, suffix, mime_type, expected_mime_type
 ):
     image_file = tmp_path / f"receipt{suffix}"
     image_bytes = b"test-image-bytes"
@@ -167,10 +173,11 @@ def test_extract_document_content_returns_visual_page_for_image(
     assert content.extraction_method == DocumentExtractionMethod.IMAGE_VISION
     assert content.primary_visual_page is content.visual_pages[0]
     assert content.primary_visual_page.page_number == 1
-    assert content.primary_visual_page.mime_type == mime_type
+    assert content.primary_visual_page.mime_type == expected_mime_type
     assert content.primary_visual_page.source == "uploaded_image"
     assert base64.b64decode(content.primary_visual_page.image_base64) == image_bytes
     assert content.provider_metadata["visual_page_count"] == 1
+    assert content.text == ""
 
 
 def test_extract_document_content_returns_unsupported_result(tmp_path):

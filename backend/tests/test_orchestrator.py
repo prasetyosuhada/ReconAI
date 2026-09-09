@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from app.agents.orchestrator import (
+    document_intake_node,
     document_processing_graph,
     reconciliation_graph,
     route_after_bookkeeping,
@@ -16,6 +17,11 @@ from app.agents.schemas import (
     ProposedMatchCandidate,
     ReconciliationResponse,
     ReconciliationResult,
+)
+from app.schemas.document_content import (
+    DocumentContent,
+    DocumentExtractionMethod,
+    DocumentVisualPage,
 )
 
 
@@ -122,6 +128,62 @@ def test_route_after_reconciliation_review_required():
         }
     )
     assert next_step == "reconciliation_review_required"
+
+
+@patch("app.agents.orchestrator.perf_counter", side_effect=[100.0, 100.1])
+@patch("app.agents.orchestrator.run_document_intake_agent")
+def test_document_intake_node_forwards_structured_multi_page_content(
+    mock_run_intake,
+    mock_perf_counter,
+):
+    document_content = DocumentContent(
+        visual_pages=[
+            DocumentVisualPage(
+                page_number=1,
+                mime_type="image/png",
+                image_base64="cGFnZS0x",
+                source="rendered_pdf_page",
+            ),
+            DocumentVisualPage(
+                page_number=2,
+                mime_type="image/png",
+                image_base64="cGFnZS0y",
+                source="rendered_pdf_page",
+            ),
+        ],
+        extraction_method=DocumentExtractionMethod.PDF_VISION,
+    )
+    mock_run_intake.return_value = DocumentIntakeResponse(
+        agent_name="document_intake_agent",
+        status="completed",
+        confidence_score=0.95,
+        rationale="Visual pages are readable.",
+        result=DocumentExtractionResult(
+            document_type="invoice",
+            vendor_name="PT Multi Page",
+            currency="IDR",
+            total_amount=100000.0,
+        ),
+    )
+
+    result = document_intake_node(
+        {
+            "document_content": document_content,
+            "raw_text": None,
+            "original_filename": "invoice.pdf",
+            "mime_type": "application/pdf",
+        }
+    )
+
+    mock_run_intake.assert_called_once_with(
+        raw_text=None,
+        document_content=document_content,
+        original_filename="invoice.pdf",
+        mime_type="application/pdf",
+        demo_currency="IDR",
+    )
+    assert result["status"] == "extracted"
+    assert mock_perf_counter.call_count == 2
 
 
 @patch(

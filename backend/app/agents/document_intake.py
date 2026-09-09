@@ -11,13 +11,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.agents.prompts import DOCUMENT_INTAKE_SYSTEM_PROMPT
 from app.agents.schemas import DocumentExtractionResult, DocumentIntakeResponse
 from app.core.llm import get_llm
+from app.schemas.document_content import DocumentContent, DocumentVisualPage
 
 logger = logging.getLogger(__name__)
 
 
 def run_document_intake_agent(
     raw_text: str | None = None,
-    image_base64: str | None = None,
+    document_content: DocumentContent | None = None,
     original_filename: str = "document.pdf",
     mime_type: str = "application/pdf",
     demo_currency: str = "IDR",
@@ -28,7 +29,7 @@ def run_document_intake_agent(
 
     Args:
         raw_text: Raw text or OCR output from the document.
-        image_base64: Optional base64-encoded image for vision-capable providers.
+        document_content: Structured text and visual pages from file extraction.
         original_filename: Original file name.
         mime_type: MIME type of the uploaded file.
         demo_currency: Configured fallback demo currency (default "IDR").
@@ -40,14 +41,17 @@ def run_document_intake_agent(
     """
     logger.info("Executing Document Intake Agent for file: %s", original_filename)
 
-    if not raw_text and not image_base64:
-        logger.warning("Empty text input provided to Document Intake Agent.")
+    effective_text = document_content.text if document_content else raw_text
+    visual_pages = document_content.visual_pages if document_content else []
+
+    if not effective_text and not visual_pages:
+        logger.warning("No readable content provided to Document Intake Agent.")
         return DocumentIntakeResponse(
             agent_name="document_intake_agent",
             status="needs_review",
             confidence_score=0.0,
-            rationale="No text content or readable OCR text was provided.",
-            warnings=["Document contains no readable text content."],
+            rationale="No readable text or visual page content was provided.",
+            warnings=["Document contains no readable text or visual page content."],
             result=DocumentExtractionResult(
                 document_type="unknown",
                 currency=demo_currency,
@@ -64,23 +68,18 @@ def run_document_intake_agent(
         )
 
         user_content = (
-            f"Filename: {original_filename}\n"
-            f"MIME Type: {mime_type}\n"
+            f"Source MIME Type: {mime_type}\n"
             f"Default Currency: {demo_currency}\n\n"
             f"--- DOCUMENT TEXT BEGIN ---\n"
-            f"{raw_text}\n"
+            f"{effective_text or '[No embedded text; use the visual pages.]'}\n"
             f"--- DOCUMENT TEXT END ---"
         )
 
         human_content: str | list[dict[str, object]] = user_content
-        if image_base64:
-            human_content = [
-                {"type": "text", "text": user_content},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
-                },
-            ]
+        if visual_pages:
+            human_content = [{"type": "text", "text": user_content}]
+            for visual_page in visual_pages:
+                human_content.extend(_visual_page_blocks(visual_page))
 
         messages = [
             SystemMessage(content=system_prompt),
@@ -88,8 +87,9 @@ def run_document_intake_agent(
         ]
 
         logger.info(
-            "Sending document text (%d chars) to LLM (%s)...",
-            len(raw_text or ""),
+            "Sending document text (%d chars) and %d visual pages to LLM (%s)...",
+            len(effective_text or ""),
+            len(visual_pages),
             provider or "default",
         )
 
@@ -169,3 +169,26 @@ def run_document_intake_agent(
                 extraction_notes=f"Error: {str(e)}",
             ),
         )
+
+
+def _visual_page_blocks(
+    visual_page: DocumentVisualPage,
+) -> list[dict[str, object]]:
+    """Build ordered LangChain content blocks for one visual document page."""
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"--- VISUAL PAGE {visual_page.page_number} "
+                f"({visual_page.mime_type}) ---"
+            ),
+        },
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": (
+                    f"data:{visual_page.mime_type};base64,{visual_page.image_base64}"
+                )
+            },
+        },
+    ]

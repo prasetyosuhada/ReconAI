@@ -41,5 +41,5 @@ class DocumentContent(BaseModel):
 
     @property
     def primary_visual_page(self) -> DocumentVisualPage | None:
-        """Return the first visual page for the legacy single-image agent adapter."""
+        """Return the first visual page as a convenience for preview consumers."""
         return self.visual_pages[0] if self.visual_pages else None

@@ -52,7 +52,6 @@ class DocumentIntakeState(TypedDict, total=False):
     demo_currency: str
     document_content: DocumentContent
     raw_text: str | None
-    image_base64: str | None
 
     # Extraction output
     extraction_id: str | None
@@ -87,7 +86,6 @@ class BookkeepingState(TypedDict, total=False):
     demo_currency: str
     document_content: DocumentContent
     raw_text: str | None
-    image_base64: str | None
     extraction_id: str | None
     document_type: str
     vendor_name: str | None

@@ -208,7 +208,7 @@ def test_process_document_background_separates_agent_metadata(
         == DocumentExtractionMethod.FILE_NOT_FOUND
     )
     assert initial_state["raw_text"] is None
-    assert initial_state["image_base64"] is None
+    assert "image_base64" not in initial_state
 
     # Verify Extraction record created
     ext = (

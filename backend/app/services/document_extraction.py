@@ -198,11 +198,6 @@ def _extract_pdf_content(
     except Exception as exc:
         logger.warning("pypdf extraction failed for %s: %s", path, exc)
         return DocumentContent(
-            text=(
-                f"[SCANNED PDF] Filename: {path.name}\n"
-                "This document could not be read as plain text. "
-                "Please flag it for human review."
-            ),
             extraction_method=DocumentExtractionMethod.SCANNED_PDF_FALLBACK,
             warnings=["PDF page detection failed before content could be extracted."],
             provider_metadata={
@@ -235,12 +230,6 @@ def _extract_pdf_content(
         extraction_method = DocumentExtractionMethod.PDF_HYBRID
     elif vision_pages:
         extraction_method = DocumentExtractionMethod.PDF_VISION
-        # Retained for the legacy prompt adapter. Task 14.3 will remove this
-        # filename-based fallback when all visual pages are sent to the model.
-        text = (
-            f"[SCANNED PDF] Filename: {path.name}\n"
-            "The PDF pages were rendered for visual document extraction."
-        )
     else:
         extraction_method = DocumentExtractionMethod.PDF_TEXT
 
@@ -342,17 +331,22 @@ def extract_document_content(
     }:
         image_b64 = image_to_base64(file_path)
         if image_b64:
-            descriptive_text = (
-                f"[IMAGE DOCUMENT] Filename: {path.name}, MIME: {mime_type}\n"
-                "This is an invoice or receipt image. "
-                "Extract all visible financial data from the image."
-            )
+            if mime_type in SUPPORTED_IMAGE_MIMES:
+                effective_image_mime = (
+                    "image/jpeg" if mime_type == "image/jpg" else mime_type
+                )
+            else:
+                effective_image_mime = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".png": "image/png",
+                    ".webp": "image/webp",
+                }[path.suffix.lower()]
             return DocumentContent(
-                text=descriptive_text,
                 visual_pages=[
                     DocumentVisualPage(
                         page_number=1,
-                        mime_type=mime_type,
+                        mime_type=effective_image_mime,
                         image_base64=image_b64,
                         source="uploaded_image",
                     )

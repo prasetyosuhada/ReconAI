@@ -2,6 +2,11 @@ from unittest.mock import MagicMock, patch
 
 from app.agents.document_intake import run_document_intake_agent
 from app.agents.schemas import DocumentExtractionResult, DocumentIntakeResponse
+from app.schemas.document_content import (
+    DocumentContent,
+    DocumentExtractionMethod,
+    DocumentVisualPage,
+)
 
 
 def test_document_intake_agent_empty_text():
@@ -85,3 +90,85 @@ def test_document_intake_agent_heuristic_math_mismatch(mock_get_llm):
     assert response.status == "needs_review"
     assert response.confidence_score <= 0.75
     assert any("does not match Total" in w for w in response.warnings)
+
+
+@patch("app.agents.document_intake.get_llm")
+def test_document_intake_agent_sends_all_visual_pages_with_page_mime_types(
+    mock_get_llm,
+):
+    mock_llm = MagicMock()
+    mock_structured_llm = MagicMock()
+    mock_structured_llm.invoke.return_value = DocumentIntakeResponse(
+        agent_name="document_intake_agent",
+        status="completed",
+        confidence_score=0.95,
+        rationale="All visual pages were readable.",
+        result=DocumentExtractionResult(
+            document_type="invoice",
+            vendor_name="PT Multi Page",
+            currency="IDR",
+            total_amount=250000.0,
+        ),
+    )
+    mock_llm.with_structured_output.return_value = mock_structured_llm
+    mock_get_llm.return_value = mock_llm
+    document_content = DocumentContent(
+        text="Embedded text from the first PDF page.",
+        visual_pages=[
+            DocumentVisualPage(
+                page_number=2,
+                mime_type="image/png",
+                image_base64="cGFnZS0y",
+                source="rendered_pdf_page",
+            ),
+            DocumentVisualPage(
+                page_number=4,
+                mime_type="image/jpeg",
+                image_base64="cGFnZS00",
+                source="uploaded_image",
+            ),
+        ],
+        extraction_method=DocumentExtractionMethod.PDF_HYBRID,
+    )
+
+    response = run_document_intake_agent(
+        document_content=document_content,
+        original_filename="DO-NOT-INFER-IDR-999.pdf",
+        mime_type="application/pdf",
+    )
+
+    assert response.status == "completed"
+    messages = mock_structured_llm.invoke.call_args.args[0]
+    system_content = messages[0].content
+    human_content = messages[1].content
+    assert "Never use a filename" in system_content
+    assert isinstance(human_content, list)
+    assert "DO-NOT-INFER-IDR-999.pdf" not in str(human_content)
+    assert human_content == [
+        {
+            "type": "text",
+            "text": (
+                "Source MIME Type: application/pdf\n"
+                "Default Currency: IDR\n\n"
+                "--- DOCUMENT TEXT BEGIN ---\n"
+                "Embedded text from the first PDF page.\n"
+                "--- DOCUMENT TEXT END ---"
+            ),
+        },
+        {
+            "type": "text",
+            "text": "--- VISUAL PAGE 2 (image/png) ---",
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,cGFnZS0y"},
+        },
+        {
+            "type": "text",
+            "text": "--- VISUAL PAGE 4 (image/jpeg) ---",
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,cGFnZS00"},
+        },
+    ]
