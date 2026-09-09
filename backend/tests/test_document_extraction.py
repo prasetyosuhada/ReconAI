@@ -1,6 +1,6 @@
 import base64
-from unittest.mock import patch
 
+import pymupdf
 import pytest
 from pydantic import ValidationError
 
@@ -10,6 +10,26 @@ from app.schemas.document_content import (
     DocumentVisualPage,
 )
 from app.services.document_extraction import extract_document_content
+
+
+def _create_pdf(
+    file_path,
+    page_texts: list[str | None],
+    *,
+    width: float = 595,
+    height: float = 842,
+) -> None:
+    document = pymupdf.open()
+    for text in page_texts:
+        page = document.new_page(width=width, height=height)
+        if text:
+            page.insert_textbox(
+                pymupdf.Rect(72, 72, width - 72, height - 72),
+                text,
+                fontsize=12,
+            )
+    document.save(file_path)
+    document.close()
 
 
 def test_extract_document_content_returns_missing_file_result(tmp_path):
@@ -26,45 +46,109 @@ def test_extract_document_content_returns_missing_file_result(tmp_path):
 
 def test_extract_document_content_returns_pdf_text_result(tmp_path):
     pdf_file = tmp_path / "invoice.pdf"
-    pdf_file.write_bytes(b"%PDF-1.4 placeholder")
     extracted_text = "Vendor: Example Supplier\nInvoice total: IDR 125,000"
+    _create_pdf(pdf_file, [extracted_text])
 
-    with patch(
-        "app.services.document_extraction.extract_text_from_pdf",
-        return_value=extracted_text,
-    ):
-        content = extract_document_content(str(pdf_file), "application/pdf")
+    content = extract_document_content(str(pdf_file), "application/pdf")
 
     assert content.text == extracted_text
     assert content.extraction_method == DocumentExtractionMethod.PDF_TEXT
     assert content.visual_pages == []
     assert content.warnings == []
-    assert content.provider_metadata == {
-        "source_mime_type": "application/pdf",
-        "source_suffix": ".pdf",
-        "file_size_bytes": pdf_file.stat().st_size,
-        "text_extractor": "pypdf",
-        "embedded_text_char_count": len(extracted_text),
-    }
-
-
-def test_extract_document_content_returns_structured_scanned_pdf_fallback(tmp_path):
-    pdf_file = tmp_path / "scanned.pdf"
-    pdf_file.write_bytes(b"%PDF-1.4 placeholder")
-
-    with patch(
-        "app.services.document_extraction.extract_text_from_pdf", return_value=""
-    ):
-        content = extract_document_content(str(pdf_file), "application/pdf")
-
-    assert content.extraction_method == DocumentExtractionMethod.SCANNED_PDF_FALLBACK
-    assert content.text.startswith("[SCANNED PDF]")
-    assert content.visual_pages == []
-    assert content.warnings == [
-        "PDF contains insufficient embedded text; scanned-page rendering is not "
-        "yet available."
+    assert content.provider_metadata["text_page_numbers"] == [1]
+    assert content.provider_metadata["vision_page_numbers"] == []
+    assert content.provider_metadata["page_classifications"] == [
+        {
+            "page_number": 1,
+            "content_type": "text",
+            "embedded_text_char_count": len(extracted_text),
+        }
     ]
+
+
+def test_extract_document_content_renders_scanned_pdf_page(tmp_path):
+    pdf_file = tmp_path / "scanned.pdf"
+    _create_pdf(pdf_file, [None])
+
+    content = extract_document_content(str(pdf_file), "application/pdf")
+
+    assert content.extraction_method == DocumentExtractionMethod.PDF_VISION
+    assert content.text.startswith("[SCANNED PDF]")
+    assert content.warnings == []
+    assert len(content.visual_pages) == 1
+    visual_page = content.visual_pages[0]
+    assert visual_page.page_number == 1
+    assert visual_page.mime_type == "image/png"
+    assert visual_page.source == "rendered_pdf_page"
+    assert visual_page.width_pixels is not None
+    assert visual_page.height_pixels is not None
+    assert visual_page.render_dpi == 150
+    assert base64.b64decode(visual_page.image_base64).startswith(b"\x89PNG")
     assert content.provider_metadata["embedded_text_char_count"] == 0
+    assert content.provider_metadata["vision_page_numbers"] == [1]
+    assert content.provider_metadata["rendered_page_numbers"] == [1]
+
+
+def test_extract_document_content_detects_mixed_pdf_per_page(tmp_path):
+    pdf_file = tmp_path / "mixed.pdf"
+    extracted_text = "Vendor: Example Supplier\nInvoice total: IDR 125,000"
+    _create_pdf(pdf_file, [extracted_text, None])
+
+    content = extract_document_content(str(pdf_file), "application/pdf")
+
+    assert content.extraction_method == DocumentExtractionMethod.PDF_HYBRID
+    assert content.text == extracted_text
+    assert [page.page_number for page in content.visual_pages] == [2]
+    assert content.provider_metadata["text_page_numbers"] == [1]
+    assert content.provider_metadata["vision_page_numbers"] == [2]
+    assert content.provider_metadata["page_classifications"] == [
+        {
+            "page_number": 1,
+            "content_type": "text",
+            "embedded_text_char_count": len(extracted_text),
+        },
+        {
+            "page_number": 2,
+            "content_type": "scanned",
+            "embedded_text_char_count": 0,
+        },
+    ]
+
+
+def test_extract_document_content_limits_processed_pdf_pages(tmp_path):
+    pdf_file = tmp_path / "long-scanned.pdf"
+    _create_pdf(pdf_file, [None, None, None])
+
+    content = extract_document_content(
+        str(pdf_file),
+        "application/pdf",
+        max_pdf_pages=2,
+    )
+
+    assert [page.page_number for page in content.visual_pages] == [1, 2]
+    assert content.provider_metadata["source_page_count"] == 3
+    assert content.provider_metadata["processed_page_count"] == 2
+    assert content.provider_metadata["page_limit_applied"] is True
+    assert content.warnings == [
+        "PDF has 3 pages; only the first 2 pages were processed."
+    ]
+
+
+def test_extract_document_content_limits_rendered_page_resolution(tmp_path):
+    pdf_file = tmp_path / "large-page.pdf"
+    _create_pdf(pdf_file, [None], width=2000, height=3000)
+    max_pixels = 100_000
+
+    content = extract_document_content(
+        str(pdf_file),
+        "application/pdf",
+        pdf_render_dpi=300,
+        max_rendered_page_pixels=max_pixels,
+    )
+
+    visual_page = content.visual_pages[0]
+    assert visual_page.width_pixels * visual_page.height_pixels <= max_pixels
+    assert visual_page.render_dpi < 300
 
 
 @pytest.mark.parametrize(
