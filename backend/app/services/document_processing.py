@@ -115,9 +115,16 @@ def stream_document_processing(
             }
         )
 
-        raw_text, image_b64 = extract_document_content(
+        document_content = extract_document_content(
             file_path=file_path,
             mime_type=effective_mime,
+        )
+        raw_text = document_content.text
+        primary_visual_page = document_content.primary_visual_page
+        image_b64 = (
+            primary_visual_page.image_base64
+            if primary_visual_page is not None
+            else None
         )
 
         char_count = len(raw_text) if raw_text else 0
@@ -177,6 +184,7 @@ def stream_document_processing(
             "original_filename": fname,
             "mime_type": effective_mime,
             "stored_file_path": file_path,
+            "document_content": document_content,
             "raw_text": raw_text or None,
             "image_base64": image_b64,
             "document_type": document_type,

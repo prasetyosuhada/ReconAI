@@ -53,8 +53,3 @@ storage/
 *.swp
 *.swo
 .DS_Store
-
-# Agent & Dev Tracking
-.dev/
-.agents/
-.codex/

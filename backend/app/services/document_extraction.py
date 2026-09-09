@@ -1,13 +1,20 @@
-"""Document Text Extraction Utilities for ReconAI.
+"""Document content extraction utilities for ReconAI.
 
-Extracts raw text from PDF files and images (JPG, PNG, WEBP) to feed into
-the Document Intake LLM Agent. Uses pypdf for text-based PDFs and falls
-back to passing image bytes directly to the LLM vision API for scanned/image PDFs.
+Produces provider-neutral structured content for the Document Intake workflow.
+The current implementation uses pypdf for text-based PDFs and prepares uploaded
+images for the existing single-image vision adapter. PDF page rendering is handled
+by a later extraction pipeline task.
 """
 
 import base64
 import logging
 from pathlib import Path
+
+from app.schemas.document_content import (
+    DocumentContent,
+    DocumentExtractionMethod,
+    DocumentVisualPage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +80,8 @@ def image_to_base64(file_path: str) -> str:
 def extract_document_content(
     file_path: str,
     mime_type: str,
-) -> tuple[str, str | None]:
-    """Extract text content and optional image base64 from a document file.
+) -> DocumentContent:
+    """Extract provider-neutral text and visual content from a document file.
 
     Strategy:
     1. PDF with text → extract text via pypdf.
@@ -86,17 +93,26 @@ def extract_document_content(
         mime_type: MIME type of the file (application/pdf, image/jpeg, etc.)
 
     Returns:
-        Tuple of (raw_text, image_base64_or_None).
-        - raw_text: Text to pass to document_intake LLM prompt.
-        - image_base64: Base64-encoded image bytes (None if not an image input).
+        Structured content containing text, visual pages, extraction method,
+        warnings, and provider metadata.
     """
     path = Path(file_path)
 
     if not path.exists():
         logger.error("Document file not found at path: %s", file_path)
-        return "", None
+        return DocumentContent(
+            extraction_method=DocumentExtractionMethod.FILE_NOT_FOUND,
+            warnings=["Document file was not found at the stored path."],
+            provider_metadata={"source_mime_type": mime_type},
+        )
 
-    file_size_kb = path.stat().st_size / 1024
+    file_size_bytes = path.stat().st_size
+    file_size_kb = file_size_bytes / 1024
+    source_metadata = {
+        "source_mime_type": mime_type,
+        "source_suffix": path.suffix.lower(),
+        "file_size_bytes": file_size_bytes,
+    }
     logger.info(
         "Extracting content from %s (MIME: %s, Size: %.1f KB)",
         path.name,
@@ -109,7 +125,15 @@ def extract_document_content(
         text = extract_text_from_pdf(file_path)
         if text and len(text.strip()) > 30:
             logger.info("PDF text extraction succeeded (%d chars)", len(text))
-            return text, None
+            return DocumentContent(
+                text=text,
+                extraction_method=DocumentExtractionMethod.PDF_TEXT,
+                provider_metadata={
+                    **source_metadata,
+                    "text_extractor": "pypdf",
+                    "embedded_text_char_count": len(text),
+                },
+            )
 
         # PDF appears to be scanned — pass a descriptive fallback so LLM can
         # attempt extraction from filename context, or mark as needs_review.
@@ -124,7 +148,19 @@ def extract_document_content(
             "It is likely a scanned invoice or receipt. "
             "Please extract any available structured data or flag for human review."
         )
-        return fallback_text, None
+        return DocumentContent(
+            text=fallback_text,
+            extraction_method=DocumentExtractionMethod.SCANNED_PDF_FALLBACK,
+            warnings=[
+                "PDF contains insufficient embedded text; scanned-page rendering "
+                "is not yet available."
+            ],
+            provider_metadata={
+                **source_metadata,
+                "text_extractor": "pypdf",
+                "embedded_text_char_count": len(text),
+            },
+        )
 
     # Image documents (JPEG, PNG, WEBP)
     if mime_type in SUPPORTED_IMAGE_MIMES or path.suffix.lower() in {
@@ -146,9 +182,29 @@ def extract_document_content(
                 "This is an invoice or receipt image. "
                 "Extract all visible financial data from the image."
             )
-            return descriptive_text, image_b64
+            return DocumentContent(
+                text=descriptive_text,
+                visual_pages=[
+                    DocumentVisualPage(
+                        page_number=1,
+                        mime_type=mime_type,
+                        image_base64=image_b64,
+                        source="uploaded_image",
+                    )
+                ],
+                extraction_method=DocumentExtractionMethod.IMAGE_VISION,
+                provider_metadata={
+                    **source_metadata,
+                    "image_encoder": "base64",
+                    "visual_page_count": 1,
+                },
+            )
 
     logger.warning(
         "Unsupported file type for extraction: %s (MIME: %s)", path.name, mime_type
     )
-    return "", None
+    return DocumentContent(
+        extraction_method=DocumentExtractionMethod.UNSUPPORTED,
+        warnings=["Document type is not supported for content extraction."],
+        provider_metadata=source_metadata,
+    )

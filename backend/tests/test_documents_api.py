@@ -12,6 +12,7 @@ from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
+from app.schemas.document_content import DocumentContent, DocumentExtractionMethod
 from app.services.audit_service import log_event
 from app.services.document_processing import process_document_background
 
@@ -199,6 +200,15 @@ def test_process_document_background_separates_agent_metadata(
             original_filename="invoice_office.pdf",
             document_type="invoice",
         )
+
+    initial_state = mock_graph.stream.call_args.args[0]
+    assert isinstance(initial_state["document_content"], DocumentContent)
+    assert (
+        initial_state["document_content"].extraction_method
+        == DocumentExtractionMethod.FILE_NOT_FOUND
+    )
+    assert initial_state["raw_text"] is None
+    assert initial_state["image_base64"] is None
 
     # Verify Extraction record created
     ext = (

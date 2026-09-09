@@ -9,6 +9,8 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
+from app.schemas.document_content import DocumentContent
+
 # ==========================================
 # 1. Shared Agent Output Pydantic Envelopes
 # ==========================================
@@ -48,6 +50,7 @@ class DocumentIntakeState(TypedDict, total=False):
     mime_type: str
     stored_file_path: str
     demo_currency: str
+    document_content: DocumentContent
     raw_text: str | None
     image_base64: str | None
 
@@ -82,6 +85,7 @@ class BookkeepingState(TypedDict, total=False):
     mime_type: str
     stored_file_path: str
     demo_currency: str
+    document_content: DocumentContent
     raw_text: str | None
     image_base64: str | None
     extraction_id: str | None
