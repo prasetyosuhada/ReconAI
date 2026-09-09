@@ -57,3 +57,4 @@ storage/
 # Agent & Dev Tracking
 .dev/
 .agents/
+.codex/

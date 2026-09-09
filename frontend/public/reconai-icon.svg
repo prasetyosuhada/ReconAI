@@ -1,0 +1,33 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>ReconAI Icon</title>
+  <desc>ReconAI app icon representing reconciliation, ledger workflows, auditability, and coordinated AI agents.</desc>
+
+  <rect x="24" y="24" width="464" height="464" rx="116" fill="#0F172A"/>
+
+  <!-- Reconciliation loop -->
+  <path d="M146 190C181 137 251 117 309 141C335 152 357 171 374 194"
+        stroke="#38BDF8" stroke-width="28" stroke-linecap="round"/>
+  <path d="M361 158L379 199L335 201"
+        stroke="#38BDF8" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M366 322C331 375 261 395 203 371C177 360 155 341 138 318"
+        stroke="#2DD4BF" stroke-width="28" stroke-linecap="round"/>
+  <path d="M151 354L133 313L177 311"
+        stroke="#2DD4BF" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Ledger -->
+  <rect x="164" y="188" width="184" height="145" rx="28" fill="#F8FAFC"/>
+  <rect x="195" y="223" width="70" height="15" rx="7.5" fill="#0F172A"/>
+  <rect x="195" y="257" width="122" height="13" rx="6.5" fill="#94A3B8"/>
+  <rect x="195" y="289" width="83" height="13" rx="6.5" fill="#CBD5E1"/>
+
+  <!-- AI nodes -->
+  <circle cx="313" cy="231" r="13" fill="#38BDF8"/>
+  <circle cx="299" cy="297" r="13" fill="#2DD4BF"/>
+  <path d="M309 244L302 284" stroke="#64748B" stroke-width="8" stroke-linecap="round"/>
+
+  <!-- Verification -->
+  <circle cx="356" cy="354" r="54" fill="#F8FAFC"/>
+  <path d="M333 354L349 370L381 335"
+        stroke="#0F766E" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

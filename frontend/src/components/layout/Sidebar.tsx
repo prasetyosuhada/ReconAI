@@ -7,7 +7,6 @@ import {
   ChevronRight,
   History,
   LayoutDashboard,
-  Sparkles,
   UploadCloud,
   UserCheck,
 } from 'lucide-react'
@@ -76,9 +75,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div>
         <div className="h-16 px-4 flex items-center justify-between border-b border-slate-800/80">
           <div className="flex items-center gap-3 overflow-hidden">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/30 shrink-0">
-              <Sparkles className="w-5 h-5 text-indigo-100" />
-            </div>
+            <img
+              src="/reconai-icon.svg"
+              alt="ReconAI"
+              className="w-10 h-10 shrink-0 drop-shadow-lg"
+            />
             {!collapsed && (
               <div className="flex flex-col">
                 <span className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-indigo-200 bg-clip-text text-transparent">
