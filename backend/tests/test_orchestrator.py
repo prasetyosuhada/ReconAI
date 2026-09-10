@@ -158,6 +158,8 @@ def test_document_intake_node_forwards_structured_multi_page_content(
         status="completed",
         confidence_score=0.95,
         rationale="Visual pages are readable.",
+        llm_provider="gemini",
+        llm_model="gemini-test",
         result=DocumentExtractionResult(
             document_type="invoice",
             vendor_name="PT Multi Page",
@@ -183,6 +185,8 @@ def test_document_intake_node_forwards_structured_multi_page_content(
         demo_currency="IDR",
     )
     assert result["status"] == "extracted"
+    assert result["intake_llm_provider"] == "gemini"
+    assert result["intake_llm_model"] == "gemini-test"
     assert mock_perf_counter.call_count == 2
 
 

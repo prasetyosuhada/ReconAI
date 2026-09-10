@@ -138,6 +138,8 @@ class DocumentProcessingState(BookkeepingState, total=False):
     intake_status: str
     intake_needs_review: bool
     intake_processing_duration_ms: float
+    intake_llm_provider: Literal["gemini", "openai"] | None
+    intake_llm_model: str | None
     bookkeeping_confidence_score: float
     bookkeeping_rationale: str
     bookkeeping_status: str

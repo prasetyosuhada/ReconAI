@@ -158,6 +158,8 @@ def document_intake_node(state: DocumentProcessingState) -> DocumentProcessingSt
         "intake_status": new_status,
         "intake_needs_review": next_step == "extraction_review_required",
         "intake_processing_duration_ms": processing_duration_ms,
+        "intake_llm_provider": response.llm_provider,
+        "intake_llm_model": response.llm_model,
         "confidence_score": response.confidence_score,
         "rationale": response.rationale,
         "warnings": response.warnings,

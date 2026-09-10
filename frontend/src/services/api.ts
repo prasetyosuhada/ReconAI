@@ -32,8 +32,8 @@ export interface ReconciliationStreamEvent {
 export interface DocumentStreamEvent {
   stage:
     | 'init'
-    | 'ocr_started'
-    | 'ocr_extracted'
+    | 'content_extraction_started'
+    | 'content_extracted'
     | 'coa_loaded'
     | 'intake_agent'
     | 'intake_done'
@@ -50,6 +50,9 @@ export interface DocumentStreamEvent {
   confidence_score?: number
   status?: string
   text_preview?: string
+  extraction_method?: string
+  visual_page_count?: number
+  warnings?: string[]
 }
 
 export interface DocumentResponse {

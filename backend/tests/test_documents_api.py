@@ -97,6 +97,10 @@ def test_upload_document_empty_file(client):
         ),
     ],
 )
+@patch(
+    "app.services.document_processing.perf_counter",
+    side_effect=[10.0, 10.025],
+)
 @patch("app.services.document_processing.publish_document_progress")
 @patch("app.services.document_processing.document_processing_graph")
 @patch("app.services.document_processing.SessionLocal")
@@ -104,6 +108,7 @@ def test_process_document_background_separates_agent_metadata(
     mock_session_class,
     mock_graph,
     mock_publish_progress,
+    mock_perf_counter,
     db_session,
     bookkeeping_confidence,
     bookkeeping_rationale,
@@ -159,6 +164,8 @@ def test_process_document_background_separates_agent_metadata(
         "status": "extracted",
         "needs_review": False,
         "intake_processing_duration_ms": 1234.56,
+        "intake_llm_provider": "gemini",
+        "intake_llm_model": "gemini-test",
     }
     bookkeeping_res = {
         "journal_lines": [
@@ -221,6 +228,18 @@ def test_process_document_background_separates_agent_metadata(
     assert float(ext.confidence_score) == 0.96
     assert ext.rationale == "High confidence extraction"
     assert ext.status == "extracted"
+    assert ext.provider_metadata["extraction_method"] == "file_not_found"
+    assert ext.provider_metadata["vision_processed_page_numbers"] == []
+    assert ext.provider_metadata["llm_provider"] == "gemini"
+    assert ext.provider_metadata["llm_model"] == "gemini-test"
+    assert ext.provider_metadata["durations_ms"] == {
+        "content_extraction": 25.0,
+        "document_intake": 1234.56,
+        "total": 1259.56,
+    }
+    assert ext.provider_metadata["warnings"] == [
+        "Document file was not found at the stored path."
+    ]
 
     # Verify Journal Entry created
     je = (
@@ -248,6 +267,9 @@ def test_process_document_background_separates_agent_metadata(
     assert extraction_audit.output_snapshot["status"] == "extracted"
     assert extraction_audit.output_snapshot["needs_review"] is False
     assert extraction_audit.output_snapshot["processing_duration_ms"] == 1234.56
+    assert (
+        extraction_audit.output_snapshot["provider_metadata"] == ext.provider_metadata
+    )
 
     bookkeeping_audit = (
         db_session.query(AuditEvent)
@@ -276,6 +298,13 @@ def test_process_document_background_separates_agent_metadata(
     persisted_doc = db_session.query(Document).filter(Document.id == doc_id).one()
     assert persisted_doc.status == bookkeeping_status
     assert mock_publish_progress.call_count > 0
+    progress_stages = [
+        call.args[1]["stage"] for call in mock_publish_progress.call_args_list
+    ]
+    assert "content_extraction_started" in progress_stages
+    assert "content_extracted" in progress_stages
+    assert not any(stage.startswith("ocr_") for stage in progress_stages)
+    assert mock_perf_counter.call_count == 2
 
     published_event_count = mock_publish_progress.call_count
     process_document_background(document_id=str(doc_id))

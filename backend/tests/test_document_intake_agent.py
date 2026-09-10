@@ -16,8 +16,12 @@ def test_document_intake_agent_empty_text():
     assert "no readable text" in response.warnings[0].lower()
 
 
+@patch(
+    "app.agents.document_intake.get_llm_runtime_metadata",
+    return_value=("gemini", "gemini-test"),
+)
 @patch("app.agents.document_intake.get_llm")
-def test_document_intake_agent_success(mock_get_llm):
+def test_document_intake_agent_success(mock_get_llm, mock_runtime_metadata):
     mock_llm = MagicMock()
     mock_structured_llm = MagicMock()
 
@@ -52,6 +56,9 @@ def test_document_intake_agent_success(mock_get_llm):
     assert response.confidence_score == 0.95
     assert response.result.vendor_name == "Toko Gramedia"
     assert response.result.total_amount == 111000.0
+    assert response.llm_provider == "gemini"
+    assert response.llm_model == "gemini-test"
+    mock_runtime_metadata.assert_called_once_with(mock_llm)
 
 
 @patch("app.agents.document_intake.get_llm")

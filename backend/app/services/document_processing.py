@@ -3,6 +3,7 @@ import uuid
 from collections.abc import Generator
 from datetime import UTC, date, datetime
 from math import isfinite
+from time import perf_counter
 from typing import Any
 
 from app.agents.orchestrator import document_processing_graph
@@ -12,6 +13,7 @@ from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.review import ReviewItem
+from app.schemas.document_content import DocumentContent
 from app.services.audit_service import log_event
 from app.services.bookkeeping_persistence import persist_bookkeeping_outcome
 from app.services.document_extraction import extract_document_content
@@ -48,6 +50,52 @@ def _optional_duration_ms(value: Any) -> float | None:
     if not isfinite(duration) or duration < 0:
         return None
     return round(duration, 2)
+
+
+def _build_extraction_provider_metadata(
+    *,
+    document_content: DocumentContent,
+    content_extraction_duration_ms: float | None,
+    intake_processing_duration_ms: float | None,
+    llm_provider: str | None,
+    llm_model: str | None,
+    workflow_warnings: list[str],
+    low_confidence_fields: list[str],
+    risk_flags: list[str],
+) -> dict[str, Any]:
+    """Build the persisted and audited metadata for document extraction."""
+    metadata = dict(document_content.provider_metadata)
+    warnings = list(dict.fromkeys([*document_content.warnings, *workflow_warnings]))
+    durations = {
+        "content_extraction": content_extraction_duration_ms,
+        "document_intake": intake_processing_duration_ms,
+    }
+    measured_durations = [
+        duration for duration in durations.values() if duration is not None
+    ]
+    durations["total"] = (
+        round(sum(measured_durations), 2) if measured_durations else None
+    )
+    visual_pages = document_content.visual_pages
+
+    metadata.update(
+        {
+            "extraction_method": document_content.extraction_method.value,
+            "vision_processed_page_numbers": [
+                page.page_number for page in visual_pages
+            ],
+            "vision_page_mime_types": {
+                str(page.page_number): page.mime_type for page in visual_pages
+            },
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "durations_ms": durations,
+            "warnings": warnings,
+            "low_confidence_fields": low_confidence_fields,
+            "risk_flags": risk_flags,
+        }
+    )
+    return metadata
 
 
 def stream_document_processing(
@@ -103,31 +151,42 @@ def stream_document_processing(
             }
         )
 
-        # Step 1: Text & OCR Extraction
+        # Step 1: Provider-neutral text and visual content extraction
         yield _sse_event(
             {
-                "stage": "ocr_started",
+                "stage": "content_extraction_started",
                 "percentage": 25,
                 "message": (
-                    "Extracting text & visual tokens via OCR parser "
+                    "Inspecting embedded text and visual document pages "
                     f"({effective_mime})..."
                 ),
             }
         )
 
+        content_started_at = perf_counter()
         document_content = extract_document_content(
             file_path=file_path,
             mime_type=effective_mime,
         )
+        content_extraction_duration_ms = _optional_duration_ms(
+            (perf_counter() - content_started_at) * 1000
+        )
         raw_text = document_content.text
+        visual_page_count = len(document_content.visual_pages)
 
         char_count = len(raw_text) if raw_text else 0
         yield _sse_event(
             {
-                "stage": "ocr_extracted",
+                "stage": "content_extracted",
                 "percentage": 40,
-                "message": f"Extracted {char_count} characters of content from file.",
+                "message": (
+                    f"Prepared {char_count} text characters and "
+                    f"{visual_page_count} visual page(s)."
+                ),
                 "text_preview": (raw_text[:180] + "...") if raw_text else None,
+                "extraction_method": document_content.extraction_method.value,
+                "visual_page_count": visual_page_count,
+                "warnings": document_content.warnings,
             }
         )
 
@@ -167,7 +226,7 @@ def stream_document_processing(
                 "stage": "intake_agent",
                 "percentage": 55,
                 "message": (
-                    "Invoking Document Intake Agent (Gemini 3 Flash) "
+                    "Invoking Document Intake Agent with the configured LLM "
                     "for entity extraction..."
                 ),
             }
@@ -191,6 +250,11 @@ def stream_document_processing(
         intake_status = "failed"
         intake_needs_review = False
         intake_processing_duration_ms: float | None = None
+        intake_llm_provider: str | None = None
+        intake_llm_model: str | None = None
+        intake_warnings: list[str] = []
+        intake_low_confidence_fields: list[str] = []
+        intake_risk_flags: list[str] = []
         bookkeeping_confidence = 0.0
         bookkeeping_rationale: str | None = None
         bookkeeping_status: str | None = None
@@ -231,6 +295,13 @@ def stream_document_processing(
                 intake_processing_duration_ms = _optional_duration_ms(
                     intake_data.get("intake_processing_duration_ms")
                 )
+                intake_llm_provider = intake_data.get("intake_llm_provider")
+                intake_llm_model = intake_data.get("intake_llm_model")
+                intake_warnings = list(intake_data.get("warnings", []) or [])
+                intake_low_confidence_fields = list(
+                    intake_data.get("low_confidence_fields", []) or []
+                )
+                intake_risk_flags = list(intake_data.get("risk_flags", []) or [])
 
                 yield _sse_event(
                     {
@@ -254,7 +325,7 @@ def stream_document_processing(
                             "stage": "bookkeeping_agent",
                             "percentage": 75,
                             "message": (
-                                "Invoking Bookkeeping Agent (Gemini 3 Flash) "
+                                "Invoking Bookkeeping Agent with the configured LLM "
                                 "for Chart of Accounts classification..."
                             ),
                         }
@@ -328,9 +399,16 @@ def stream_document_processing(
             bookkeeping_confidence if bookkeeping_seen else intake_confidence
         )
 
-        provider_meta = {
-            "low_confidence_fields": final_state.get("low_confidence_fields", [])
-        }
+        provider_meta = _build_extraction_provider_metadata(
+            document_content=document_content,
+            content_extraction_duration_ms=content_extraction_duration_ms,
+            intake_processing_duration_ms=intake_processing_duration_ms,
+            llm_provider=intake_llm_provider,
+            llm_model=intake_llm_model,
+            workflow_warnings=intake_warnings,
+            low_confidence_fields=intake_low_confidence_fields,
+            risk_flags=intake_risk_flags,
+        )
 
         # 1. Save DocumentExtraction record in DB (idempotent upsert)
         existing_extraction = (
@@ -573,9 +651,10 @@ def stream_document_processing(
                     ),
                     "review_item_created": extraction_review_item_created,
                     "processing_duration_ms": intake_processing_duration_ms,
-                    "low_confidence_fields": final_state.get(
-                        "low_confidence_fields", []
-                    ),
+                    "low_confidence_fields": provider_meta["low_confidence_fields"],
+                    "warnings": provider_meta["warnings"],
+                    "risk_flags": provider_meta["risk_flags"],
+                    "provider_metadata": provider_meta,
                 },
                 confidence_score=intake_confidence,
                 rationale=intake_rationale,

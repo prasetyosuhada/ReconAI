@@ -264,7 +264,7 @@ function deriveLifecycleStages(events: AuditEventResponse[]): LifecycleStage[] {
     {
       key: 'intake',
       label: 'Intake Agent',
-      subtitle: 'OCR & Extraction',
+      subtitle: 'Text & Vision Extraction',
       icon: FileText,
       status: intakeStatus,
       actorType: intakeEvt?.actor_type || 'agent',

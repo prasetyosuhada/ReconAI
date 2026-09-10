@@ -92,6 +92,14 @@ class DocumentIntakeResponse(DocumentIntakeModelResponse):
         default_factory=list,
         description="Deterministic extraction validation and content risk flags",
     )
+    llm_provider: Literal["gemini", "openai"] | None = Field(
+        default=None,
+        description="LLM provider used for this intake execution",
+    )
+    llm_model: str | None = Field(
+        default=None,
+        description="LLM model used for this intake execution",
+    )
 
 
 # ==========================================

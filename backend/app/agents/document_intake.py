@@ -14,7 +14,7 @@ from app.agents.schemas import (
     DocumentIntakeModelResponse,
     DocumentIntakeResponse,
 )
-from app.core.llm import get_llm
+from app.core.llm import get_llm, get_llm_runtime_metadata
 from app.schemas.document_content import DocumentContent, DocumentVisualPage
 from app.services.extraction_validation import (
     DocumentContentValidation,
@@ -91,8 +91,11 @@ def run_document_intake_agent(
             ),
         )
 
+    llm_provider = None
+    llm_model = None
     try:
         llm = get_llm(provider=provider, model_name=model_name, temperature=0.0)
+        llm_provider, llm_model = get_llm_runtime_metadata(llm)
         structured_llm = llm.with_structured_output(DocumentIntakeModelResponse)
 
         system_prompt = DOCUMENT_INTAKE_SYSTEM_PROMPT.format(
@@ -184,6 +187,8 @@ def run_document_intake_agent(
             warnings=warnings,
             low_confidence_fields=low_confidence_fields,
             risk_flags=risk_flags,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
             result=result,
         )
 
@@ -196,6 +201,8 @@ def run_document_intake_agent(
             rationale=f"LLM execution error: {str(e)}",
             warnings=[f"Execution exception: {str(e)}"],
             risk_flags=["llm_provider_failure"],
+            llm_provider=llm_provider,
+            llm_model=llm_model,
             result=DocumentExtractionResult(
                 document_type="unknown",
                 currency=demo_currency,

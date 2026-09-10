@@ -12,6 +12,19 @@ logger = logging.getLogger(__name__)
 LLMProvider = Literal["gemini", "openai"]
 
 
+def get_llm_runtime_metadata(
+    llm: BaseChatModel,
+) -> tuple[LLMProvider | None, str | None]:
+    """Return normalized provider and model identifiers for an LLM instance."""
+    if isinstance(llm, ChatGoogleGenerativeAI):
+        model = getattr(llm, "model", None)
+        return "gemini", model if isinstance(model, str) else None
+    if isinstance(llm, ChatOpenAI):
+        model = getattr(llm, "model_name", None)
+        return "openai", model if isinstance(model, str) else None
+    return None, None
+
+
 def get_llm(
     provider: LLMProvider | None = None,
     model_name: str | None = None,

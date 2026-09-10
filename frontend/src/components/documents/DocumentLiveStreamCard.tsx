@@ -156,8 +156,8 @@ export const DocumentLiveStreamCard: React.FC<DocumentLiveStreamCardProps> = ({
 
   const getStageIcon = (stage: DocumentStreamEvent['stage']) => {
     switch (stage) {
-      case 'ocr_started':
-      case 'ocr_extracted':
+      case 'content_extraction_started':
+      case 'content_extracted':
         return <FileText className="w-4 h-4 text-cyan-400 shrink-0" />
       case 'coa_loaded':
         return <FileSpreadsheet className="w-4 h-4 text-blue-400 shrink-0" />
@@ -196,9 +196,6 @@ export const DocumentLiveStreamCard: React.FC<DocumentLiveStreamCardProps> = ({
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
                   Document AI Pipeline
-                  <span className="text-[11px] font-mono text-purple-300 font-normal">
-                    (Gemini 3 Flash)
-                  </span>
                 </h3>
                 {status === 'running' && (
                   <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold font-mono flex items-center gap-1">
@@ -289,7 +286,7 @@ export const DocumentLiveStreamCard: React.FC<DocumentLiveStreamCardProps> = ({
                       : 'bg-slate-900/50 border-slate-800 text-slate-500'
                   }`}
                 >
-                  1. OCR & Text
+                  1. Text & Vision
                 </div>
                 <div
                   className={`p-1.5 rounded-lg border ${
