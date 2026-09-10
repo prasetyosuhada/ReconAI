@@ -9,9 +9,18 @@ import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.prompts import DOCUMENT_INTAKE_SYSTEM_PROMPT
-from app.agents.schemas import DocumentExtractionResult, DocumentIntakeResponse
+from app.agents.schemas import (
+    DocumentExtractionResult,
+    DocumentIntakeModelResponse,
+    DocumentIntakeResponse,
+)
 from app.core.llm import get_llm
 from app.schemas.document_content import DocumentContent, DocumentVisualPage
+from app.services.extraction_validation import (
+    DocumentContentValidation,
+    validate_document_content,
+    validate_extraction_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +51,25 @@ def run_document_intake_agent(
     logger.info("Executing Document Intake Agent for file: %s", original_filename)
 
     effective_text = document_content.text if document_content else raw_text
+    readable_text = (
+        effective_text if effective_text and effective_text.strip() else None
+    )
     visual_pages = document_content.visual_pages if document_content else []
+    content_validation = (
+        validate_document_content(document_content) if document_content else None
+    )
 
-    if not effective_text and not visual_pages:
+    if content_validation and not content_validation.can_process:
+        logger.warning(
+            "Document content is not processable: %s",
+            content_validation.risk_flags,
+        )
+        return _unreadable_content_response(
+            demo_currency=demo_currency,
+            validation=content_validation,
+        )
+
+    if not readable_text and not visual_pages:
         logger.warning("No readable content provided to Document Intake Agent.")
         return DocumentIntakeResponse(
             agent_name="document_intake_agent",
@@ -52,6 +77,13 @@ def run_document_intake_agent(
             confidence_score=0.0,
             rationale="No readable text or visual page content was provided.",
             warnings=["Document contains no readable text or visual page content."],
+            low_confidence_fields=[
+                "document_type",
+                "vendor_name",
+                "transaction_date",
+                "total_amount",
+            ],
+            risk_flags=["empty_document_content"],
             result=DocumentExtractionResult(
                 document_type="unknown",
                 currency=demo_currency,
@@ -61,7 +93,7 @@ def run_document_intake_agent(
 
     try:
         llm = get_llm(provider=provider, model_name=model_name, temperature=0.0)
-        structured_llm = llm.with_structured_output(DocumentIntakeResponse)
+        structured_llm = llm.with_structured_output(DocumentIntakeModelResponse)
 
         system_prompt = DOCUMENT_INTAKE_SYSTEM_PROMPT.format(
             demo_currency=demo_currency
@@ -71,7 +103,7 @@ def run_document_intake_agent(
             f"Source MIME Type: {mime_type}\n"
             f"Default Currency: {demo_currency}\n\n"
             f"--- DOCUMENT TEXT BEGIN ---\n"
-            f"{effective_text or '[No embedded text; use the visual pages.]'}\n"
+            f"{readable_text or '[No embedded text; use the visual pages.]'}\n"
             f"--- DOCUMENT TEXT END ---"
         )
 
@@ -88,12 +120,12 @@ def run_document_intake_agent(
 
         logger.info(
             "Sending document text (%d chars) and %d visual pages to LLM (%s)...",
-            len(effective_text or ""),
+            len(readable_text or ""),
             len(visual_pages),
             provider or "default",
         )
 
-        response: DocumentIntakeResponse = structured_llm.invoke(messages)
+        response: DocumentIntakeModelResponse = structured_llm.invoke(messages)
 
         logger.info(
             "🤖 [LLM Intake] Vendor: '%s' | Total: %s %s | Conf: %.2f | Rationale: %s",
@@ -104,46 +136,45 @@ def run_document_intake_agent(
             response.rationale,
         )
         result = response.result
-        warnings = list(response.warnings or [])
-        low_confidence_fields = list(response.low_confidence_fields or [])
+        result_validation = validate_extraction_result(result)
+        warnings = _merge_unique(
+            response.warnings,
+            content_validation.warnings if content_validation else [],
+            result_validation.warnings,
+        )
+        low_confidence_fields = _merge_unique(
+            response.low_confidence_fields,
+            result_validation.low_confidence_fields,
+        )
+        risk_flags = _merge_unique(
+            content_validation.risk_flags if content_validation else [],
+            result_validation.risk_flags,
+        )
+        confidence_caps = [
+            cap
+            for cap in (
+                content_validation.confidence_cap if content_validation else None,
+                result_validation.confidence_cap,
+            )
+            if cap is not None
+        ]
 
-        # Heuristic 1: Check missing essential fields
-        if not result.vendor_name or not result.total_amount:
-            if not result.vendor_name and "vendor_name" not in low_confidence_fields:
-                low_confidence_fields.append("vendor_name")
-            if (
-                result.total_amount is None
-                and "total_amount" not in low_confidence_fields
-            ):
-                low_confidence_fields.append("total_amount")
-            if "Vendor name or total amount is missing." not in warnings:
-                warnings.append("Vendor name or total amount is missing.")
+        status = response.status
+        confidence = response.confidence_score
+        if response.status == "failed":
             status = "needs_review"
-            confidence = min(response.confidence_score, 0.70)
-        else:
-            status = response.status
-            confidence = response.confidence_score
-
-        # Heuristic 2: Check subtotal + tax math consistency if both present
+            confidence_caps.append(0.50)
+            _append_unique(risk_flags, "model_reported_unreadable_document")
+            _append_unique(
+                warnings,
+                "The model reported that the document content was unreadable.",
+            )
         if (
-            result.subtotal_amount is not None
-            and result.tax_amount is not None
-            and result.total_amount is not None
-        ):
-            expected_total = round(result.subtotal_amount + result.tax_amount, 2)
-            actual_total = round(result.total_amount, 2)
-            if abs(expected_total - actual_total) > 0.05:
-                if "tax_amount" not in low_confidence_fields:
-                    low_confidence_fields.append("tax_amount")
-                math_warning = (
-                    f"Subtotal ({result.subtotal_amount}) + Tax "
-                    f"({result.tax_amount}) = {expected_total}, "
-                    f"does not match Total ({result.total_amount})."
-                )
-                if math_warning not in warnings:
-                    warnings.append(math_warning)
-                status = "needs_review"
-                confidence = min(confidence, 0.75)
+            content_validation and content_validation.needs_review
+        ) or not result_validation.is_valid:
+            status = "needs_review"
+        if confidence_caps:
+            confidence = min(confidence, min(confidence_caps))
 
         return DocumentIntakeResponse(
             agent_name="document_intake_agent",
@@ -152,6 +183,7 @@ def run_document_intake_agent(
             rationale=response.rationale,
             warnings=warnings,
             low_confidence_fields=low_confidence_fields,
+            risk_flags=risk_flags,
             result=result,
         )
 
@@ -163,6 +195,7 @@ def run_document_intake_agent(
             confidence_score=0.0,
             rationale=f"LLM execution error: {str(e)}",
             warnings=[f"Execution exception: {str(e)}"],
+            risk_flags=["llm_provider_failure"],
             result=DocumentExtractionResult(
                 document_type="unknown",
                 currency=demo_currency,
@@ -192,3 +225,43 @@ def _visual_page_blocks(
             },
         },
     ]
+
+
+def _unreadable_content_response(
+    *,
+    demo_currency: str,
+    validation: DocumentContentValidation,
+) -> DocumentIntakeResponse:
+    """Create a reviewable response without invoking an LLM on unreadable content."""
+    return DocumentIntakeResponse(
+        agent_name="document_intake_agent",
+        status="needs_review",
+        confidence_score=0.0,
+        rationale="Document content could not be read safely.",
+        warnings=validation.warnings,
+        low_confidence_fields=[
+            "document_type",
+            "vendor_name",
+            "transaction_date",
+            "total_amount",
+        ],
+        risk_flags=validation.risk_flags,
+        result=DocumentExtractionResult(
+            document_type="unknown",
+            currency=demo_currency,
+            extraction_notes="No readable document content was available.",
+        ),
+    )
+
+
+def _merge_unique(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for value in group:
+            _append_unique(merged, value)
+    return merged
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)

@@ -70,6 +70,7 @@ class DocumentIntakeState(TypedDict, total=False):
     rationale: str
     warnings: Annotated[list[str], operator.add]
     low_confidence_fields: list[str]
+    risk_flags: list[str]
     status: str  # uploaded, extracting, extraction_review_required, extracted, failed
     needs_review: bool
     review_id: str | None

@@ -10,7 +10,7 @@ from app.schemas.document_content import (
 
 
 def test_document_intake_agent_empty_text():
-    response = run_document_intake_agent(raw_text="")
+    response = run_document_intake_agent(raw_text="  \n")
     assert response.status == "needs_review"
     assert response.confidence_score == 0.0
     assert "no readable text" in response.warnings[0].lower()
@@ -106,6 +106,7 @@ def test_document_intake_agent_sends_all_visual_pages_with_page_mime_types(
         result=DocumentExtractionResult(
             document_type="invoice",
             vendor_name="PT Multi Page",
+            transaction_date="2026-09-09",
             currency="IDR",
             total_amount=250000.0,
         ),

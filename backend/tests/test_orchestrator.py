@@ -186,6 +186,39 @@ def test_document_intake_node_forwards_structured_multi_page_content(
     assert mock_perf_counter.call_count == 2
 
 
+@patch("app.agents.document_intake.get_llm")
+def test_document_processing_graph_routes_unreadable_content_to_review(
+    mock_get_llm,
+):
+    updates = list(
+        document_processing_graph.stream(
+            {
+                "document_content": DocumentContent(
+                    extraction_method=(DocumentExtractionMethod.SCANNED_PDF_FALLBACK),
+                    warnings=[
+                        "PDF page detection failed before content could be extracted."
+                    ],
+                ),
+                "raw_text": None,
+                "original_filename": "unreadable.pdf",
+                "mime_type": "application/pdf",
+                "chart_of_accounts": [],
+            },
+            stream_mode="updates",
+        )
+    )
+
+    mock_get_llm.assert_not_called()
+    assert [node_name for update in updates for node_name in update] == [
+        "document_intake",
+        "review_router",
+    ]
+    intake_state = updates[0]["document_intake"]
+    assert intake_state["status"] == "extraction_review_required"
+    assert intake_state["needs_review"] is True
+    assert "unreadable_document_content" in intake_state["risk_flags"]
+
+
 @patch(
     "app.agents.orchestrator.perf_counter",
     side_effect=[100.0, 100.25, 200.0, 200.75],

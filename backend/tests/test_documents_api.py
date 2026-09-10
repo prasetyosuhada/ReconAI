@@ -363,6 +363,62 @@ def test_process_document_background_review_required(
     assert mock_publish_progress.call_count > 0
 
 
+@patch("app.services.document_processing.publish_document_progress")
+@patch("app.services.document_processing.SessionLocal")
+def test_process_unreadable_document_creates_extraction_review(
+    mock_session_class,
+    mock_publish_progress,
+    db_session,
+    tmp_path,
+):
+    mock_session_class.return_value = db_session
+    missing_file = tmp_path / "unreadable.pdf"
+    doc_id = uuid.uuid4()
+    db_session.add(
+        Document(
+            id=doc_id,
+            original_filename="unreadable.pdf",
+            stored_file_path=str(missing_file),
+            mime_type="application/pdf",
+            file_size_bytes=1024,
+            document_type="unknown",
+            status="uploaded",
+        )
+    )
+    db_session.commit()
+
+    with patch("app.agents.document_intake.get_llm") as mock_get_llm:
+        process_document_background(document_id=str(doc_id))
+
+    mock_get_llm.assert_not_called()
+    persisted_doc = db_session.query(Document).filter(Document.id == doc_id).one()
+    assert persisted_doc.status == "extraction_review_required"
+    extraction = (
+        db_session.query(DocumentExtraction)
+        .filter(DocumentExtraction.document_id == doc_id)
+        .one()
+    )
+    assert extraction.status == "draft"
+    assert float(extraction.confidence_score) == 0.0
+    review = (
+        db_session.query(ReviewItem)
+        .filter(
+            ReviewItem.source_id == doc_id,
+            ReviewItem.review_type == "extraction",
+            ReviewItem.status == "pending",
+        )
+        .one()
+    )
+    assert review.original_payload["risk_flags"] == ["unreadable_document_content"]
+    assert (
+        db_session.query(JournalEntry)
+        .filter(JournalEntry.document_id == doc_id)
+        .count()
+        == 0
+    )
+    assert mock_publish_progress.call_count > 0
+
+
 @patch("app.api.v1.documents.read_document_progress")
 def test_stream_document_processing_sse(mock_read_progress, db_session):
     doc_id = uuid.uuid4()

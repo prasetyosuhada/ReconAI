@@ -60,8 +60,8 @@ class DocumentExtractionResult(BaseModel):
     )
 
 
-class DocumentIntakeResponse(BaseModel):
-    """Complete envelope returned by Document Intake Agent."""
+class DocumentIntakeModelResponse(BaseModel):
+    """Structured response requested directly from the LLM provider."""
 
     agent_name: str = Field(
         default="document_intake_agent", description="Agent identifier"
@@ -82,6 +82,15 @@ class DocumentIntakeResponse(BaseModel):
     )
     result: DocumentExtractionResult = Field(
         ..., description="Extracted document payload"
+    )
+
+
+class DocumentIntakeResponse(DocumentIntakeModelResponse):
+    """Validated Document Intake Agent response used by the workflow."""
+
+    risk_flags: list[str] = Field(
+        default_factory=list,
+        description="Deterministic extraction validation and content risk flags",
     )
 
 

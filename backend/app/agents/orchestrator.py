@@ -162,6 +162,7 @@ def document_intake_node(state: DocumentProcessingState) -> DocumentProcessingSt
         "rationale": response.rationale,
         "warnings": response.warnings,
         "low_confidence_fields": response.low_confidence_fields,
+        "risk_flags": response.risk_flags,
         "status": new_status,
         "needs_review": next_step == "extraction_review_required",
     }
