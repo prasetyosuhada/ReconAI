@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/05-API-Spec.md`, `docs/06-UX-Flow.md`  
+**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/05-API-Spec.md`, `docs/06-UX-Flow.md`, `docs/10-Hybrid-Document-Extraction.md`
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -72,7 +72,10 @@ The demo should run with:
 - Seeded chart of accounts.
 - Sample invoice or receipt file.
 - Sample bank statement CSV.
-- AI/OCR provider configured, or deterministic mocked agent outputs for fallback.
+- At least one multimodal LLM provider configured (`GEMINI_API_KEY` or
+  `OPENAI_API_KEY`) for live document extraction.
+- Redis for live progress events; persisted workflow state remains available if the
+  progress stream is unavailable.
 
 ### 5.2 Recommended Demo Mode
 
@@ -80,7 +83,7 @@ Use a hybrid approach:
 
 - Upload a sample document live during the demo.
 - Keep seeded data available as a fallback.
-- Keep agent responses deterministic enough for reliable presentation.
+- Use controlled synthetic inputs and rehearse provider output before presenting.
 - Include at least one low-risk flow and one review-required flow.
 
 ### 5.3 Pre-Demo Checklist
@@ -106,7 +109,7 @@ Before presenting:
 Recommended sample file:
 
 ```text
-samples/documents/office-supplies-receipt.pdf
+demo-data/invoices/invoice_02_office_supplies.pdf
 ```
 
 Expected extraction:
@@ -114,19 +117,20 @@ Expected extraction:
 | Field | Value |
 |---|---|
 | Document Type | `receipt` |
-| Vendor | `Acme Office Supply` |
-| Transaction Date | `2026-07-20` |
-| Subtotal | `450000.00` |
-| Tax | `49500.00` |
-| Total | `499500.00` |
+| Vendor | `PT Paper & Supplies Indo` |
+| Transaction Date | `2026-08-03` |
+| Subtotal | `405405.00` |
+| Tax | `44595.00` |
+| Total | `450000.00` |
 | Currency | `IDR` |
 
 Expected bookkeeping result:
 
 | Line | Account | Debit | Credit |
 |---:|---|---:|---:|
-| 1 | `5100` Office Supplies Expense | `499500.00` | `0.00` |
-| 2 | `1010` Bank Account | `0.00` | `499500.00` |
+| 1 | `5100` Office Supplies Expense | `405405.00` | `0.00` |
+| 2 | `1400` Input VAT | `44595.00` | `0.00` |
+| 3 | `1010` Bank Account | `0.00` | `450000.00` |
 
 Expected review reason:
 
@@ -137,7 +141,7 @@ Expected review reason:
 Recommended sample file:
 
 ```text
-samples/bank-statements/july-bank-statement.csv
+demo-data/bank_statements/mock_bank_statement_august_2026.csv
 ```
 
 Required columns:
@@ -150,9 +154,9 @@ Recommended rows:
 
 | transaction_date | description | amount | currency | reference_number | Expected Result |
 |---|---|---:|---|---|---|
-| `2026-07-22` | `ACME OFFICE SUPPLY` | `-499500.00` | `IDR` | `BANK-001` | High-confidence match to office supplies journal entry. |
-| `2026-07-23` | `SOFTWARE CLOUD SUBSCRIPTION` | `-250000.00` | `IDR` | `BANK-002` | Possible match or unmatched review item. |
-| `2026-07-24` | `CLIENT PAYMENT` | `1500000.00` | `IDR` | `BANK-003` | Optional unmatched or revenue-related review item. |
+| `2026-08-03` | `TRANSFER PT PAPER & SUPPLIES INDO` | `-450000.00` | `IDR` | `REF-SUP-11204` | High-confidence match to office supplies journal entry. |
+| `2026-08-10` | `INDIHOME INTERNET SERVICE PROV` | `-650000.00` | `IDR` | `REF-TEL-33102` | Possible match or unmatched review item. |
+| `2026-08-11` | `UNMATCHED BANK CHARGE FEE` | `-25000.00` | `IDR` | `REF-FEE-00100` | Unmatched review item. |
 
 ### 6.3 Seed Chart of Accounts
 
@@ -187,13 +191,14 @@ Screen: **Documents**
 
 Actions:
 
-1. Upload `office-supplies-receipt.pdf`.
+1. Upload `demo-data/invoices/invoice_02_office_supplies.pdf`.
 2. Wait for extraction result.
 3. Point out the extracted vendor, date, subtotal, tax, and total.
 
 Expected result:
 
 - Document status moves from `uploaded` to `extracting`.
+- Live progress labels content preparation as **Text & Vision** before the Intake Agent.
 - Extraction result appears.
 - Confidence score is visible.
 - Rationale is visible.
@@ -201,8 +206,11 @@ Expected result:
 Talking points:
 
 - Document Intake Agent extracts structured fields.
+- Digital PDF text is extracted locally; scanned/low-text pages would be rendered and
+  supplied to the same multimodal intake call.
+- There is no separate OCR engine in the current pipeline.
 - Extraction is persisted, not just displayed.
-- Low-confidence extraction would go to human review.
+- Unreadable, partial, inconsistent, or low-confidence extraction goes to Human Review.
 
 ### 7.3 Step 2 — Show Bookkeeping Suggestion
 
@@ -255,7 +263,7 @@ Screen: **Reconciliation**
 
 Actions:
 
-1. Upload `july-bank-statement.csv`.
+1. Upload `demo-data/bank_statements/mock_bank_statement_august_2026.csv`.
 2. Click Run Reconciliation.
 3. Show imported bank transactions.
 
@@ -354,9 +362,11 @@ The demo should not fail if an AI provider is slow, unavailable, or produces imp
 
 Fallback:
 
-- Use deterministic mocked agent outputs for the sample document.
-- Keep the same UI flow.
-- Explain that the provider adapter is replaceable and mocked outputs are used for demo reliability.
+- Switch to a known seeded database state or a separately prepared mocked demo run.
+- Do not imply the running application automatically extracts readable content without
+  an LLM key; the current provider failure path ends as `failed`.
+- Explain that the Gemini/OpenAI adapter is replaceable while deterministic validation
+  and persistence remain provider-neutral.
 
 ### 9.2 Extraction Is Wrong
 
@@ -506,7 +516,8 @@ Possible improvements after version 1:
 - Add one-to-many reconciliation.
 - Add a simple vendor memory feature based on approved prior decisions.
 - Add side-by-side original document preview.
-- Add model/provider metadata in audit details.
+- Surface the already-persisted extraction method, page, model/provider, and duration
+  metadata more prominently in the UI.
 - Add seeded scenarios for different confidence levels.
 - Add exportable audit report.
 

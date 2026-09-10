@@ -5,6 +5,7 @@
 **Status:** Draft
 **Type:** Portfolio Project
 **Document Owner:** Prasetyo Suhada
+**Extraction Design:** `docs/10-Hybrid-Document-Extraction.md`
 
 ---
 
@@ -45,9 +46,11 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 ### 3.1 In Scope (Tier 1 â€” Core)
 
 **A. Document Intake Agent**
-- Accepts uploaded documents: invoices, receipts (image or PDF)
+- Accepts invoices and receipts as digital, scanned, or mixed PDF and as JPEG, PNG, or WebP images
+- Extracts embedded PDF text locally and renders low-text pages for multimodal vision; no separate OCR engine is integrated
 - Extracts structured data: vendor name, date, line items, subtotal, tax, total amount
-- Flags low-confidence extractions for human review
+- Flags low-confidence, incomplete, inconsistent, partial, or unreadable extractions for human review
+- Records extraction method, processed visual pages, provider/model, duration, warnings, and risk metadata for traceability
 
 **B. Bookkeeping Agent**
 - Takes extracted document data and:
@@ -87,18 +90,19 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 ## 4. User Flow (End-to-End)
 
 1. User uploads a document (invoice/receipt image or PDF).
-2. **Document Intake Agent** extracts structured data and returns a confidence score.
-   - If confidence is low â†’ item goes to human review queue.
-3. **Bookkeeping Agent** receives extracted data, suggests COA account(s), and drafts a journal entry with rationale.
+2. The content-preparation service extracts embedded PDF text and/or prepares ordered visual pages for the configured multimodal LLM.
+3. **Document Intake Agent** extracts structured data and returns a confidence score.
+   - If content is unreadable, processing is partial, required fields are missing, amounts conflict, or confidence is low â†’ item goes to human review queue.
+4. **Bookkeeping Agent** receives extracted data, suggests COA account(s), and drafts a journal entry with rationale.
    - If confidence is low or the entry affects a sensitive account â†’ item goes to human review queue.
-4. User (via Review UI) approves, edits, or rejects the suggested entry.
-5. Approved entry is posted to the ledger; trial balance is re-validated.
-6. User uploads/loads a bank statement (mock dataset).
-7. **Reconciliation Agent** matches bank transactions to posted ledger entries.
+5. User (via Review UI) approves, edits, or rejects the suggested entry.
+6. Approved entry is posted to the ledger; trial balance is re-validated.
+7. User uploads/loads a bank statement (mock dataset).
+8. **Reconciliation Agent** matches bank transactions to posted ledger entries.
    - High-confidence matches are auto-marked as reconciled.
    - Low-confidence or unmatched items go to human review queue with candidate suggestions.
-8. User resolves remaining items via Review UI.
-9. All agent decisions across the flow are visible in the **Audit Log** view, traceable back to the source document/transaction.
+9. User resolves remaining items via Review UI.
+10. All agent decisions across the flow are visible in the **Audit Log** view, traceable back to the source document/transaction.
 
 ---
 
@@ -107,10 +111,15 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 ### 5.1 Document Intake Agent
 | ID | Requirement |
 |---|---|
-| FR-1.1 | System shall accept image (JPG/PNG) and PDF uploads of invoices/receipts |
+| FR-1.1 | System shall accept PDF, JPEG, PNG, and WebP uploads of invoices/receipts, up to 10 MB |
 | FR-1.2 | System shall extract: vendor name, transaction date, line items, subtotal, tax amount, total amount |
 | FR-1.3 | System shall return a confidence score for the extraction |
 | FR-1.4 | System shall flag extractions below a configurable confidence threshold for human review |
+| FR-1.5 | System shall preserve embedded text from digital PDF pages and render scanned/low-text pages for multimodal processing |
+| FR-1.6 | System shall support mixed and multi-page PDFs while preserving source page order and MIME type |
+| FR-1.7 | System shall cap PDF processing at 10 pages and rendered pages at 4,000,000 pixels, routing partial output to human review |
+| FR-1.8 | System shall deterministically validate essential fields and subtotal/tax/total and line-item consistency |
+| FR-1.9 | System shall fail safely for missing, corrupt, encrypted, unsupported, or unrenderable content without guessing from filename |
 
 ### 5.2 Bookkeeping Agent
 | ID | Requirement |
@@ -154,6 +163,8 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 | Explainability | Every AI suggestion must include a human-readable rationale, not just a raw output |
 | Transparency | Confidence scores must be visible wherever AI makes a judgment call |
 | Reliability | Trial balance validation must be deterministic and always run after any posting |
+| Intake Safety | Unreadable, incomplete, conflicting, or partially processed documents must not be silently auto-approved |
+| Resource Bounds | Upload, PDF page count, and rendered page resolution must be bounded before external model calls |
 | Latency | Document extraction and categorization should complete within a few seconds for a good demo experience |
 | Auditability | All agent actions must be logged in a way that is queryable and traceable |
 
@@ -189,7 +200,7 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 
 ### 7.1 Suggested Tech Stack
 - **Agent orchestration:** LangGraph (supervisor pattern) or equivalent multi-agent framework
-- **LLM:** Gemini-2.5-flash or GPT-5.4
+- **LLM:** Gemini or OpenAI structured-output multimodal models behind a provider adapter
 - **Backend:** FastAPI + `uv` (per existing project conventions)
 - **Database:** PostgreSQL (ledger, COA, audit log)
 - **Frontend:** Vite-based SPA for upload, review queue, and audit log views
@@ -213,6 +224,9 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 | Risk | Mitigation |
 |---|---|
 | LLM hallucinates extraction data | Confidence scoring + mandatory human review below threshold |
+| Scanned or mixed PDF loses page content | Per-page detection and bounded rendering send actual visual pages to the multimodal model |
+| Corrupt, encrypted, or incomplete input | Stop semantic extraction safely, persist warnings, and create a Human Review item |
+| Oversized or very long documents exhaust resources | Enforce a 10 MB upload limit, 10-page processing limit, and 4,000,000-pixel render limit |
 | Miscategorized journal entries break trial balance | Deterministic trial balance validation as a hard gate, not just AI judgment |
 | Reconciliation false-positive matches | Confidence threshold + human review for anything below high confidence |
 | Scope creep into tax/compliance | Explicitly out of scope for this version; documented as future work |

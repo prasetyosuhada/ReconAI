@@ -6,12 +6,19 @@ ReconAI is an agentic AI platform that automates core bookkeeping workflows — 
 
 ## 🌟 Key Features
 
-- **Document Intake Agent:** Extracts structured financial data (vendor, date, line items, amounts, tax) from uploaded receipts and invoices (PDF / Images).
+- **Hybrid Document Intake:** Extracts embedded text from digital PDFs, renders scanned pages for multimodal vision, supports mixed PDFs and images, then returns structured financial data.
 - **Bookkeeping Agent:** Maps transactions to Chart of Accounts (COA), drafts balanced double-entry journal entries, and provides natural-language reasoning.
 - **Reconciliation Agent:** Performs intelligent matching (exact and fuzzy) between bank statement transactions and posted ledger entries.
 - **Deterministic Guardrails:** Hardcoded rule-based validation ensures math correctness (Debits == Credits) and enforces sensitive account checks before posting.
 - **Human-in-the-Loop Review Queue:** Routes low-confidence extractions, ambiguous classifications, or high-risk entries to a human review UI for Approval/Edit/Rejection.
 - **Audit & Traceability:** Logs every agent decision, confidence score, rationale, and human action for total audit transparency.
+
+Document intake does not currently use a separate OCR engine. It combines local PDF
+text extraction, bounded page rendering, and the configured Gemini or OpenAI multimodal
+LLM. Unreadable, partial, or inconsistent results are routed to Human Review instead of
+being inferred from filenames. See
+[`docs/10-Hybrid-Document-Extraction.md`](docs/10-Hybrid-Document-Extraction.md) for the
+implemented contract, limits, metadata, and failure behavior.
 
 ---
 
@@ -46,7 +53,8 @@ ReconAI is an agentic AI platform that automates core bookkeeping workflows — 
 
 ## 🛠 Tech Stack
 
-- **Backend:** FastAPI, Python, SQLAlchemy, Alembic, PostgreSQL
+- **Backend:** FastAPI, Python, SQLAlchemy, Alembic, PostgreSQL, Redis
+- **Document Content:** `pypdf` embedded text + PyMuPDF bounded page rendering
 - **Orchestration:** LangGraph, LangChain
 - **LLM Providers:** Gemini / OpenAI (Structured Outputs)
 - **Frontend:** TypeScript, React, Vite, TailwindCSS
@@ -74,6 +82,10 @@ cp .env.example .env
 # GEMINI_API_KEY=your_key_here
 ```
 
+At least one LLM key is required for live semantic extraction of readable documents.
+No separate OCR credential is required. Document uploads support PDF, JPEG, PNG, and
+WebP up to 10 MB; PDF processing is limited to the first 10 pages.
+
 ### 2. Run Database with Docker
 
 ```bash
@@ -90,10 +102,10 @@ uv sync
 
 # Run migrations & seed data
 uv run alembic upgrade head
-uv run python seed.py
+uv run python app/db/seed.py
 
 # Start FastAPI server
-uv run uvicorn main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
 ### 4. Frontend Setup
@@ -139,6 +151,7 @@ Detailed specification documents are available in the `docs/` directory:
 - [docs/07-Demo-Plan.md](docs/07-Demo-Plan.md) — 5-Minute Portfolio Demo Guide
 - [docs/08-Test-Plan.md](docs/08-Test-Plan.md) — Testing & AI Agent Evaluation Strategy
 - [docs/09-Setup-Guide.md](docs/09-Setup-Guide.md) — Local Setup & Execution Manual
+- [docs/10-Hybrid-Document-Extraction.md](docs/10-Hybrid-Document-Extraction.md) — Implemented Hybrid Extraction Design
 
 ---
 

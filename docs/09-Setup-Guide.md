@@ -1,7 +1,7 @@
 # ReconAI — Local Setup & Execution Guide
 
 Document Version: 1.0  
-Last Updated: 2026-08-12  
+Last Updated: 2026-09-10
 
 This guide provides step-by-step instructions for installing, configuring, running, and testing the **ReconAI Agentic Platform for Accounting Automation** on your local workstation.
 
@@ -37,27 +37,37 @@ cp .env.example .env
 # Database Settings
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
-POSTGRES_DB=recon_db
+POSTGRES_DB=reconai
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/recon_db
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/reconai
 
-# LLM API Provider Keys (Required for live AI agent processing)
+# Redis Streams (live progress only)
+REDIS_URL=redis://localhost:6379/0
+
+# LLM API Provider Keys (set at least one for live AI agent processing)
 GEMINI_API_KEY=your_gemini_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 
 # App Settings
-BACKEND_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
+CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
 ENVIRONMENT=development
 ```
 
-> 💡 **Note**: If `GEMINI_API_KEY` or `OPENAI_API_KEY` is not provided, the platform will fallback to deterministic guardrails and pre-packaged demo dataset extractions.
+> **Provider note:** At least one of `GEMINI_API_KEY` or `OPENAI_API_KEY` is
+> required to semantically extract readable documents. Gemini is selected first when
+> both are configured. Without either key, readable document intake ends in a provider
+> failure; there is no automatic pre-packaged extraction fallback.
+
+No dedicated OCR key or service is required. ReconAI uses `pypdf` for embedded PDF text,
+PyMuPDF for bounded page rendering, and the configured multimodal LLM for visual document
+understanding.
 
 ---
 
-## 🗄️ 1. Start PostgreSQL Database
+## 🗄️ 1. Start PostgreSQL and Redis
 
-Start local PostgreSQL container using Docker Compose:
+Start local PostgreSQL and Redis containers using Docker Compose:
 
 ```bash
 # From workspace root
@@ -89,7 +99,7 @@ uv run uvicorn app.main:app --reload --port 8000
 # Option B: Using standard Python venv & pip
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 
 # Run migrations & seed data
 alembic upgrade head
@@ -126,6 +136,24 @@ The frontend uses browser-based routing. Its primary routes are `/documents`, `/
 `/ledger`, `/reconciliation`, and `/audit`; entity detail routes can be bookmarked and opened
 directly. The Vite development server handles these deep links automatically.
 
+### Supported document intake
+
+- File types: PDF, JPEG/JPG, PNG, and WebP.
+- Upload size: maximum 10 MB.
+- PDF processing: first 10 pages.
+- Render target: 150 DPI, reduced as needed to stay within 4,000,000 pixels per page.
+- Corrupt, encrypted, unreadable, or partially processed documents are routed to Human
+  Review rather than inferred from their filename.
+
+The upload workflow runs in a FastAPI background task. The UI observes progress through
+Redis-backed SSE at `/api/v1/documents/stream/{document_id}`. If Redis progress is
+temporarily unavailable, background processing can continue and PostgreSQL remains the
+source of truth.
+
+For the complete content contract, validation rules, metadata, limits, and known
+limitations, see
+[`docs/10-Hybrid-Document-Extraction.md`](10-Hybrid-Document-Extraction.md).
+
 ### Production SPA fallback
 
 When deploying the production build, configure the frontend web server to serve
@@ -147,7 +175,7 @@ python3 demo-data/create_demo_dataset.py
 
 Generated sample files located in `demo-data/`:
 - `demo-data/invoices/invoice_01_aws_cloud.pdf`
-- `demo-data/invoices/invoice_02_google_workspace.pdf`
+- `demo-data/invoices/invoice_02_office_supplies.pdf`
 - `demo-data/invoices/invoice_06_blurry_low_confidence.pdf`
 - `demo-data/bank_statements/mock_bank_statement_august_2026.csv`
 
@@ -172,6 +200,15 @@ DATABASE_URL="sqlite:///:memory:" .venv/bin/pytest tests/test_e2e_low_confidence
 
 # 3. Double-Entry Validation Failure & Sensitive Guardrails
 DATABASE_URL="sqlite:///:memory:" .venv/bin/pytest tests/test_e2e_validation_failure.py
+
+# Hybrid extraction unit, integration, and regression matrix
+DATABASE_URL="sqlite:///:memory:" .venv/bin/pytest \
+  tests/test_document_extraction.py \
+  tests/test_document_extraction_matrix.py \
+  tests/test_document_intake_agent.py \
+  tests/test_extraction_validation.py \
+  tests/test_orchestrator.py \
+  tests/test_document_metadata.py
 ```
 
 Frontend Production Build Validation:
@@ -185,7 +222,7 @@ npm run build
 ## 🎥 6. Executing 5-Minute Portfolio Demo
 
 Refer to [`docs/07-Demo-Plan.md`](07-Demo-Plan.md) for step-by-step walkthrough script for portfolio demo presentations:
-1. **Scene 1 (0:00 - 1:00)**: Intake & OCR Upload (`invoice_01_aws_cloud.pdf`).
+1. **Scene 1 (0:00 - 1:00)**: Text & Vision Intake (`invoice_01_aws_cloud.pdf`).
 2. **Scene 2 (1:00 - 2:30)**: Human Review Queue for Low-Confidence / Blurry Receipt.
 3. **Scene 3 (2:30 - 3:30)**: General Ledger Double-Entry Guardrail & Trial Balance.
 4. **Scene 4 (3:30 - 4:30)**: Bank Statement Reconciliation Engine (`mock_bank_statement_august_2026.csv`).

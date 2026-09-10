@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/04-Agent-Design.md`  
+**Related Documents:** `docs/01-PRD.md`, `docs/04-Agent-Design.md`, `docs/10-Hybrid-Document-Extraction.md`
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -22,8 +22,11 @@ To ensure consistent testing, the following datasets will be prepared and versio
 
 - **Sample Documents:** A controlled dataset of 20-30 varied invoices and receipts (PDFs, JPEGs).
   - Include high-quality digital PDFs.
-  - Include low-quality/blurry photos.
-  - Include edge cases (e.g., multiple tax rates, multi-page invoices).
+  - Include scanned and mixed PDFs, PNG/WebP images, and low-quality/blurry photos.
+  - Include multi-page, corrupt, encrypted, and over-limit cases.
+- **Generated Extraction Fixtures:** Unit and integration tests create deterministic
+  digital/scanned/mixed PDFs and low-detail images at runtime, avoiding external LLM
+  calls while exercising the real local extraction path.
 - **Mock Bank Statements:** CSV files containing bank transactions that correspond to the sample documents.
   - **Exact Matches:** Perfect 1:1 match on amount, date, and vendor.
   - **Fuzzy Matches:** Slight date drift (± 2 days) or minor vendor name variations (e.g., "AWS" vs "Amazon Web Services").
@@ -36,7 +39,18 @@ To ensure consistent testing, the following datasets will be prepared and versio
 
 ### 3.1 Backend & Orchestration (FastAPI + LangGraph)
 - **API Endpoints:** 
-  - Test `/api/upload`, `/api/review`, `/api/reconcile` for expected HTTP status codes, payload validation, and error handling.
+  - Test `/api/v1/documents/upload`, `/api/v1/documents/stream/{id}`, review, and
+    reconciliation endpoints for expected HTTP status codes, payload validation, and
+    error handling.
+- **Document Content Preparation:**
+  - Verify digital PDF text retention, scanned-page rendering, mixed per-page
+    classification, ordered visual pages, MIME preservation, and resource bounds.
+- **Safe Failure and Routing:**
+  - Verify missing/corrupt/encrypted content skips the LLM and persists an extraction
+    review without creating a journal entry.
+- **Deterministic Extraction Validation:**
+  - Verify essential fields, finite/non-negative values, exact dates and currency codes,
+    subtotal/tax/total consistency, line-item sums, confidence caps, and risk flags.
 - **Accounting Engine (Critical):** 
   - **Double-Entry Validation:** Assert that any function creating a journal entry fails if Debits ≠ Credits.
   - **Trial Balance:** Verify that ledger posting correctly updates the running balance.
@@ -46,6 +60,10 @@ To ensure consistent testing, the following datasets will be prepared and versio
 ### 3.2 Frontend (Vite/React)
 - **UI Components:** Test document upload drag-and-drop, review queue rendering, and approval/rejection button actions.
 - **Human-in-the-Loop Flow:** Ensure the UI correctly reflects the "Awaiting Review" state and updates optimistically when a user approves a suggestion.
+
+Frontend component testing remains planned; no Vitest/React Testing Library suite is
+currently configured. Frontend verification currently uses format, lint, and production
+build checks.
 
 ---
 
@@ -59,6 +77,9 @@ Because LLM outputs can vary, we will evaluate the agents based on accuracy metr
 - **Criteria:** 
   - **High Accuracy:** Subtotal, Tax, and Total Amount must have 95%+ accuracy. Vendor Name & Date > 90%.
   - **Confidence Calibration:** Ensure low-quality documents correctly produce low confidence scores (e.g., < 0.8) and successfully trigger the human review queue.
+
+These are evaluation targets, not current measured results. The deterministic extraction
+matrix mocks the LLM boundary and therefore must not be reported as OCR/model accuracy.
 
 ### 4.2 Bookkeeping Agent
 - **Metric:** Categorization Accuracy & Rationale Quality.
@@ -75,6 +96,21 @@ Because LLM outputs can vary, we will evaluate the agents based on accuracy metr
   - Fuzzy matches are successfully flagged for human review (not auto-approved).
   - **0% False Positives:** The agent must never auto-reconcile a transaction that does not belong to the ledger entry.
 
+### 4.4 Implemented Hybrid Extraction Matrix
+
+`backend/tests/test_document_extraction_matrix.py` provides the focused unit,
+integration, and regression matrix:
+
+| Condition | Assertions |
+|---|---|
+| Digital multi-page PDF | Text retained in order; no unnecessary visual pages. |
+| Scanned multi-page PDF | Every page rendered to bounded PNG in page order. |
+| Mixed PDF | Text and vision page numbers remain correctly classified. |
+| Image and blurry/low-detail input | Actual bytes and MIME reach vision; low confidence routes to review. |
+| Corrupt/encrypted PDF | Safe unreadable result, no LLM call, persisted Human Review, no journal. |
+| Processing limits | Default page truncation and rendered-pixel boundary remain enforced. |
+| Multimodal payload | All visual pages use MIME-correct data URLs and filename is excluded as evidence. |
+
 ---
 
 ## 5. End-to-End (E2E) Workflow Testing
@@ -82,20 +118,34 @@ Because LLM outputs can vary, we will evaluate the agents based on accuracy metr
 To validate the entire system, the following E2E scenarios must pass:
 
 **Scenario: The Happy Path with Human Review**
-1. Upload `sample_invoice_01.pdf`.
-2. Verify Document Intake Agent extracts data and pauses for Human Review (due to configured rules).
-3. User approves data via UI.
-4. Verify Bookkeeping Agent drafts a journal entry and pauses for Review.
-5. User approves journal entry via UI.
+1. Upload `demo-data/invoices/invoice_02_office_supplies.pdf`.
+2. Verify Text & Vision preparation and Document Intake produce valid structured fields.
+3. Verify a valid high-confidence extraction continues to Bookkeeping.
+4. Verify Bookkeeping drafts a journal entry and pauses for Review when required.
+5. User approves the review item via UI.
 6. Verify entry is posted to the Ledger and Trial Balance remains balanced.
-7. Upload `mock_bank_statement.csv`.
+7. Upload `demo-data/bank_statements/mock_bank_statement_august_2026.csv`.
 8. Verify Reconciliation Agent matches the entry correctly.
-9. Check **Audit Log** to ensure all steps, AI confidence scores, and human actions are recorded with correct timestamps.
+9. Separately verify a low-quality or unreadable document routes to extraction review.
+10. Check **Audit Log** for agent confidence, extraction metadata, and human actions.
 
 ---
 
 ## 6. Tools & Frameworks
 
 - **Backend Testing:** `pytest` for unit and integration testing.
-- **Frontend Testing:** `Vitest` and `React Testing Library`.
+- **Frontend Testing:** Format, ESLint, and Vite production build today; Vitest and React Testing Library are planned.
 - **LLM Evaluation:** Custom Python scripts (or evaluation frameworks like `LangSmith` / `DeepEval` / `Ragas`) to automate running agents against the Golden Dataset, calculating accuracy metrics, and checking for regressions when prompts are updated.
+
+Focused extraction verification:
+
+```bash
+cd backend
+uv run pytest -q \
+  tests/test_document_extraction.py \
+  tests/test_document_extraction_matrix.py \
+  tests/test_document_intake_agent.py \
+  tests/test_extraction_validation.py \
+  tests/test_orchestrator.py \
+  tests/test_document_metadata.py
+```

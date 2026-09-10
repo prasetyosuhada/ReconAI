@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/05-API-Spec.md`  
+**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/05-API-Spec.md`, `docs/10-Hybrid-Document-Extraction.md`
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -126,8 +126,12 @@ System response:
 
 - Show upload success.
 - Show document status: `extracting`.
-- Show processing indicator while the Document Intake Agent runs.
+- Open live progress over SSE while background processing runs.
+- Label content preparation as **Text & Vision**, not OCR.
+- Distinguish local content preparation from the Document Intake Agent step.
 - Show extraction result when complete.
+- If content is unreadable, partial, or inconsistent, show that the document was routed
+  to Human Review rather than presenting guessed fields.
 
 Visible AI signals:
 
@@ -137,6 +141,7 @@ Visible AI signals:
 - Confidence score.
 - Rationale or extraction notes.
 - Warnings if present.
+- Review requirement when deterministic validation flags content or field risks.
 
 ### 6.2 Step 2 — Review Extracted or Suggested Accounting Data
 
@@ -317,6 +322,8 @@ Recommended sections:
 
 - File metadata.
 - Extraction result.
+- Extraction/audit metadata when diagnostic detail is needed: method, visual page count,
+  provider/model, duration, warnings, and risk flags.
 - Bookkeeping result.
 - Related review item.
 - Related journal entry.
@@ -580,7 +587,8 @@ The UI should show the numeric score and a short label. Avoid hiding important u
 Use explicit loading states for:
 
 - Uploading document.
-- Running extraction.
+- Preparing document text and visual pages.
+- Running semantic extraction through the Document Intake Agent.
 - Generating journal entry.
 - Importing bank statement.
 - Running reconciliation.
@@ -599,6 +607,7 @@ Error messages should:
 Examples:
 
 - Unsupported file type.
+- Unreadable, corrupt, encrypted, or partially processed document routed to Human Review.
 - CSV parsing failed.
 - Agent provider unavailable.
 - Journal entry validation failed.
@@ -655,7 +664,7 @@ The first UX version should not include:
 These questions can be resolved during frontend implementation:
 
 1. Should the app open on Dashboard or Documents when there is no data?
-2. Should document processing show live step-by-step progress or only final status refreshes?
+2. Should the live Text & Vision card expose page-level extraction metadata directly, or keep diagnostics in Audit detail?
 3. Should review edits happen inline or in a modal?
 4. Should reconciliation be resolved primarily from the Reconciliation screen or the Review Queue?
 5. Should audit event snapshots be displayed as formatted JSON, summarized fields, or both?

@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Document:** `docs/01-PRD.md`  
+**Related Documents:** `docs/01-PRD.md`, `docs/10-Hybrid-Document-Extraction.md`
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -27,7 +27,7 @@ ReconAI should be designed around the following principles:
 | Deterministic financial validation | Critical accounting rules, such as debit-credit balance validation, must be enforced by deterministic code, not by an LLM. |
 | Traceability | Every AI-generated decision must be logged with source input, output, rationale, confidence score, timestamp, and human action. |
 | Demo readiness | The system should support a polished end-to-end flow that can be demonstrated in under five minutes. |
-| Replaceable AI providers | LLM and OCR providers should be abstracted enough that the implementation can switch providers without rewriting business logic. |
+| Replaceable AI providers | Multimodal LLM providers are isolated behind an adapter; content preparation remains provider-neutral. |
 
 ---
 
@@ -54,8 +54,10 @@ ReconAI follows a layered architecture:
 5. **Persistence Layer**
    - Stores source documents, extracted data, ledger records, bank transactions, review items, and audit logs.
 
-6. **External AI/OCR Providers**
-   - Provide document understanding, text extraction, classification suggestions, and natural-language rationales.
+6. **Local Content Preparation and External AI Providers**
+   - `pypdf` extracts embedded text and PyMuPDF renders bounded visual pages locally.
+   - A configured Gemini or OpenAI multimodal LLM provides semantic document understanding and structured suggestions.
+   - No separate OCR provider is integrated in the current implementation.
 
 ---
 
@@ -89,8 +91,8 @@ ReconAI follows a layered architecture:
           │                        │
           ▼                        ▼
 ┌────────────────────┐   ┌────────────────────┐
-│ AI / OCR Providers │   │ PostgreSQL         │
-│ LLM, vision, OCR   │   │ System of record   │
+│ Content Prep + LLM │   │ PostgreSQL         │
+│ PDF text + vision  │   │ System of record   │
 └────────────────────┘   └────────────────────┘
 ```
 
@@ -146,13 +148,17 @@ The orchestrator should not contain detailed accounting rules. It decides the ne
 
 ### 5.4 Document Intake Agent
 
-The Document Intake Agent extracts structured financial data from uploaded documents.
+Document intake has a deterministic content-preparation boundary before semantic
+interpretation. The preparation service returns `DocumentContent`, containing retained
+text, ordered visual pages, an extraction method, warnings, and provider-neutral
+metadata. The Document Intake Agent then asks a configured multimodal LLM for structured
+financial data.
 
 Input:
 
-- Uploaded invoice or receipt file.
-- Optional OCR text if extracted separately.
-- Document metadata.
+- Prepared embedded text, if available.
+- Ordered rendered PDF pages or an uploaded image with MIME type.
+- Source MIME and configured default currency.
 
 Output:
 
@@ -164,8 +170,14 @@ Output:
 - Total amount.
 - Extraction confidence score.
 - Rationale or extraction notes.
+- Warnings, low-confidence fields, and deterministic risk flags.
+- Runtime LLM provider and model metadata.
 
-If confidence is below the configured threshold, the agent output becomes a review queue item instead of flowing directly into bookkeeping.
+The agent never receives a filename as accounting evidence. If content is unreadable,
+partial, missing required fields, monetarily inconsistent, or below the `0.85`
+confidence threshold, the output becomes a review queue item instead of flowing directly
+into bookkeeping. The detailed contract is defined in
+`docs/10-Hybrid-Document-Extraction.md`.
 
 ### 5.5 Bookkeeping Agent
 
@@ -214,6 +226,8 @@ Recommended services:
 
 | Service | Responsibility |
 |---|---|
+| Document Extraction Service | Extract embedded PDF text, classify pages, and render bounded visual pages without interpreting accounting meaning. |
+| Extraction Validation Service | Validate readable content, essential fields, and monetary consistency before workflow routing. |
 | Ledger Service | Create, post, and query journal entries. |
 | Trial Balance Service | Validate debit and credit equality after posting. |
 | Review Service | Create and resolve human review items. |
@@ -238,6 +252,7 @@ Recommended storage approach:
 | Reconciliation matches | PostgreSQL |
 | Review queue items | PostgreSQL |
 | Audit events | PostgreSQL |
+| Live processing progress | Redis Streams; non-authoritative and recoverable from persisted document state |
 
 ---
 
@@ -252,12 +267,18 @@ User uploads document
 Backend stores document metadata and file reference
         │
         ▼
+Content service prepares embedded text and/or bounded visual pages
+        │
+        ├── unreadable / corrupt / encrypted / partial → Review Queue
+        ▼
 Orchestrator invokes Document Intake Agent
         │
         ▼
-Extraction result persisted and audit event recorded
+Deterministic field and monetary validation
         │
-        ├── Low confidence → Review Queue
+        ├── invalid / low confidence → Review Queue
+        ▼
+Extraction result persisted and audit event recorded
         │
         ▼
 Orchestrator invokes Bookkeeping Agent
@@ -484,7 +505,9 @@ Errors should be visible and recoverable where possible.
 | Error Type | Handling |
 |---|---|
 | Invalid upload format | Reject request with clear validation error. |
-| OCR or LLM provider failure | Mark workflow as failed and create audit event. |
+| Missing, corrupt, encrypted, or unsupported document content | Do not call the LLM; persist warnings and route to Human Review without filename-based guessing. |
+| Partial PDF or failed page rendering | Cap confidence, record affected pages, and route to Human Review. |
+| LLM provider failure | Mark workflow as failed, preserve available metadata, and expose a recoverable status. |
 | Low-confidence AI result | Route to review queue. |
 | Invalid journal entry | Block posting and create review item. |
 | Trial balance failure | Block posting and create audit event. |
@@ -518,25 +541,17 @@ Explicitly out of scope:
 
 ## 15. Deployment Model
 
-For local development and demo purposes, Docker Compose should run the full stack.
-
-Recommended services:
+For local development and demo purposes, Docker Compose runs the stateful dependencies:
 
 ```text
 docker-compose.yml
-  frontend
-  backend
   postgres
-```
-
-Optional services:
-
-```text
-  worker
   redis
 ```
 
-A background worker is optional for the first implementation. If agent calls are slow or need retry handling, agent workflows can later be moved from synchronous API requests into a worker queue.
+FastAPI and the Vite frontend run as local development processes. FastAPI background
+tasks run document workflows. Redis Streams transports live progress but does not
+execute the workflow; a dedicated worker queue remains optional future work.
 
 ---
 
@@ -548,23 +563,35 @@ A background worker is optional for the first implementation. If agent calls are
 | Vite SPA frontend | Fast development loop and polished demo experience. |
 | PostgreSQL system of record | Strong fit for relational accounting data and audit trails. |
 | LangGraph-style orchestration | Supports explicit multi-agent workflows, conditional routing, and human-in-the-loop pauses. |
+| Hybrid text-and-vision preparation | Preserves cheap embedded PDF text while rendering only pages that need visual understanding. |
+| No dedicated OCR service | The current multimodal LLM interprets rendered pages; progress and product copy must say Text & Vision rather than claim separate OCR. |
+| Bounded untrusted-document processing | A 10 MB upload limit, first-10-page limit, 150 DPI target, and 4,000,000-pixel page cap constrain resource use. |
 | Deterministic ledger validation | Accounting correctness should not depend on LLM judgment. |
 | Append-only audit events | Provides a credible traceability story with simple implementation. |
 | Mock bank statements | Keeps demo scope focused while still showing reconciliation logic. |
 
 ---
 
-## 17. Open Questions
+## 17. Implemented Decisions and Remaining Questions
 
-These questions should be answered during implementation planning:
+Implemented document-intake decisions:
 
-1. Which AI provider will be used first for document extraction and reasoning?
-2. Should OCR be handled by the same multimodal LLM or by a dedicated OCR library/provider?
-3. Should agent workflows run synchronously during the demo, or through a background worker?
-4. What sample chart of accounts should be used for the first demo?
-5. What confidence score format should be standardized across agents?
-6. How much extracted document detail should be editable in the review UI?
-7. Should audit logs store full JSON snapshots or normalized references plus selected fields?
+- Gemini and OpenAI are supported behind one adapter; Gemini is preferred when both
+  credentials exist.
+- Rendered pages are interpreted by the multimodal LLM; there is no dedicated OCR
+  service or OCR credential.
+- FastAPI background tasks execute document processing and Redis Streams publishes
+  observable progress.
+- Agent confidence is combined with deterministic content, field, and amount checks.
+- Extraction metadata is persisted in `document_extractions.provider_metadata` and the
+  extraction audit snapshot.
+
+Remaining architecture questions:
+
+1. Should document jobs move to a durable worker queue for production operation?
+2. Should the 10-page and rendering limits become deployment configuration?
+3. Should full visual-page transcription be persisted separately from structured fields?
+4. Should object storage replace local uploaded-file storage?
 
 ---
 
@@ -580,3 +607,4 @@ The following documents should build on this architecture:
 | `06-UX-Flow.md` | Defines screens and user interactions for the demo. |
 | `07-Demo-Plan.md` | Defines the portfolio demo script and sample data flow. |
 | `08-Test-Plan.md` | Defines validation and test coverage for critical workflows. |
+| `10-Hybrid-Document-Extraction.md` | Defines the implemented document-content contract, limits, validation, metadata, and safe-failure behavior. |

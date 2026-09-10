@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`  
+**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/10-Hybrid-Document-Extraction.md`
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -136,7 +136,7 @@ Common error codes:
 | `conflict` | `409` | Resource state does not allow the requested action. |
 | `unsupported_file_type` | `415` | Uploaded file type is not supported. |
 | `workflow_failed` | `500` | Workflow execution failed unexpectedly. |
-| `provider_unavailable` | `503` | AI, OCR, or external provider is unavailable. |
+| `provider_unavailable` | `503` | LLM or another external provider is unavailable. |
 
 ---
 
@@ -146,11 +146,11 @@ The first implementation should use these assumptions unless changed later:
 
 | Topic | Version 1 Assumption |
 |---|---|
-| Workflow execution | Synchronous enough for demo flows; background workers are optional. |
+| Workflow execution | Document processing starts as a FastAPI background task after upload; Redis Streams exposes live progress. |
 | Currency | Default currency is `IDR`, configurable later. |
 | Authentication | Out of scope or stubbed with a demo user. |
 | AI provider | Provider-agnostic behind backend services. |
-| OCR | Multimodal LLM or simple OCR abstraction; exact provider can change. |
+| Document content | Local embedded-text extraction plus bounded page rendering; no dedicated OCR provider. |
 | Audit snapshots | Store JSON snapshots for important agent and human decisions. |
 | Review resume behavior | Approval or edit resumes the next downstream workflow step. |
 
@@ -176,9 +176,12 @@ Response `200`:
 
 ## 7. Documents API
 
-### 7.1 `POST /documents`
+### 7.1 `POST /documents/upload`
 
 Uploads an invoice or receipt and starts document processing.
+
+`POST /documents` remains an implementation alias. Paths in this document are relative
+to `/api/v1`.
 
 Request:
 
@@ -192,7 +195,11 @@ Supported file types:
 
 - `application/pdf`
 - `image/jpeg`
+- `image/jpg`
 - `image/png`
+- `image/webp`
+
+Maximum file size: 10 MB. Empty files return `400`; files over the limit return `413`.
 
 Response `201`:
 
@@ -214,9 +221,12 @@ Behavior:
 
 - Store file metadata and file reference.
 - Create a `document_uploaded` audit event.
-- Start the Document Intake Agent workflow.
+- Start background content preparation and the LangGraph document workflow.
+- Extract embedded text per PDF page and render pages needing vision within the
+  implemented page and pixel limits.
 - If extraction is high-confidence, continue to bookkeeping.
-- If extraction needs review, create a review item.
+- If extraction is unreadable, partial, inconsistent, or low-confidence, create a
+  review item. Corrupt/encrypted PDFs do not invoke the LLM.
 
 ### 7.2 `GET /documents`
 
@@ -253,7 +263,8 @@ Response `200`:
 
 ### 7.3 `GET /documents/{document_id}`
 
-Fetches a document and its latest workflow summary.
+Fetches stored document metadata and its current workflow status. The latest extraction
+is fetched separately through `/documents/{document_id}/extractions/latest`.
 
 Response `200`:
 
@@ -266,29 +277,17 @@ Response `200`:
   "document_type": "receipt",
   "status": "bookkeeping_review_required",
   "uploaded_at": "2026-07-26T08:30:00Z",
-  "latest_extraction": {
-    "id": "uuid",
-    "vendor_name": "Acme Office Supply",
-    "transaction_date": "2026-07-20",
-    "subtotal_amount": 450000.00,
-    "tax_amount": 49500.00,
-    "total_amount": 499500.00,
-    "currency": "IDR",
-    "confidence_score": 0.91,
-    "status": "approved"
-  },
-  "latest_journal_entry": {
-    "id": "uuid",
-    "status": "review_required",
-    "confidence_score": 0.86
-  },
-  "pending_review_item_id": "uuid"
+  "created_at": "2026-07-26T08:30:00Z",
+  "updated_at": "2026-07-26T08:30:10Z",
+  "stored_file_path": "/internal/storage/uuid_receipt.pdf"
 }
 ```
 
 ### 7.4 `POST /documents/{document_id}/retry`
 
-Retries a failed document workflow.
+Planned endpoint; not implemented in the current API. A production retry design must
+reset state safely and preserve idempotency before this route is enabled. The response
+below is proposed, not currently available.
 
 Response `202`:
 
@@ -304,40 +303,39 @@ Allowed when:
 
 - Document status is `failed`.
 
+### 7.5 `GET /documents/stream/{document_id}`
+
+Observes background processing through Server-Sent Events. The endpoint does not run a
+second copy of the workflow. Clients may send `Last-Event-ID` to resume from a Redis
+Stream cursor.
+
+Document stages:
+
+```text
+init
+content_extraction_started
+content_extracted
+coa_loaded
+intake_agent
+intake_done
+bookkeeping_agent (notification when bookkeeping will run)
+bookkeeping_done
+review_queued | journal_created
+completed | error
+```
+
+The `content_extracted` event may include `text_preview`, `extraction_method`,
+`visual_page_count`, and `warnings`. If Redis is unavailable, the stream returns an
+`error` event stating that live progress is unavailable while background processing
+continues.
+
 ---
 
 ## 8. Extractions API
 
-### 8.1 `GET /documents/{document_id}/extractions`
+### 8.1 `GET /documents/{document_id}/extractions/latest`
 
-Lists extraction records for a document.
-
-Response `200`:
-
-```json
-{
-  "items": [
-    {
-      "id": "uuid",
-      "document_id": "uuid",
-      "vendor_name": "Acme Office Supply",
-      "transaction_date": "2026-07-20",
-      "total_amount": 499500.00,
-      "currency": "IDR",
-      "confidence_score": 0.91,
-      "status": "approved",
-      "created_at": "2026-07-26T08:30:05Z"
-    }
-  ],
-  "total": 1,
-  "limit": 50,
-  "offset": 0
-}
-```
-
-### 8.2 `GET /extractions/{extraction_id}`
-
-Fetches a single extraction record.
+Fetches the newest persisted extraction for a document.
 
 Response `200`:
 
@@ -359,9 +357,24 @@ Response `200`:
       "amount": 250000.00
     }
   ],
+  "provider_metadata": {
+    "extraction_method": "pdf_hybrid",
+    "vision_processed_page_numbers": [2],
+    "vision_page_mime_types": {"2": "image/png"},
+    "llm_provider": "gemini",
+    "llm_model": "gemini-3.1-flash-lite",
+    "durations_ms": {
+      "content_extraction": 125.4,
+      "document_intake": 820.6,
+      "total": 946.0
+    },
+    "warnings": [],
+    "low_confidence_fields": [],
+    "risk_flags": []
+  },
   "confidence_score": 0.91,
   "rationale": "The fields were clearly visible on the receipt.",
-  "status": "approved",
+  "status": "extracted",
   "created_at": "2026-07-26T08:30:05Z",
   "updated_at": "2026-07-26T08:30:05Z"
 }
@@ -1106,7 +1119,9 @@ Response `200`:
 
 | Endpoint | Key Validation |
 |---|---|
-| `POST /documents` | File type, file size, document type. |
+| `POST /documents/upload` | PDF/JPEG/PNG/WebP type, non-empty content, 10 MB size limit, and document type normalization. |
+| `GET /documents/stream/{id}` | Valid document UUID and existing document; stream observation must not start duplicate processing. |
+| Document content pipeline | First 10 PDF pages, 4,000,000 pixels per rendered page, readable content, essential fields, and monetary consistency. |
 | `POST /review-items/{id}/approve` | Review item must be pending and source must still exist. |
 | `POST /review-items/{id}/edit` | Edited payload must pass source-specific schema validation. |
 | `POST /ledger/journal-entries/{id}/post` | Entry must balance and required reviews must be resolved. |
@@ -1120,8 +1135,8 @@ Response `200`:
 
 These questions can be resolved during implementation:
 
-1. Should workflow-triggering endpoints return only immediate state, or wait for synchronous agent completion in demo mode?
-2. Should `POST /documents` automatically run bookkeeping after high-confidence extraction, or should the frontend trigger that separately?
+1. Should FastAPI background document processing move to a durable worker queue?
+2. Should upload/page/render limits become environment configuration?
 3. Should reconciliation review be handled only through Review Items API, or also through direct reconciliation accept/reject endpoints?
 4. Should draft journal entries be manually creatable through the API in version 1?
 5. Should API responses include full nested objects by default, or keep nesting minimal and let the frontend fetch details separately?

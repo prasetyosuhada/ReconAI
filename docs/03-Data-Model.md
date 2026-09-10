@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`  
+**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/10-Hybrid-Document-Extraction.md`
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -25,7 +25,7 @@ The model is designed for a portfolio-grade implementation using PostgreSQL as t
 | Human decisions are traceable | Approvals, edits, and rejections should be stored and linked to the related AI suggestion. |
 | Audit events are append-only | Corrections should create new audit events instead of mutating historical audit records. |
 | Deterministic validation is enforceable | The schema should support backend validation for balanced journal entries and reconciliation state. |
-| JSON is allowed for snapshots | Flexible JSON fields may be used for AI input/output snapshots, OCR results, and provider-specific metadata. |
+| JSON is allowed for snapshots | Flexible JSON fields may be used for AI input/output snapshots, extraction diagnostics, risk flags, and provider metadata. |
 
 ---
 
@@ -118,8 +118,8 @@ Stores structured extraction results produced by the Document Intake Agent.
 | `total_amount` | Numeric(14,2) | No | Extracted total amount. |
 | `currency` | Text | Yes | ISO currency code, default `IDR` or configured demo currency. |
 | `line_items` | JSONB | No | Extracted line item details. |
-| `raw_text` | Text | No | OCR text or model-extracted text. |
-| `provider_metadata` | JSONB | No | Provider-specific metadata such as model name or OCR details. |
+| `raw_text` | Text | No | Embedded PDF text retained during local content preparation; visual-only pages do not currently produce a separately persisted transcript. |
+| `provider_metadata` | JSONB | No | Extraction method, page decisions, resource bounds, runtime model, durations, warnings, and risk metadata. |
 | `confidence_score` | Numeric(5,4) | Yes | Extraction confidence from `0.0000` to `1.0000`. |
 | `rationale` | Text | No | Human-readable extraction notes. |
 | `status` | Text | Yes | Extraction lifecycle status. |
@@ -141,8 +141,22 @@ Recommended statuses:
 
 Notes:
 
-- Multiple extraction records may exist for one document if a user edits or reruns extraction.
-- The currently accepted extraction should be the latest `approved` extraction unless the backend later adds an explicit pointer.
+- Background processing performs an idempotent upsert keyed by `document_id`; review
+  approval/edit updates the newest extraction in the current implementation.
+- Visual page base64 data is transient and is not stored in `provider_metadata`.
+- `provider_metadata` reuses the existing JSONB column, so hybrid extraction did not
+  require a database migration.
+
+Implemented `provider_metadata` groups:
+
+| Group | Keys |
+|---|---|
+| Source | `source_mime_type`, `source_suffix`, `file_size_bytes` |
+| Page preparation | `text_extractor`, `page_renderer`, `source_page_count`, `processed_page_count`, `page_limit`, `page_limit_applied`, `page_classifications` |
+| Text and vision | `embedded_text_char_count`, `text_page_numbers`, `vision_page_numbers`, `rendered_page_numbers`, `visual_page_count`, `requested_render_dpi`, `max_rendered_page_pixels` |
+| Normalized outcome | `extraction_method`, `vision_processed_page_numbers`, `vision_page_mime_types` |
+| LLM runtime | `llm_provider`, `llm_model` |
+| Observability and review | `durations_ms`, `warnings`, `low_confidence_fields`, `risk_flags` |
 
 ---
 
@@ -549,8 +563,15 @@ The backend should enforce these rules before records become authoritative.
 ### 8.2 Extraction Rules
 
 - Extraction confidence must be between `0.0000` and `1.0000`.
-- Low-confidence extractions must create a review item.
-- Approved extraction data should preserve the original AI output through audit events or snapshots.
+- Low-confidence, unreadable, partial, missing-field, inconsistent, or unrendered-page
+  extractions must create a review item.
+- Required-field validation covers document type, vendor, exact ISO date, currency, and
+  a positive total.
+- Monetary values must be finite and non-negative. Subtotal plus tax and complete
+  line-item sums use a deterministic tolerance of `0.05`.
+- Corrupt/encrypted PDF content must not invoke the LLM or infer values from filename.
+- Extraction output and normalized provider metadata must be preserved in the
+  `extraction_completed` audit snapshot.
 
 ### 8.3 Reconciliation Rules
 
@@ -577,7 +598,7 @@ The implementation may use text columns first for speed, then move to database e
 |---|---|
 | Document type | `invoice`, `receipt`, `unknown` |
 | Document status | `uploaded`, `extracting`, `extraction_review_required`, `extracted`, `bookkeeping_in_progress`, `bookkeeping_review_required`, `ready_to_post`, `posted`, `failed` |
-| Extraction status | `draft`, `review_required`, `approved`, `rejected`, `superseded` |
+| Extraction status | `draft`, `extracted` in the current processing/review flow |
 | Account type | `asset`, `liability`, `equity`, `revenue`, `expense` |
 | Normal balance | `debit`, `credit` |
 | Journal entry status | `draft`, `review_required`, `approved`, `posted`, `rejected`, `voided` |
@@ -599,13 +620,14 @@ The implementation may use text columns first for speed, then move to database e
 
 1. A user uploads `office-supplies-receipt.pdf`.
 2. The backend creates a `documents` record with status `uploaded`.
-3. The Document Intake Agent creates a `document_extractions` record.
-4. If extraction confidence is high, the extraction status becomes `approved`.
-5. The Bookkeeping Agent creates a `journal_entries` draft with two or more `journal_entry_lines`.
-6. The Trial Balance Service validates debit equals credit.
-7. If review is required, a `review_items` record is created.
-8. After approval, the journal entry status becomes `posted`.
-9. Each important step writes an `audit_events` record.
+3. The content service creates `DocumentContent` from embedded text and/or rendered pages.
+4. The Document Intake Agent returns structured fields and deterministic validation decides whether review is required.
+5. The backend upserts a `document_extractions` row as `extracted` when intake can continue, or `draft` when extraction review is required.
+6. The Bookkeeping Agent creates a `journal_entries` draft with two or more `journal_entry_lines`.
+7. The Trial Balance Service validates debit equals credit.
+8. If review is required, a `review_items` record is created.
+9. After approval, the journal entry status becomes `posted`.
+10. Each important step writes an `audit_events` record.
 
 ### 10.2 Bank Transaction Reconciliation
 
@@ -638,7 +660,7 @@ The implementation may use text columns first for speed, then move to database e
 These questions can be answered before implementation or refined during the first migration design:
 
 1. Should the first demo use `IDR` as the default currency, or a provider-neutral default such as `USD`?
-2. Should the app store full OCR text for every document, or only extracted structured fields?
+2. Should the app add and persist a separate full-page OCR/vision transcription in a future version?
 3. Should edited extraction results create a new `document_extractions` row or update the existing row with audit history?
 4. Should journal entry corrections be supported in version 1, or should posted entries be immutable for the demo?
 5. Should reconciliation support one-to-many matching, such as one bank payment covering multiple invoices, in the first version?
