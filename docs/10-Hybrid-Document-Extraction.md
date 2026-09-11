@@ -287,6 +287,10 @@ Coverage includes:
 These tests validate pipeline behavior, not real-world OCR/LLM accuracy. Extraction
 accuracy remains unmeasured until a labeled golden-dataset benchmark is executed.
 
+For repeatable UI/API steps, disposable fixture generation, expected outcomes, and the
+manual evidence template, see
+[`docs/11-Hybrid-Extraction-Manual-Test.md`](11-Hybrid-Extraction-Manual-Test.md).
+
 ---
 
 ## 12. Known Limitations

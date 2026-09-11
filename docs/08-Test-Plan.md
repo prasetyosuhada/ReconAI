@@ -149,3 +149,7 @@ uv run pytest -q \
   tests/test_orchestrator.py \
   tests/test_document_metadata.py
 ```
+
+For UI/API fixture preparation, expected metadata, safe-failure checks, and a reusable
+evidence checklist, follow
+[`docs/11-Hybrid-Extraction-Manual-Test.md`](11-Hybrid-Extraction-Manual-Test.md).

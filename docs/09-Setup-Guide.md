@@ -211,6 +211,10 @@ DATABASE_URL="sqlite:///:memory:" .venv/bin/pytest \
   tests/test_document_metadata.py
 ```
 
+Manual hybrid extraction verification, including generated scanned/mixed/encrypted
+fixtures, is documented in
+[`docs/11-Hybrid-Extraction-Manual-Test.md`](11-Hybrid-Extraction-Manual-Test.md).
+
 Frontend Production Build Validation:
 ```bash
 cd frontend

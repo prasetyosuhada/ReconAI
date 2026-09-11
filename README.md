@@ -152,6 +152,7 @@ Detailed specification documents are available in the `docs/` directory:
 - [docs/08-Test-Plan.md](docs/08-Test-Plan.md) — Testing & AI Agent Evaluation Strategy
 - [docs/09-Setup-Guide.md](docs/09-Setup-Guide.md) — Local Setup & Execution Manual
 - [docs/10-Hybrid-Document-Extraction.md](docs/10-Hybrid-Document-Extraction.md) — Implemented Hybrid Extraction Design
+- [docs/11-Hybrid-Extraction-Manual-Test.md](docs/11-Hybrid-Extraction-Manual-Test.md) — Manual Hybrid Extraction Verification Runbook
 
 ---
 
