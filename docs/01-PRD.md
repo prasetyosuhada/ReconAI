@@ -6,6 +6,7 @@
 **Type:** Portfolio Project
 **Document Owner:** Prasetyo Suhada
 **Extraction Design:** `docs/10-Hybrid-Document-Extraction.md`
+**Human Review Design:** `docs/12-Source-Backed-Human-Review.md` (Planned â€” Epic 15)
 
 ---
 
@@ -74,6 +75,8 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 **E. Human-in-the-Loop Review UI**
 - Queue of AI suggestions awaiting approval (extraction results, categorization suggestions, reconciliation matches)
 - User can Approve / Edit / Reject each item
+- Planned for Epic 15: extraction reviewers can inspect the stored source document beside the suggested fields, warnings, and page-coverage metadata
+- Planned for Epic 15: approving or editing an extraction re-runs deterministic validation before any bookkeeping continuation
 - Rejections/edits are logged and can optionally inform future suggestions
 
 **F. Audit/Traceability Log**
@@ -93,6 +96,7 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 2. The content-preparation service extracts embedded PDF text and/or prepares ordered visual pages for the configured multimodal LLM.
 3. **Document Intake Agent** extracts structured data and returns a confidence score.
    - If content is unreadable, processing is partial, required fields are missing, amounts conflict, or confidence is low â†’ item goes to human review queue.
+   - Planned for Epic 15: the reviewer compares the proposed fields with the stored source, corrects the allowlisted extraction fields when needed, and receives field-level validation feedback. Invalid corrections remain pending and cannot continue to Bookkeeping.
 4. **Bookkeeping Agent** receives extracted data, suggests COA account(s), and drafts a journal entry with rationale.
    - If confidence is low or the entry affects a sensitive account â†’ item goes to human review queue.
 5. User (via Review UI) approves, edits, or rejects the suggested entry.
@@ -146,6 +150,10 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 | FR-4.2 | System shall route low-confidence or high-risk outputs to a human review queue |
 | FR-4.3 | System shall allow users to Approve, Edit, or Reject any AI-suggested item |
 | FR-4.4 | System shall persist human decisions and reflect them in downstream state (e.g., posted ledger) |
+| FR-4.5 | **Planned â€” Epic 15:** extraction review shall provide authorized inline access to the stored source document without exposing internal storage paths |
+| FR-4.6 | **Planned â€” Epic 15:** extraction review shall show source availability, content quality, page coverage, warnings, low-confidence fields, and risk flags separately |
+| FR-4.7 | **Planned â€” Epic 15:** approve-as-is and edit-and-approve shall apply the same deterministic extraction validation used during intake; invalid input shall remain pending and shall not trigger Bookkeeping |
+| FR-4.8 | **Planned â€” Epic 15:** review resolution and downstream continuation shall be transactional and idempotent so repeated or concurrent requests cannot create duplicate accounting records |
 
 ### 5.5 Audit & Traceability
 | ID | Requirement |
@@ -164,6 +172,8 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 | Transparency | Confidence scores must be visible wherever AI makes a judgment call |
 | Reliability | Trial balance validation must be deterministic and always run after any posting |
 | Intake Safety | Unreadable, incomplete, conflicting, or partially processed documents must not be silently auto-approved |
+| Review Evidence | **Planned â€” Epic 15:** reviewers must be able to distinguish an unavailable source from unreadable or partial content and inspect available evidence before resolving an extraction |
+| Review Consistency | **Planned â€” Epic 15:** corrections must pass deterministic field and monetary validation before workflow state changes or downstream persistence |
 | Resource Bounds | Upload, PDF page count, and rendered page resolution must be bounded before external model calls |
 | Latency | Document extraction and categorization should complete within a few seconds for a good demo experience |
 | Auditability | All agent actions must be logged in a way that is queryable and traceable |
@@ -229,6 +239,8 @@ ReconAI is an agentic AI platform that automates the core bookkeeping workflow â
 | Oversized or very long documents exhaust resources | Enforce a 10 MB upload limit, 10-page processing limit, and 4,000,000-pixel render limit |
 | Miscategorized journal entries break trial balance | Deterministic trial balance validation as a hard gate, not just AI judgment |
 | Reconciliation false-positive matches | Confidence threshold + human review for anything below high confidence |
+| Reviewer approves a placeholder or unsupported extraction | Planned source viewer, explicit evidence state, field-level validation, and no downstream continuation while invalid |
+| Repeated or concurrent review resolution duplicates downstream work | Planned row locking, pending-state recheck, idempotent continuation, and database-backed concurrency tests |
 | Scope creep into tax/compliance | Explicitly out of scope for this version; documented as future work |
 
 ---

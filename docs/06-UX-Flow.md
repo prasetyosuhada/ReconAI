@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/05-API-Spec.md`, `docs/10-Hybrid-Document-Extraction.md`
+**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/05-API-Spec.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Planned — Epic 15)
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -85,6 +85,7 @@ Documents
 Review Queue
   ├── Pending items list
   ├── Review item detail
+  ├── Source PDF/image evidence (Planned — Epic 15)
   ├── Approve action
   ├── Edit and approve action
   └── Reject action
@@ -150,13 +151,17 @@ Screen: **Review Queue**
 User actions:
 
 1. Open the pending review item.
-2. Inspect original AI suggestion.
+2. Inspect original AI suggestion and, for extraction review in planned Epic 15, compare
+   it with the actual source PDF or image.
 3. Approve, edit, or reject.
 
 System response:
 
 - If approved or edited, update review item status.
 - Resume downstream workflow.
+- Planned for Epic 15: validate the complete effective extraction before resolving the
+  review. If validation fails, keep the item pending, retain the correction draft, show
+  field errors, and do not start Bookkeeping.
 - If reviewing bookkeeping, validate and post the journal entry if valid.
 - Create audit event for the human action.
 
@@ -167,6 +172,8 @@ Visible AI signals:
 - Risk flags.
 - Sensitive account warning.
 - Original payload and edited payload comparison, if edited.
+- Planned for Epic 15 extraction review: source availability, content quality,
+  extraction method, page coverage, warnings, low-confidence fields, and risk flags.
 
 ### 6.3 Step 3 — Inspect Ledger Entry
 
@@ -406,6 +413,25 @@ Reconciliation edit fields:
 - Editable fields where appropriate.
 - Audit trail link.
 
+### 9.7 Source-Backed Extraction Review (Planned — Epic 15)
+
+Extraction review will use a two-panel workspace: the stored source evidence on one side
+and editable structured fields on the other. PDF controls provide page navigation;
+JPEG, PNG, and WebP sources use contained image scaling. An **Open Source** action uses
+the same backend-controlled content URL and never exposes a filesystem path.
+
+The evidence panel has explicit loading, available, missing, blocked, unsupported, and
+browser-render-failure states. Availability is displayed separately from content quality
+(`readable`, `unreadable`, `corrupt`, `partial`, or `unknown`). A missing or unreadable
+source is never presented as proof of payment state or any other accounting fact.
+
+The form shows the original suggestion, saved correction when present, model confidence,
+rationale, extraction method, processed-page coverage, warnings, low-confidence fields,
+and risk flags. Partial processing receives a prominent notice. **Confirm Extraction**
+and **Save Fields & Continue** display backend field errors in place and remain on the
+review item until validation succeeds. Mutation buttons are disabled while a request is
+in flight; the backend remains authoritative for duplicate and concurrent submissions.
+
 ---
 
 ## 10. Ledger Screen
@@ -608,6 +634,10 @@ Examples:
 
 - Unsupported file type.
 - Unreadable, corrupt, encrypted, or partially processed document routed to Human Review.
+- Planned for Epic 15: stored source is missing or blocked, while the review remains
+  available with an explicit evidence state.
+- Planned for Epic 15: corrected extraction fails deterministic validation, with errors
+  attached to the affected fields and no downstream continuation.
 - CSV parsing failed.
 - Agent provider unavailable.
 - Journal entry validation failed.
@@ -640,6 +670,9 @@ Baseline requirements:
 - Form fields should have visible labels.
 - Error states should be associated with the affected field or action.
 - Keyboard navigation should work for primary review actions.
+- Planned Epic 15 viewer controls, Open Source action, and editable extraction fields
+  should be keyboard reachable with visible focus; field errors should be announced and
+  associated with their inputs.
 - Destructive actions, such as rejection, should require a short confirmation or deliberate click.
 
 ---

@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/04-Agent-Design.md`, `docs/10-Hybrid-Document-Extraction.md`
+**Related Documents:** `docs/01-PRD.md`, `docs/04-Agent-Design.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Planned — Epic 15)
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -56,10 +56,16 @@ To ensure consistent testing, the following datasets will be prepared and versio
   - **Trial Balance:** Verify that ledger posting correctly updates the running balance.
 - **Database Operations:** Test CRUD operations for documents, journal entries, and the audit log.
 - **State Management:** Ensure LangGraph maintains context correctly between the Intake, Bookkeeping, and Reconciliation nodes.
+- **Source-Backed Review (Planned — Epic 15):** Verify controlled source delivery,
+  extraction correction validation, pending-state preservation on failure, and atomic,
+  idempotent continuation after a valid human decision.
 
 ### 3.2 Frontend (Vite/React)
 - **UI Components:** Test document upload drag-and-drop, review queue rendering, and approval/rejection button actions.
 - **Human-in-the-Loop Flow:** Ensure the UI correctly reflects the "Awaiting Review" state and updates optimistically when a user approves a suggestion.
+- **Extraction Review Workspace (Planned — Epic 15):** Verify PDF/image evidence,
+  source and content-quality states, diagnostic metadata, editable field validation,
+  and duplicate-submit protection.
 
 Frontend component testing remains planned; no Vitest/React Testing Library suite is
 currently configured. Frontend verification currently uses format, lint, and production
@@ -111,6 +117,25 @@ integration, and regression matrix:
 | Processing limits | Default page truncation and rendered-pixel boundary remain enforced. |
 | Multimodal payload | All visual pages use MIME-correct data URLs and filename is excluded as evidence. |
 
+### 4.5 Source-Backed Human Review Matrix (Planned — Epic 15)
+
+These tests do not exist yet. They are the acceptance matrix for Tasks 15.2–15.7 and
+must not be reported as implemented coverage until the corresponding suites pass.
+
+| Area | Planned Verification |
+|---|---|
+| Source endpoint | PDF/JPEG/PNG/WebP bytes, validated MIME, safe inline filename and headers, malformed UUID, missing row/file, unsupported type, traversal, and symlink escape. |
+| Review detail contract | Safe `source_document` descriptor plus normalized extraction method, source/processed page counts, page sets, warnings, low-confidence fields, and risk flags; no internal path or raw provider payload. |
+| Approve as-is | Valid extraction continues once; invalid persisted extraction returns field errors, remains pending, and does not call Bookkeeping. |
+| Edit and Continue | Allowlisted valid correction continues; invalid date/currency/numeric/required fields or inconsistent amounts return `422` and remain pending. |
+| Provenance | Original confidence and provider metadata remain intact; human changes and resolution context are auditable. |
+| Transaction rollback | Bookkeeping or persistence failure leaves review, document, journal, downstream review, and audit state consistent. |
+| Idempotency | Repeated resolution produces one downstream outcome and a stable conflict response. |
+| PostgreSQL concurrency | Two simultaneous valid resolutions produce one winner with no duplicate journal, review, status, or audit side effects. |
+| Evidence UI | Multi-page PDF navigation, image scaling, loading/missing/blocked/unsupported/render-failure states, and Open Source action. |
+| Context and form UI | Partial-processing notice, warnings/risk/low-confidence metadata, field-associated errors, retained correction draft, keyboard use, and in-flight action disabling. |
+| Regression | Existing digital/scanned/mixed/corrupt/encrypted/partial extraction, bookkeeping, audit, and non-extraction review behavior remains valid. |
+
 ---
 
 ## 5. End-to-End (E2E) Workflow Testing
@@ -128,6 +153,11 @@ To validate the entire system, the following E2E scenarios must pass:
 8. Verify Reconciliation Agent matches the entry correctly.
 9. Separately verify a low-quality or unreadable document routes to extraction review.
 10. Check **Audit Log** for agent confidence, extraction metadata, and human actions.
+
+**Planned Epic 15 extension:** repeat the extraction-review portion with a multi-page PDF
+and an image, compare fields with the real stored source, submit one invalid correction
+and confirm it remains pending, then submit a valid correction twice and confirm only one
+downstream result and complete audit trace exist.
 
 ---
 

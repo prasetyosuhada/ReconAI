@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/10-Hybrid-Document-Extraction.md`
+**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Planned — Epic 15)
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -64,6 +64,11 @@ extracting
   │   extraction_review_required
   │       │
   │       ▼
+  │   inspect source + approve/edit (Planned — Epic 15)
+  │       │
+  │       ├── deterministic validation fails → remain pending
+  │       │
+  │       ▼
   │   extracted
   │
   ▼
@@ -113,7 +118,34 @@ matching_in_progress
       resolved
 ```
 
-### 4.3 Orchestrator Responsibilities
+### 4.3 Extraction Review Continuation (Planned — Epic 15)
+
+The extraction review path resumes through application services rather than invoking a
+new agent to judge a human correction. The planned sequence is:
+
+1. Load and lock the pending review item together with its document and latest
+   extraction.
+2. Build the effective payload from the original suggestion for approve-as-is, or from
+   allowlisted corrected fields for edit-and-approve.
+3. Run the same deterministic essential-field, date, currency, finite-value,
+   non-negative-value, line-item, and subtotal/tax/total checks used during intake.
+4. If validation fails, return structured field errors and keep the review and workflow
+   state unchanged.
+5. If validation succeeds, preserve the provider's original confidence and provenance,
+   record the human action and corrected snapshot, resolve the review, and continue to
+   Bookkeeping once.
+
+Source availability and source content quality are separate signals. A missing file is
+not evidence that an invoice is unpaid, invalid, or otherwise classifiable. The review
+service must not infer accounting fields or payment state from a filename, storage
+failure, or reviewer-interface placeholder.
+
+The resolution boundary must be transactional and idempotent. A row lock and pending
+state recheck prevent repeated or concurrent approve/edit requests from creating
+duplicate downstream records. The detailed contract is defined in
+`docs/12-Source-Backed-Human-Review.md`.
+
+### 4.4 Orchestrator Responsibilities
 
 The orchestrator should:
 
