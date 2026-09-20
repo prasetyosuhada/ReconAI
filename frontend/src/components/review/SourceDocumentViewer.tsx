@@ -28,6 +28,7 @@ interface SourceErrorResponse {
 interface SourceDocumentViewerProps {
   documentId: string | null
   filename: string
+  pageCount: number | null
 }
 
 const IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
@@ -48,6 +49,7 @@ const getErrorState = (response: Response, payload: SourceErrorResponse): Source
 export const SourceDocumentViewer: React.FC<SourceDocumentViewerProps> = ({
   documentId,
   filename,
+  pageCount,
 }) => {
   const [sourceState, setSourceState] = useState<SourceState>(
     documentId ? { kind: 'loading' } : { kind: 'missing-id' }
@@ -148,30 +150,37 @@ export const SourceDocumentViewer: React.FC<SourceDocumentViewerProps> = ({
               className="flex-1 min-h-[360px] w-full bg-slate-900"
               onError={() => setSourceState({ kind: 'render-failed' })}
             />
-            <div className="shrink-0 px-3 py-2 border-t border-slate-800 bg-slate-900 flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={() => setPdfPage((page) => Math.max(1, page - 1))}
-                disabled={pdfPage === 1}
-                className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label="Show previous PDF page"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
-                Previous
-              </button>
-              <span className="text-xs font-semibold text-slate-400" aria-live="polite">
-                Page {pdfPage}
-              </span>
-              <button
-                type="button"
-                onClick={() => setPdfPage((page) => page + 1)}
-                className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800"
-                aria-label="Show next PDF page"
-              >
-                Next
-                <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
-              </button>
-            </div>
+            {pageCount ? (
+              <div className="shrink-0 px-3 py-2 border-t border-slate-800 bg-slate-900 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPdfPage((page) => Math.max(1, page - 1))}
+                  disabled={pdfPage === 1}
+                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Show previous PDF page"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                  Previous
+                </button>
+                <span className="text-xs font-semibold text-slate-400" aria-live="polite">
+                  Page {pdfPage} of {pageCount}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPdfPage((page) => Math.min(pageCount, page + 1))}
+                  disabled={pdfPage >= pageCount}
+                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Show next PDF page"
+                >
+                  Next
+                  <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            ) : (
+              <p className="shrink-0 px-3 py-2 border-t border-slate-800 bg-slate-900 text-center text-[11px] text-slate-500">
+                Use the PDF viewer controls to navigate available pages.
+              </p>
+            )}
           </>
         )}
 

@@ -101,6 +101,9 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
     originalPayload.document_id ||
     originalPayload.source_document_id ||
     (item?.source_type === 'document' ? item.source_id : null)
+  const sourcePageCountValue = Number(latestExtraction?.provider_metadata?.source_page_count)
+  const sourcePageCount =
+    Number.isInteger(sourcePageCountValue) && sourcePageCountValue > 0 ? sourcePageCountValue : null
   const paymentStatus =
     originalPayload.payment_status ||
     originalPayload.payment_status_label ||
@@ -588,6 +591,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
               <SourceDocumentViewer
                 documentId={sourceDocumentId ? String(sourceDocumentId) : null}
                 filename={sourceFilename}
+                pageCount={sourcePageCount}
               />
             </section>
 
