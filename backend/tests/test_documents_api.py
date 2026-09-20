@@ -70,6 +70,165 @@ def test_upload_document_empty_file(client):
 
 
 @pytest.mark.parametrize(
+    ("filename", "mime_type", "content"),
+    [
+        ("invoice.pdf", "application/pdf", b"%PDF-1.4\nsource"),
+        ("receipt.jpg", "image/jpeg", b"\xff\xd8\xff\xe0source"),
+        ("receipt.png", "image/png", b"\x89PNG\r\n\x1a\nsource"),
+        ("receipt.webp", "image/webp", b"RIFF\x10\x00\x00\x00WEBPsource"),
+    ],
+)
+def test_get_document_content_serves_validated_source(
+    client,
+    db_session,
+    monkeypatch,
+    tmp_path,
+    filename,
+    mime_type,
+    content,
+):
+    storage_root = tmp_path / "uploads"
+    storage_root.mkdir()
+    monkeypatch.setattr("app.api.v1.documents.UPLOAD_STORAGE_DIR", storage_root)
+    source_path = storage_root / filename
+    source_path.write_bytes(content)
+
+    document = Document(
+        id=uuid.uuid4(),
+        original_filename=filename,
+        stored_file_path=str(source_path),
+        mime_type=mime_type,
+        file_size_bytes=len(content),
+        document_type="receipt",
+        status="extraction_review_required",
+    )
+    db_session.add(document)
+    db_session.commit()
+
+    response = client.get(f"/api/v1/documents/{document.id}/content")
+
+    assert response.status_code == 200
+    assert response.content == content
+    assert response.headers["content-type"] == mime_type
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert filename in response.headers["content-disposition"]
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["accept-ranges"] == "bytes"
+    assert str(source_path) not in response.text
+
+    range_response = client.get(
+        f"/api/v1/documents/{document.id}/content",
+        headers={"Range": "bytes=0-3"},
+    )
+    assert range_response.status_code == 206
+    assert range_response.content == content[:4]
+    assert range_response.headers["content-range"] == f"bytes 0-3/{len(content)}"
+
+
+def test_get_document_content_rejects_missing_or_outside_source(
+    client, db_session, monkeypatch, tmp_path
+):
+    storage_root = tmp_path / "uploads"
+    storage_root.mkdir()
+    monkeypatch.setattr("app.api.v1.documents.UPLOAD_STORAGE_DIR", storage_root)
+
+    missing_path = storage_root / "missing.pdf"
+    outside_path = tmp_path / "outside.pdf"
+    outside_path.write_bytes(b"%PDF-1.4\noutside")
+    source_paths = [missing_path, outside_path]
+    document_ids = []
+    for source_path in source_paths:
+        document = Document(
+            id=uuid.uuid4(),
+            original_filename="receipt.pdf",
+            stored_file_path=str(source_path),
+            mime_type="application/pdf",
+            file_size_bytes=100,
+            document_type="receipt",
+            status="extraction_review_required",
+        )
+        db_session.add(document)
+        document_ids.append(document.id)
+    db_session.commit()
+
+    for document_id, source_path in zip(document_ids, source_paths, strict=True):
+        response = client.get(f"/api/v1/documents/{document_id}/content")
+        assert response.status_code == 410
+        assert response.json() == {
+            "error": {
+                "code": "source_content_unavailable",
+                "message": "Stored document content is unavailable.",
+            }
+        }
+        assert str(source_path) not in response.text
+
+
+def test_get_document_content_rejects_symlink_escape(
+    client, db_session, monkeypatch, tmp_path
+):
+    storage_root = tmp_path / "uploads"
+    storage_root.mkdir()
+    monkeypatch.setattr("app.api.v1.documents.UPLOAD_STORAGE_DIR", storage_root)
+    outside_path = tmp_path / "outside.pdf"
+    outside_path.write_bytes(b"%PDF-1.4\noutside")
+    symlink_path = storage_root / "linked.pdf"
+    symlink_path.symlink_to(outside_path)
+    document = Document(
+        id=uuid.uuid4(),
+        original_filename="receipt.pdf",
+        stored_file_path=str(symlink_path),
+        mime_type="application/pdf",
+        file_size_bytes=100,
+        document_type="receipt",
+        status="extraction_review_required",
+    )
+    db_session.add(document)
+    db_session.commit()
+
+    response = client.get(f"/api/v1/documents/{document.id}/content")
+
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "source_content_unavailable"
+    assert str(outside_path) not in response.text
+    assert str(symlink_path) not in response.text
+
+
+def test_get_document_content_rejects_invalid_media_and_safe_errors(
+    client, db_session, monkeypatch, tmp_path
+):
+    storage_root = tmp_path / "uploads"
+    storage_root.mkdir()
+    monkeypatch.setattr("app.api.v1.documents.UPLOAD_STORAGE_DIR", storage_root)
+    source_path = storage_root / "mismatch.pdf"
+    source_path.write_bytes(b"\xff\xd8\xff\xe0jpeg bytes")
+    document = Document(
+        id=uuid.uuid4(),
+        original_filename="mismatch.pdf",
+        stored_file_path=str(source_path),
+        mime_type="application/pdf",
+        file_size_bytes=100,
+        document_type="receipt",
+        status="extraction_review_required",
+    )
+    db_session.add(document)
+    db_session.commit()
+
+    invalid_id_response = client.get("/api/v1/documents/not-a-uuid/content")
+    assert invalid_id_response.status_code == 400
+    assert invalid_id_response.json()["error"]["code"] == "invalid_document_id"
+
+    unknown_id_response = client.get(f"/api/v1/documents/{uuid.uuid4()}/content")
+    assert unknown_id_response.status_code == 404
+    assert unknown_id_response.json()["error"]["code"] == "document_not_found"
+
+    mismatch_response = client.get(f"/api/v1/documents/{document.id}/content")
+    assert mismatch_response.status_code == 415
+    assert mismatch_response.json()["error"]["code"] == "unsupported_source_media_type"
+    assert str(source_path) not in mismatch_response.text
+
+
+@pytest.mark.parametrize(
     (
         "bookkeeping_confidence",
         "bookkeeping_rationale",

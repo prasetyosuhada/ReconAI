@@ -4,6 +4,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Final
 
 from fastapi import (
     APIRouter,
@@ -17,7 +18,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from redis.exceptions import RedisError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -49,6 +50,14 @@ ALLOWED_MIME_TYPES = {
     "image/webp",
 }
 
+SOURCE_CONTENT_MIME_TYPES: Final = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+SOURCE_MIME_ALIASES: Final = {"image/jpg": "image/jpeg"}
+
 UPLOAD_STORAGE_DIR = Path("./storage/uploads")
 MAX_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 
@@ -57,6 +66,51 @@ def _get_upload_dir() -> Path:
     """Ensure upload storage directory exists."""
     UPLOAD_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     return UPLOAD_STORAGE_DIR
+
+
+def _source_error(status_code: int, code: str, message: str) -> JSONResponse:
+    """Return a stable source-content error without filesystem details."""
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, "message": message}},
+    )
+
+
+def _normalize_source_mime(mime_type: str) -> str | None:
+    """Return an allowlisted source MIME type, normalizing legacy JPEG metadata."""
+    normalized = SOURCE_MIME_ALIASES.get(mime_type.lower(), mime_type.lower())
+    return normalized if normalized in SOURCE_CONTENT_MIME_TYPES else None
+
+
+def _detect_source_mime(source_path: Path) -> str | None:
+    """Detect supported source MIME from a bounded file signature read."""
+    try:
+        with source_path.open("rb") as source_file:
+            signature = source_file.read(12)
+    except OSError:
+        return None
+
+    if signature.startswith(b"%PDF-"):
+        return "application/pdf"
+    if signature.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if signature.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if signature.startswith(b"RIFF") and signature[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _resolve_source_file(stored_file_path: str) -> Path | None:
+    """Resolve a regular file only when it remains inside the upload storage root."""
+    try:
+        storage_root = UPLOAD_STORAGE_DIR.resolve()
+        source_path = Path(stored_file_path).resolve(strict=True)
+        source_path.relative_to(storage_root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    return source_path if source_path.is_file() else None
 
 
 def observe_document_progress(document_id: uuid.UUID, last_event_id: str | None = None):
@@ -225,6 +279,78 @@ def list_documents(
         total=total_count,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get(
+    "/{document_id}/content",
+    summary="Serve an uploaded PDF or image for human review",
+    response_model=None,
+)
+def get_document_content(
+    document_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Serve a validated source file without exposing its storage location."""
+    try:
+        doc_uuid = uuid.UUID(document_id)
+    except ValueError:
+        return _source_error(
+            status.HTTP_400_BAD_REQUEST,
+            "invalid_document_id",
+            "Document ID must be a valid UUID.",
+        )
+
+    doc = db.query(Document).filter(Document.id == doc_uuid).first()
+    if doc is None:
+        return _source_error(
+            status.HTTP_404_NOT_FOUND,
+            "document_not_found",
+            "Document was not found.",
+        )
+
+    source_mime = _normalize_source_mime(doc.mime_type)
+    if source_mime is None:
+        return _source_error(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_source_media_type",
+            "Stored document media type is not supported for review.",
+        )
+
+    source_path = _resolve_source_file(doc.stored_file_path)
+    if source_path is None:
+        return _source_error(
+            status.HTTP_410_GONE,
+            "source_content_unavailable",
+            "Stored document content is unavailable.",
+        )
+
+    if _detect_source_mime(source_path) != source_mime:
+        return _source_error(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_source_media_type",
+            "Stored document media type is not supported for review.",
+        )
+
+    try:
+        source_stat = source_path.stat()
+    except OSError:
+        return _source_error(
+            status.HTTP_410_GONE,
+            "source_content_unavailable",
+            "Stored document content is unavailable.",
+        )
+
+    return FileResponse(
+        path=source_path,
+        media_type=source_mime,
+        filename=doc.original_filename,
+        stat_result=source_stat,
+        content_disposition_type="inline",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
