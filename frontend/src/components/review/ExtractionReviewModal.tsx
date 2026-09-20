@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   CircleDollarSign,
   ClipboardCheck,
-  ExternalLink,
   FileText,
   Info,
   Loader2,
@@ -21,6 +20,7 @@ import type {
   JournalLineEditPayload,
   ReviewItemResponse,
 } from '../../services/api'
+import { SourceDocumentViewer } from './SourceDocumentViewer'
 import {
   approveReviewItem,
   editReviewItem,
@@ -96,12 +96,11 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
     extractionPayload.document_filename ||
     item?.title?.replace(/^Review Needed:\s*/i, '') ||
     'Source document'
-  const sourcePath =
-    extractionPayload.document_url ||
-    extractionPayload.source_url ||
-    extractionPayload.file_url ||
-    extractionPayload.stored_file_path ||
-    ''
+  const sourceDocumentId =
+    latestExtraction?.document_id ||
+    originalPayload.document_id ||
+    originalPayload.source_document_id ||
+    (item?.source_type === 'document' ? item.source_id : null)
   const paymentStatus =
     originalPayload.payment_status ||
     originalPayload.payment_status_label ||
@@ -586,67 +585,10 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
           <div className="grid grid-cols-1 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(220px,0.9fr)_minmax(420px,1.55fr)_minmax(260px,0.95fr)]">
             {/* Left Column: Source Document */}
             <section className="min-h-[280px] xl:h-full xl:min-h-0 border-b xl:border-b-0 xl:border-r border-slate-800 bg-slate-950/40 p-4 sm:p-5">
-              <div className="h-full rounded-xl border border-slate-800 bg-slate-950/70 overflow-hidden flex flex-col">
-                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
-                      Source Document
-                    </p>
-                    <p className="text-xs font-semibold text-slate-200 truncate">
-                      {sourceFilename}
-                    </p>
-                  </div>
-                  <FileText className="w-4 h-4 text-indigo-300 shrink-0" />
-                </div>
-                <div className="flex-1 p-4 flex flex-col items-center justify-center text-center">
-                  <div className="w-full max-w-[210px] aspect-[3/4] rounded-lg bg-slate-100 text-slate-900 shadow-xl shadow-black/30 border border-slate-700 overflow-hidden flex flex-col">
-                    <div className="h-8 bg-slate-200 border-b border-slate-300 flex items-center px-3 gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-rose-400" />
-                      <span className="w-2 h-2 rounded-full bg-amber-400" />
-                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                    </div>
-                    <div className="flex-1 p-4 text-left space-y-3">
-                      <div className="h-3 w-2/3 bg-slate-800 rounded" />
-                      <div className="space-y-1.5">
-                        <div className="h-2 w-full bg-slate-300 rounded" />
-                        <div className="h-2 w-5/6 bg-slate-300 rounded" />
-                        <div className="h-2 w-4/6 bg-slate-300 rounded" />
-                      </div>
-                      <div className="mt-5 space-y-2">
-                        <div className="flex justify-between gap-3">
-                          <div className="h-2 w-20 bg-slate-300 rounded" />
-                          <div className="h-2 w-12 bg-slate-400 rounded" />
-                        </div>
-                        <div className="flex justify-between gap-3">
-                          <div className="h-2 w-16 bg-slate-300 rounded" />
-                          <div className="h-2 w-14 bg-slate-400 rounded" />
-                        </div>
-                      </div>
-                      <div className="pt-4 mt-4 border-t border-slate-300 flex justify-between">
-                        <div className="h-2.5 w-12 bg-slate-700 rounded" />
-                        <div className="h-2.5 w-16 bg-slate-700 rounded" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-slate-400 mt-4 max-w-[260px]">
-                    Original document preview is displayed as a reference while the reviewer
-                    verifies extracted fields.
-                  </p>
-
-                  {sourcePath && (
-                    <a
-                      href={sourcePath}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-indigo-300 transition-all"
-                    >
-                      Open Source
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  )}
-                </div>
-              </div>
+              <SourceDocumentViewer
+                documentId={sourceDocumentId ? String(sourceDocumentId) : null}
+                filename={sourceFilename}
+              />
             </section>
 
             {/* Middle Column: Extracted Information */}
