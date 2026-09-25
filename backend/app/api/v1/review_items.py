@@ -35,6 +35,10 @@ from app.services.bookkeeping_persistence import (
     load_active_chart_of_accounts,
     persist_bookkeeping_outcome,
 )
+from app.services.review_validation import (
+    allowlisted_correction,
+    validate_review_extraction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +92,54 @@ def _chart_of_accounts_payload(db: Session) -> list[dict[str, Any]]:
     return load_active_chart_of_accounts(db)
 
 
+def _validated_extraction_payload(
+    item: ReviewItem,
+    db: Session,
+    edited_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Read and validate the effective extraction before any review side effects."""
+    doc = db.query(Document).filter(Document.id == item.source_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Source document not found.")
+    payload = _merge_review_payload(item.original_payload)
+    payload["document_type"] = doc.document_type
+    extraction = (
+        db.query(DocumentExtraction)
+        .filter(DocumentExtraction.document_id == doc.id)
+        .order_by(DocumentExtraction.created_at.desc(), DocumentExtraction.id.desc())
+        .first()
+    )
+    if extraction:
+        for field in (
+            "vendor_name",
+            "subtotal_amount",
+            "tax_amount",
+            "total_amount",
+            "currency",
+            "line_items",
+            "raw_text",
+            "confidence_score",
+            "rationale",
+        ):
+            payload[field] = getattr(extraction, field)
+        payload["transaction_date"] = (
+            extraction.transaction_date.isoformat()
+            if extraction.transaction_date
+            else None
+        )
+        # Legacy persisted items may wrap the list in an items/line_items object.
+        if isinstance(payload["line_items"], dict):
+            wrapped = payload["line_items"]
+            if "items" in wrapped:
+                payload["line_items"] = wrapped["items"]
+            elif "line_items" in wrapped:
+                payload["line_items"] = wrapped["line_items"]
+        if payload["line_items"] is None:
+            payload["line_items"] = []
+    payload.update(allowlisted_correction(edited_payload or {}))
+    return validate_review_extraction(payload)
+
+
 def _upsert_reviewed_extraction(
     doc: Document,
     payload: dict[str, Any],
@@ -97,12 +149,15 @@ def _upsert_reviewed_extraction(
     extraction = (
         db.query(DocumentExtraction)
         .filter(DocumentExtraction.document_id == doc.id)
-        .order_by(DocumentExtraction.created_at.desc())
+        .order_by(DocumentExtraction.created_at.desc(), DocumentExtraction.id.desc())
         .first()
     )
 
     if not extraction:
         extraction = DocumentExtraction(id=uuid.uuid4(), document_id=doc.id)
+        extraction.raw_text = payload.get("raw_text")
+        extraction.confidence_score = payload.get("confidence_score", 0.0)
+        extraction.rationale = payload.get("rationale")
         db.add(extraction)
 
     if payload.get("document_type"):
@@ -115,9 +170,6 @@ def _upsert_reviewed_extraction(
     extraction.total_amount = payload.get("total_amount")
     extraction.currency = payload.get("currency", "IDR")
     extraction.line_items = payload.get("line_items", [])
-    extraction.raw_text = payload.get("raw_text")
-    extraction.confidence_score = payload.get("confidence_score", 1.0)
-    extraction.rationale = resolution_note or payload.get("rationale")
     extraction.status = "extracted"
     db.flush()
     return extraction
@@ -396,6 +448,10 @@ def approve_review_item(
             detail=f"Review item [{review_item_id}] is already {item.status}.",
         )
 
+    extraction_payload = None
+    if item.source_type == "document" and item.review_type == "extraction":
+        extraction_payload = _validated_extraction_payload(item, db)
+
     now_utc = datetime.now(UTC)
     resolution_note = req.resolution_note if req else None
 
@@ -448,10 +504,9 @@ def approve_review_item(
     # Advance workflow based on source entity
     if item.source_type == "document":
         if item.review_type == "extraction":
-            payload = _merge_review_payload(item.original_payload)
             next_workflow_status = _continue_document_to_bookkeeping(
                 item=item,
-                payload=payload,
+                payload=extraction_payload,
                 resolution_note=resolution_note,
                 db=db,
             )
@@ -594,9 +649,15 @@ def edit_review_item(
             detail=f"Review item [{review_item_id}] is already {item.status}.",
         )
 
+    extraction_payload = None
+    edited_payload = req.edited_payload
+    if item.source_type == "document" and item.review_type == "extraction":
+        edited_payload = allowlisted_correction(req.edited_payload)
+        extraction_payload = _validated_extraction_payload(item, db, edited_payload)
+
     now_utc = datetime.now(UTC)
     item.status = "edited"
-    item.edited_payload = req.edited_payload
+    item.edited_payload = edited_payload
     item.resolution_note = req.resolution_note
     item.resolved_by = "human_user"
     item.resolved_at = now_utc
@@ -622,7 +683,7 @@ def edit_review_item(
         actor_name="human_user",
         human_action="edited",
         input_snapshot={
-            "edited_payload": req.edited_payload,
+            "edited_payload": edited_payload,
             "resolution_note": req.resolution_note,
             "review_type": item.review_type,
         },
@@ -637,10 +698,9 @@ def edit_review_item(
     next_workflow_status = "edited"
 
     if item.source_type == "document" and item.review_type == "extraction":
-        payload = _merge_review_payload(item.original_payload, req.edited_payload)
         next_workflow_status = _continue_document_to_bookkeeping(
             item=item,
-            payload=payload,
+            payload=extraction_payload,
             resolution_note=req.resolution_note,
             db=db,
         )
@@ -656,13 +716,13 @@ def edit_review_item(
             .first()
         )
 
-    if je and "lines" in req.edited_payload:
+    if je and "lines" in edited_payload:
         # Clear existing lines and replace with edited lines
         db.query(JournalEntryLine).filter(
             JournalEntryLine.journal_entry_id == je.id
         ).delete()
 
-        new_lines = req.edited_payload.get("lines", [])
+        new_lines = edited_payload.get("lines", [])
         for line_idx, line in enumerate(new_lines, start=1):
             ac_code = str(line.get("account_code", ""))
             ac_name = str(line.get("account_name", "Unassigned Account"))

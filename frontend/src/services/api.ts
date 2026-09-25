@@ -397,6 +397,43 @@ export function notifyReviewQueueUpdated() {
   }
 }
 
+export interface ReviewFieldError {
+  field: string
+  code: string
+  message: string
+}
+
+export class ReviewValidationError extends Error {
+  readonly details: ReviewFieldError[]
+
+  constructor(message: string, details: ReviewFieldError[]) {
+    super(message)
+    this.name = 'ReviewValidationError'
+    this.details = details
+  }
+}
+
+async function reviewActionError(response: Response, fallback: string): Promise<Error> {
+  const body = await response.json().catch(() => ({}))
+  if (body.error?.code === 'extraction_validation_failed') {
+    const details = Array.isArray(body.error.details)
+      ? body.error.details.filter(
+          (detail: unknown): detail is ReviewFieldError =>
+            typeof detail === 'object' &&
+            detail !== null &&
+            'field' in detail &&
+            typeof detail.field === 'string' &&
+            'code' in detail &&
+            typeof detail.code === 'string' &&
+            'message' in detail &&
+            typeof detail.message === 'string'
+        )
+      : []
+    return new ReviewValidationError(body.error.message || fallback, details)
+  }
+  return new Error(typeof body.detail === 'string' ? body.detail : fallback)
+}
+
 export async function approveReviewItem(
   reviewItemId: string,
   notes?: string
@@ -408,8 +445,7 @@ export async function approveReviewItem(
   })
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.detail || 'Failed to approve review item')
+    throw await reviewActionError(response, 'Failed to approve review item')
   }
 
   const result = await response.json()
@@ -432,8 +468,7 @@ export async function editReviewItem(
   })
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.detail || 'Failed to edit review item')
+    throw await reviewActionError(response, 'Failed to edit review item')
   }
 
   const result = await response.json()

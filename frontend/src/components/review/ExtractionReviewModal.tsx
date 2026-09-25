@@ -18,10 +18,12 @@ import type {
   DocumentExtractionResponse,
   JournalLineEditPayload,
   ReviewItemResponse,
+  ReviewFieldError,
 } from '../../services/api'
 import { ExtractionReviewContext } from './ExtractionReviewContext'
 import { SourceDocumentViewer } from './SourceDocumentViewer'
 import {
+  ReviewValidationError,
   approveReviewItem,
   editReviewItem,
   fetchChartOfAccounts,
@@ -39,7 +41,6 @@ interface ExtractionDraftPayload {
   document_type: string
   transaction_date: string
   vendor_name: string
-  payment_status: string
   currency: string
   subtotal_amount: string
   tax_amount: string
@@ -155,7 +156,6 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
     document_type: 'invoice',
     transaction_date: '',
     vendor_name: '',
-    payment_status: 'unknown',
     currency: 'IDR',
     subtotal_amount: '',
     tax_amount: '',
@@ -165,6 +165,35 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
 
   const [submitting, setSubmitting] = useState<boolean>(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<ReviewFieldError[]>([])
+
+  useEffect(() => {
+    setFieldErrors([])
+    setErrorMsg(null)
+  }, [item?.id])
+
+  const errorsFor = (field: string) =>
+    fieldErrors.filter((error) => error.field === field || error.field.startsWith(`${field}.`))
+  const errorId = (field: string) => `extraction-error-${field.replaceAll('.', '-')}`
+  const fieldErrorProps = (field: string) => ({
+    'aria-invalid': errorsFor(field).length > 0,
+    'aria-describedby': errorsFor(field).length > 0 ? errorId(field) : undefined,
+  })
+  const renderFieldErrors = (field: string) => {
+    const errors = errorsFor(field)
+    return errors.length > 0 ? (
+      <div id={errorId(field)} className="w-full text-xs text-rose-300 mt-1">
+        {errors.map((error) => (
+          <p key={`${error.field}-${error.code}`}>{error.message}</p>
+        ))}
+      </div>
+    ) : null
+  }
+  const handleReviewError = (error: unknown, fallback: string) => {
+    setErrorMsg(error instanceof Error ? error.message : fallback)
+    setFieldErrors(error instanceof ReviewValidationError ? error.details : [])
+    if (error instanceof ReviewValidationError) setIsEditing(true)
+  }
 
   useEffect(() => {
     let ignore = false
@@ -251,11 +280,6 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
         extractionPayload.vendor_name ||
         extractionPayload.merchant_name ||
         '',
-      payment_status:
-        item.edited_payload?.payment_status ||
-        extractionPayload.payment_status ||
-        originalPayload.payment_status ||
-        'unknown',
       currency: item.edited_payload?.currency || extractedCurrency || 'IDR',
       subtotal_amount: String(item.edited_payload?.subtotal_amount ?? extractedSubtotal ?? ''),
       tax_amount: String(item.edited_payload?.tax_amount ?? extractedTax ?? ''),
@@ -420,7 +444,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
       onResolved()
       onClose()
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to approve item')
+      handleReviewError(err, 'Failed to approve item')
     } finally {
       setSubmitting(false)
     }
@@ -433,13 +457,16 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
         document_type: extractionDraft.document_type,
         vendor_name: extractionDraft.vendor_name || null,
         transaction_date: extractionDraft.transaction_date || null,
-        invoice_date: extractionDraft.transaction_date || null,
         subtotal_amount: toNumberOrNull(extractionDraft.subtotal_amount),
         tax_amount: toNumberOrNull(extractionDraft.tax_amount),
         total_amount: toNumberOrNull(extractionDraft.total_amount),
-        currency: extractionDraft.currency || 'IDR',
-        payment_status: extractionDraft.payment_status || 'unknown',
-        line_items: extractionDraft.line_items,
+        currency: extractionDraft.currency,
+        line_items: extractionDraft.line_items.map((line) => ({
+          description: line.description ?? line.name ?? line.item ?? '',
+          quantity: line.quantity ?? null,
+          unit_price: line.unit_price ?? null,
+          amount: line.amount ?? null,
+        })),
       }
 
       setSubmitting(true)
@@ -453,7 +480,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
         onResolved()
         onClose()
       } catch (err: unknown) {
-        setErrorMsg(err instanceof Error ? err.message : 'Failed to save extracted fields')
+        handleReviewError(err, 'Failed to save extracted fields')
       } finally {
         setSubmitting(false)
       }
@@ -627,6 +654,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   </span>
                   {isEditing && isExtractionReview ? (
                     <select
+                      {...fieldErrorProps('document_type')}
                       value={extractionDraft.document_type}
                       onChange={(e) => handleExtractionFieldChange('document_type', e.target.value)}
                       className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm font-semibold text-slate-100 focus:outline-none focus:border-indigo-500"
@@ -640,6 +668,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                       {labelize(String(documentType))}
                     </p>
                   )}
+                  {renderFieldErrors('document_type')}
                 </div>
                 <div className="space-y-1">
                   <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
@@ -648,6 +677,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   {isEditing && isExtractionReview ? (
                     <input
                       type="date"
+                      {...fieldErrorProps('transaction_date')}
                       value={extractionDraft.transaction_date}
                       onChange={(e) =>
                         handleExtractionFieldChange('transaction_date', e.target.value)
@@ -657,6 +687,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   ) : (
                     <p className="text-sm font-semibold text-slate-100">{extractedDate || 'N/A'}</p>
                   )}
+                  {renderFieldErrors('transaction_date')}
                 </div>
                 <div className="space-y-1 sm:col-span-2">
                   <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
@@ -665,6 +696,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   {isEditing && isExtractionReview ? (
                     <input
                       type="text"
+                      {...fieldErrorProps('vendor_name')}
                       value={extractionDraft.vendor_name}
                       onChange={(e) => handleExtractionFieldChange('vendor_name', e.target.value)}
                       placeholder="Vendor name"
@@ -673,37 +705,24 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   ) : (
                     <p className="text-base font-bold text-white">{extractedVendor}</p>
                   )}
+                  {renderFieldErrors('vendor_name')}
                 </div>
                 <div>
                   <span className="block text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
                     Payment Status
                   </span>
-                  {isEditing && isExtractionReview ? (
-                    <select
-                      value={extractionDraft.payment_status}
-                      onChange={(e) =>
-                        handleExtractionFieldChange('payment_status', e.target.value)
-                      }
-                      className="mt-1 w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm font-bold text-slate-100 focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="unknown">Unknown</option>
-                      <option value="paid">Paid</option>
-                      <option value="unpaid">Unpaid</option>
-                    </select>
-                  ) : (
-                    <p
-                      className={`mt-1.5 flex items-center gap-2 text-sm font-bold capitalize ${
-                        paymentOk ? 'text-emerald-300' : 'text-amber-300'
+                  <p
+                    className={`mt-1.5 flex items-center gap-2 text-sm font-bold capitalize ${
+                      paymentOk ? 'text-emerald-300' : 'text-amber-300'
+                    }`}
+                  >
+                    <span
+                      className={`w-3 h-3 rounded-full ${
+                        paymentOk ? 'bg-emerald-400' : 'bg-amber-400'
                       }`}
-                    >
-                      <span
-                        className={`w-3 h-3 rounded-full ${
-                          paymentOk ? 'bg-emerald-400' : 'bg-amber-400'
-                        }`}
-                      />
-                      {labelize(String(paymentStatus))}
-                    </p>
-                  )}
+                    />
+                    {labelize(String(paymentStatus))}
+                  </p>
                 </div>
                 <div className="space-y-1">
                   <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
@@ -712,6 +731,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   {isEditing && isExtractionReview ? (
                     <input
                       type="text"
+                      {...fieldErrorProps('currency')}
                       value={extractionDraft.currency}
                       onChange={(e) =>
                         handleExtractionFieldChange('currency', e.target.value.toUpperCase())
@@ -721,6 +741,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   ) : (
                     <p className="text-sm font-semibold text-slate-100">{extractedCurrency}</p>
                   )}
+                  {renderFieldErrors('currency')}
                 </div>
               </div>
 
@@ -740,7 +761,12 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
                   {isEditing && isExtractionReview ? (
-                    <div className="divide-y divide-slate-800/80 xl:max-h-[min(32vh,22rem)] xl:overflow-y-auto xl:overscroll-contain [scrollbar-gutter:stable]">
+                    <div
+                      role="group"
+                      aria-label="Line items"
+                      {...fieldErrorProps('line_items')}
+                      className="divide-y divide-slate-800/80 xl:max-h-[min(32vh,22rem)] xl:overflow-y-auto xl:overscroll-contain [scrollbar-gutter:stable]"
+                    >
                       <div className="hidden sm:grid xl:sticky xl:top-0 xl:z-10 grid-cols-[minmax(0,1.5fr)_70px_110px_110px_36px] gap-2 px-4 py-2 bg-slate-950 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
                         <span>Description</span>
                         <span>Qty</span>
@@ -755,6 +781,10 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                         >
                           <input
                             type="text"
+                            aria-describedby={
+                              errorsFor('line_items').length > 0 ? errorId('line_items') : undefined
+                            }
+                            aria-invalid={errorsFor(`line_items.${index}.description`).length > 0}
                             value={line.description || line.name || line.item || ''}
                             onChange={(e) =>
                               handleExtractionLineChange(index, 'description', e.target.value)
@@ -765,6 +795,10 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                           <input
                             type="number"
                             step="any"
+                            aria-describedby={
+                              errorsFor('line_items').length > 0 ? errorId('line_items') : undefined
+                            }
+                            aria-invalid={errorsFor(`line_items.${index}.quantity`).length > 0}
                             value={line.quantity ?? ''}
                             onChange={(e) =>
                               handleExtractionLineChange(index, 'quantity', e.target.value)
@@ -775,6 +809,10 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                           <input
                             type="number"
                             step="any"
+                            aria-describedby={
+                              errorsFor('line_items').length > 0 ? errorId('line_items') : undefined
+                            }
+                            aria-invalid={errorsFor(`line_items.${index}.unit_price`).length > 0}
                             value={line.unit_price ?? ''}
                             onChange={(e) =>
                               handleExtractionLineChange(index, 'unit_price', e.target.value)
@@ -847,13 +885,16 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                 </div>
               </div>
 
+              {renderFieldErrors('line_items')}
+
               <div className="mt-6 ml-auto w-full sm:max-w-sm space-y-2 text-sm">
-                <div className="flex items-center justify-between text-slate-400">
+                <div className="flex flex-wrap items-center justify-between text-slate-400">
                   <span>Subtotal</span>
                   {isEditing && isExtractionReview ? (
                     <input
                       type="number"
                       step="any"
+                      {...fieldErrorProps('subtotal_amount')}
                       value={extractionDraft.subtotal_amount}
                       onChange={(e) =>
                         handleExtractionFieldChange('subtotal_amount', e.target.value)
@@ -865,13 +906,15 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                       {formatMoney(extractedSubtotal)}
                     </span>
                   )}
+                  {renderFieldErrors('subtotal_amount')}
                 </div>
-                <div className="flex items-center justify-between text-slate-400">
+                <div className="flex flex-wrap items-center justify-between text-slate-400">
                   <span>Tax</span>
                   {isEditing && isExtractionReview ? (
                     <input
                       type="number"
                       step="any"
+                      {...fieldErrorProps('tax_amount')}
                       value={extractionDraft.tax_amount}
                       onChange={(e) => handleExtractionFieldChange('tax_amount', e.target.value)}
                       className="w-40 px-3 py-1.5 bg-slate-950 border border-slate-700 rounded-lg text-right font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
@@ -879,8 +922,9 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   ) : (
                     <span className="font-mono text-slate-200">{formatMoney(extractedTax)}</span>
                   )}
+                  {renderFieldErrors('tax_amount')}
                 </div>
-                <div className="border-t border-slate-700 pt-3 flex items-center justify-between">
+                <div className="border-t border-slate-700 pt-3 flex flex-wrap items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-white uppercase tracking-wide">Total</span>
                     {isEditing && isExtractionReview && (
@@ -894,6 +938,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                       type="number"
                       readOnly
                       disabled
+                      {...fieldErrorProps('total_amount')}
                       value={extractionDraft.total_amount}
                       className="w-40 px-3 py-1.5 bg-slate-950 border border-emerald-500/40 rounded-lg text-right font-mono text-lg font-bold text-emerald-300 cursor-not-allowed"
                       title="Calculated automatically: Subtotal + Tax"
@@ -903,6 +948,7 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                       {formatMoney(extractedTotal)}
                     </span>
                   )}
+                  {renderFieldErrors('total_amount')}
                 </div>
               </div>
 
@@ -1190,9 +1236,23 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
 
         {/* Error Banner inside Modal */}
         {errorMsg && (
-          <div className="px-6 py-2.5 bg-rose-500/10 border-t border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
+          <div
+            role="alert"
+            className="px-6 py-2.5 bg-rose-500/10 border-t border-rose-500/20 text-rose-300 text-xs flex items-center gap-2"
+          >
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>{errorMsg}</span>
+            <div>
+              <p>{errorMsg}</p>
+              {fieldErrors.length > 0 && (
+                <ul className="mt-1 max-h-24 overflow-y-auto list-disc pl-4">
+                  {fieldErrors.map((error) => (
+                    <li key={`${error.field}-${error.code}`}>
+                      {labelize(error.field)}: {error.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         )}
 

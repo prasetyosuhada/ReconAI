@@ -1,8 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_v1_router
 from app.core.config import settings
+from app.services.review_validation import ExtractionCorrectionError
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -42,3 +44,23 @@ def health_check():
         "openai_configured": bool(settings.OPENAI_API_KEY),
         "gemini_configured": bool(settings.GEMINI_API_KEY),
     }
+
+
+@app.exception_handler(ExtractionCorrectionError)
+async def extraction_correction_error(
+    request: Request, exc: ExtractionCorrectionError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "code": "extraction_validation_failed",
+                "message": str(exc),
+                "details": [
+                    error.model_dump() for error in exc.validation.field_errors
+                ],
+                "warnings": exc.validation.warnings,
+                "risk_flags": exc.validation.risk_flags,
+            }
+        },
+    )

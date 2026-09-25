@@ -3,6 +3,7 @@
 import math
 import re
 from datetime import date
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
@@ -29,10 +30,19 @@ class DocumentContentValidation(BaseModel):
     confidence_cap: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class ExtractionFieldError(BaseModel):
+    """Stable field-level diagnostic shared by intake and human correction."""
+
+    field: str
+    code: str
+    message: str
+
+
 class ExtractionResultValidation(BaseModel):
     """Deterministic validation outcome for LLM-extracted accounting fields."""
 
     is_valid: bool
+    field_errors: list[ExtractionFieldError] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     low_confidence_fields: list[str] = Field(default_factory=list)
     risk_flags: list[str] = Field(default_factory=list)
@@ -118,6 +128,7 @@ def validate_extraction_result(
     low_confidence_fields: list[str] = []
     risk_flags: list[str] = []
     confidence_caps: list[float] = []
+    field_errors: list[ExtractionFieldError] = []
 
     if result.document_type == "unknown":
         _record_issue(
@@ -125,6 +136,7 @@ def validate_extraction_result(
             low_confidence_fields,
             risk_flags,
             confidence_caps,
+            field_errors,
             warning="Document type could not be determined.",
             field="document_type",
             risk_flag="unknown_document_type",
@@ -137,6 +149,7 @@ def validate_extraction_result(
             low_confidence_fields,
             risk_flags,
             confidence_caps,
+            field_errors,
             warning="Vendor name is missing.",
             field="vendor_name",
             risk_flag="missing_vendor_name",
@@ -149,6 +162,7 @@ def validate_extraction_result(
             low_confidence_fields,
             risk_flags,
             confidence_caps,
+            field_errors,
             warning="Transaction date is missing.",
             field="transaction_date",
             risk_flag="missing_transaction_date",
@@ -165,6 +179,7 @@ def validate_extraction_result(
                 low_confidence_fields,
                 risk_flags,
                 confidence_caps,
+                field_errors,
                 warning="Transaction date must use a valid YYYY-MM-DD date.",
                 field="transaction_date",
                 risk_flag="invalid_transaction_date",
@@ -177,6 +192,7 @@ def validate_extraction_result(
             low_confidence_fields,
             risk_flags,
             confidence_caps,
+            field_errors,
             warning="Currency must be a three-letter uppercase ISO code.",
             field="currency",
             risk_flag="invalid_currency",
@@ -195,6 +211,7 @@ def validate_extraction_result(
                 low_confidence_fields,
                 risk_flags,
                 confidence_caps,
+                field_errors,
                 warning=f"{field} must be a finite, non-negative amount.",
                 field=field,
                 risk_flag=f"invalid_{field}",
@@ -207,6 +224,7 @@ def validate_extraction_result(
             low_confidence_fields,
             risk_flags,
             confidence_caps,
+            field_errors,
             warning="Total amount is missing.",
             field="total_amount",
             risk_flag="missing_total_amount",
@@ -218,6 +236,7 @@ def validate_extraction_result(
             low_confidence_fields,
             risk_flags,
             confidence_caps,
+            field_errors,
             warning="Total amount must be greater than zero.",
             field="total_amount",
             risk_flag="invalid_total_amount",
@@ -234,14 +253,17 @@ def validate_extraction_result(
         and result.tax_amount is not None
         and result.total_amount is not None
     ):
-        expected_total = round(result.subtotal_amount + result.tax_amount, 2)
-        actual_total = round(result.total_amount, 2)
-        if abs(expected_total - actual_total) > AMOUNT_TOLERANCE:
+        expected_total = Decimal(str(result.subtotal_amount)) + Decimal(
+            str(result.tax_amount)
+        )
+        actual_total = Decimal(str(result.total_amount))
+        if abs(expected_total - actual_total) > Decimal(str(AMOUNT_TOLERANCE)):
             _record_issue(
                 warnings,
                 low_confidence_fields,
                 risk_flags,
                 confidence_caps,
+                field_errors,
                 warning=(
                     f"Subtotal ({result.subtotal_amount}) + Tax "
                     f"({result.tax_amount}) = {expected_total}, "
@@ -266,6 +288,7 @@ def validate_extraction_result(
                 low_confidence_fields,
                 risk_flags,
                 confidence_caps,
+                field_errors,
                 warning="Line item numeric values must be finite and non-negative.",
                 field="line_items",
                 risk_flag="invalid_line_item_amount",
@@ -281,16 +304,22 @@ def validate_extraction_result(
             amount is not None and math.isfinite(amount) for amount in line_item_amounts
         )
     ):
-        line_item_total = round(
-            sum(amount for amount in line_item_amounts if amount is not None), 2
+        line_item_total = sum(
+            (
+                Decimal(str(amount))
+                for amount in line_item_amounts
+                if amount is not None
+            ),
+            Decimal(0),
         )
-        subtotal = round(result.subtotal_amount, 2)
-        if abs(line_item_total - subtotal) > AMOUNT_TOLERANCE:
+        subtotal = Decimal(str(result.subtotal_amount))
+        if abs(line_item_total - subtotal) > Decimal(str(AMOUNT_TOLERANCE)):
             _record_issue(
                 warnings,
                 low_confidence_fields,
                 risk_flags,
                 confidence_caps,
+                field_errors,
                 warning=(
                     f"Line item total ({line_item_total}) does not match "
                     f"Subtotal ({result.subtotal_amount})."
@@ -302,6 +331,7 @@ def validate_extraction_result(
 
     return ExtractionResultValidation(
         is_valid=not risk_flags,
+        field_errors=field_errors,
         warnings=warnings,
         low_confidence_fields=low_confidence_fields,
         risk_flags=risk_flags,
@@ -324,12 +354,16 @@ def _record_issue(
     low_confidence_fields: list[str],
     risk_flags: list[str],
     confidence_caps: list[float],
+    field_errors: list[ExtractionFieldError],
     *,
     warning: str,
     field: str,
     risk_flag: str,
     confidence_cap: float,
 ) -> None:
+    error = ExtractionFieldError(field=field, code=risk_flag, message=warning)
+    if error not in field_errors:
+        field_errors.append(error)
     _append_unique(warnings, warning)
     _append_unique(low_confidence_fields, field)
     _append_unique(risk_flags, risk_flag)
