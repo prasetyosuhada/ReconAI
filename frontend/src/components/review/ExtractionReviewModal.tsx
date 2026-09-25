@@ -9,7 +9,6 @@ import {
   Info,
   Loader2,
   Plus,
-  ShieldAlert,
   Sparkles,
   Trash2,
   X,
@@ -20,6 +19,7 @@ import type {
   JournalLineEditPayload,
   ReviewItemResponse,
 } from '../../services/api'
+import { ExtractionReviewContext } from './ExtractionReviewContext'
 import { SourceDocumentViewer } from './SourceDocumentViewer'
 import {
   approveReviewItem,
@@ -107,7 +107,8 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
   const paymentStatus =
     originalPayload.payment_status ||
     originalPayload.payment_status_label ||
-    (Number(extractedTotal) > 0 ? 'paid' : 'unknown')
+    extractionPayload.payment_status ||
+    'unknown'
   const lineItems = useMemo(() => {
     const rawLineItems = extractionPayload.line_items || extractionPayload.items
     return Array.isArray(rawLineItems)
@@ -118,10 +119,6 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
           ? rawLineItems.line_items
           : []
   }, [extractionPayload.items, extractionPayload.line_items])
-  const warnings =
-    (Array.isArray(extractionPayload.warnings) && extractionPayload.warnings) ||
-    (Array.isArray(item?.risk_flags) && item?.risk_flags) ||
-    []
   const isExtractionReview = item?.review_type === 'extraction'
 
   // Editable Journal Entry States
@@ -517,8 +514,13 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
       ? Math.abs(Number(extractedSubtotal) + Number(extractedTax || 0) - Number(extractedTotal)) <
         0.05
       : isBalanced
-  const taxOk = Number(extractedTax || 0) >= 0
+  const taxIsRecorded =
+    extractionPayload.tax_amount !== undefined &&
+    extractionPayload.tax_amount !== null &&
+    extractionPayload.tax_amount !== ''
+  const taxOk = taxIsRecorded && Number(extractionPayload.tax_amount) >= 0
   const paymentOk = String(paymentStatus).toLowerCase() === 'paid'
+  const paymentIsKnown = ['paid', 'unpaid'].includes(String(paymentStatus).toLowerCase())
   const statusText = item.status === 'pending' ? 'Needs Review' : item.status.replace('_', ' ')
   const statusTone =
     item.status === 'pending'
@@ -1089,6 +1091,14 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                   </p>
                 </div>
 
+                {isExtractionReview && (
+                  <ExtractionReviewContext
+                    metadata={latestExtraction?.provider_metadata ?? null}
+                    fallbackRiskFlags={Array.isArray(item?.risk_flags) ? item.risk_flags : []}
+                    loading={extractionLoading}
+                  />
+                )}
+
                 <div className="space-y-2">
                   <div className="flex items-end justify-between gap-3">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -1135,7 +1145,11 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                     <div>
                       <p className="font-semibold text-slate-100">Tax Check</p>
                       <p className="text-xs text-slate-500">
-                        {taxOk ? 'Tax amount is readable.' : 'Tax field needs review.'}
+                        {taxOk
+                          ? 'Tax amount is recorded.'
+                          : taxIsRecorded
+                            ? 'Tax field needs review.'
+                            : 'Tax amount is not recorded.'}
                       </p>
                     </div>
                   </div>
@@ -1148,39 +1162,13 @@ export const ExtractionReviewModal: React.FC<ExtractionReviewModalProps> = ({
                     <div>
                       <p className="font-semibold text-slate-100">Payment Status</p>
                       <p className="text-xs text-slate-500">
-                        {paymentOk
-                          ? 'Marked as paid from extracted data.'
-                          : 'Payment status is uncertain.'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3 text-sm">
-                    <ShieldAlert
-                      className={`w-4 h-4 mt-0.5 shrink-0 ${
-                        warnings.length > 0 ? 'text-amber-400' : 'text-emerald-400'
-                      }`}
-                    />
-                    <div>
-                      <p className="font-semibold text-slate-100">Guardrail Flags</p>
-                      <p className="text-xs text-slate-500">
-                        {warnings.length > 0
-                          ? `${warnings.length} item needs attention.`
-                          : 'No guardrail flags detected.'}
+                        {paymentIsKnown
+                          ? `Marked as ${labelize(String(paymentStatus))} from extracted data.`
+                          : 'Payment status is not recorded.'}
                       </p>
                     </div>
                   </div>
                 </div>
-
-                {warnings.length > 0 && (
-                  <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3 space-y-2">
-                    {warnings.map((flag: string) => (
-                      <div key={flag} className="flex items-start gap-2 text-xs text-amber-200">
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 shrink-0" />
-                        <span>{labelize(String(flag))}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
 
                 {extractedRationale && (
                   <div className="text-xs text-indigo-300 bg-indigo-500/10 p-3 rounded-xl border border-indigo-500/20 flex items-start gap-2">
