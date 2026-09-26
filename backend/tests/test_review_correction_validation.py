@@ -143,7 +143,7 @@ def test_invalid_decision_returns_field_errors_without_side_effects(
         if "document_type" in correction:
             doc.document_type = correction["document_type"]
         db_session.commit()
-    with patch("app.api.v1.review_items.classify_bookkeeping") as classify:
+    with patch("app.services.review_continuation.classify_bookkeeping") as classify:
         response = client.post(
             f"/api/v1/review-items/{item.id}/{action}",
             json={"edited_payload": correction} if action == "edit" else {},
@@ -180,7 +180,7 @@ def test_invalid_persisted_extraction_is_rechecked_before_mutation(
     doc, extraction, item = extraction_review
     extraction.vendor_name = None
     db_session.commit()
-    with patch("app.api.v1.review_items.classify_bookkeeping") as classify:
+    with patch("app.services.review_continuation.classify_bookkeeping") as classify:
         with pytest.raises(ExtractionCorrectionError):
             if action == "approve":
                 approve_review_item(str(item.id), db=db_session)
@@ -216,7 +216,7 @@ def bookkeeping(db_session):
         ]
     )
     db_session.commit()
-    with patch("app.api.v1.review_items.classify_bookkeeping") as classify:
+    with patch("app.services.review_continuation.classify_bookkeeping") as classify:
         classify.return_value = BookkeepingOutcome(
             entry_date="2026-09-01",
             entry_description="Purchase",
@@ -320,7 +320,7 @@ def test_latest_extraction_wins_over_older_valid_data(
     )
     db_session.add(latest)
     db_session.commit()
-    with patch("app.api.v1.review_items.classify_bookkeeping") as classify:
+    with patch("app.services.review_continuation.classify_bookkeeping") as classify:
         response = client.post(f"/api/v1/review-items/{item.id}/approve")
     assert response.status_code == 422
     assert "missing_vendor_name" in response.json()["error"]["risk_flags"]

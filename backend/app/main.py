@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_v1_router
 from app.core.config import settings
+from app.services.review_continuation import ReviewContinuationError
 from app.services.review_validation import ExtractionCorrectionError
 
 app = FastAPI(
@@ -64,3 +65,15 @@ async def extraction_correction_error(
             }
         },
     )
+
+
+@app.exception_handler(ReviewContinuationError)
+async def review_continuation_error(
+    request: Request, exc: ReviewContinuationError
+) -> JSONResponse:
+    error = {"code": exc.code, "message": str(exc)}
+    if exc.review_status is not None:
+        error["review_status"] = exc.review_status
+    if exc.next_workflow_status is not None:
+        error["next_workflow_status"] = exc.next_workflow_status
+    return JSONResponse(status_code=exc.status_code, content={"error": error})

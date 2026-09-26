@@ -202,7 +202,7 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
         needs_review=True,
     )
     with patch(
-        "app.api.v1.review_items.classify_bookkeeping",
+        "app.services.review_continuation.classify_bookkeeping",
         return_value=bookkeeping_outcome,
     ):
         edit_res = client.post(

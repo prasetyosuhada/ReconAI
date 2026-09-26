@@ -431,6 +431,7 @@ async function reviewActionError(response: Response, fallback: string): Promise<
       : []
     return new ReviewValidationError(body.error.message || fallback, details)
   }
+  if (typeof body.error?.message === 'string') return new Error(body.error.message)
   return new Error(typeof body.detail === 'string' ? body.detail : fallback)
 }
 
@@ -487,8 +488,7 @@ export async function rejectReviewItem(
   })
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.detail || 'Failed to reject review item')
+    throw await reviewActionError(response, 'Failed to reject review item')
   }
 
   const result = await response.json()

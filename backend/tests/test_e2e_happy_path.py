@@ -184,7 +184,7 @@ def test_e2e_happy_path_workflow(client, db_session):
         needs_review=False,
     )
     with patch(
-        "app.api.v1.review_items.classify_bookkeeping",
+        "app.services.review_continuation.classify_bookkeeping",
         return_value=bookkeeping_outcome,
     ):
         approve_res = client.post(

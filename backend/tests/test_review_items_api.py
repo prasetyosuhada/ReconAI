@@ -6,12 +6,15 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.agents.schemas import BookkeepingOutcome
-from app.api.v1.review_items import _continue_document_to_bookkeeping
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry, JournalEntryLine
 from app.models.review import ReviewItem
+from app.services.review_continuation import (
+    ReviewContinuationError,
+    resolve_extraction_review,
+)
 
 
 def test_list_review_items_empty(client):
@@ -352,10 +355,10 @@ def test_edit_review_item_success(client, db_session):
 
 
 @patch(
-    "app.api.v1.review_items.perf_counter",
+    "app.services.review_continuation.perf_counter",
     side_effect=[500.0, 500.42],
 )
-@patch("app.api.v1.review_items.classify_bookkeeping")
+@patch("app.services.review_continuation.classify_bookkeeping")
 def test_edit_extraction_review_continues_to_bookkeeping(
     mock_classify_bookkeeping, mock_perf_counter, client, db_session
 ):
@@ -489,7 +492,7 @@ def test_edit_extraction_review_continues_to_bookkeeping(
     assert mock_perf_counter.call_count == 2
 
 
-@patch("app.api.v1.review_items.classify_bookkeeping")
+@patch("app.services.review_continuation.classify_bookkeeping")
 def test_extraction_review_continuation_retry_is_idempotent(
     mock_classify_bookkeeping, db_session
 ):
@@ -570,15 +573,21 @@ def test_extraction_review_continuation_retry_is_idempotent(
         "line_items": [],
     }
 
-    for _ in range(2):
-        next_status = _continue_document_to_bookkeeping(
-            item=extraction_review,
-            payload=payload,
-            resolution_note="Approved extraction retry.",
-            db=db_session,
+    extraction_review.original_payload = payload
+    db_session.commit()
+    result = resolve_extraction_review(
+        db=db_session,
+        review_id=extraction_review.id,
+        decision="approved",
+        resolution_note="Approved extraction retry.",
+    )
+    assert result.next_workflow_status == "bookkeeping_review_required"
+    with pytest.raises(ReviewContinuationError) as error:
+        resolve_extraction_review(
+            db=db_session, review_id=extraction_review.id, decision="approved"
         )
-        assert next_status == "bookkeeping_review_required"
-        db_session.commit()
+    assert error.value.code == "review_already_resolved"
+    mock_classify_bookkeeping.assert_called_once()
 
     journals = (
         db_session.query(JournalEntry).filter(JournalEntry.document_id == doc.id).all()
