@@ -1,277 +1,157 @@
 # Source-Backed Human Review
-## ReconAI — Planned Design for Safe Extraction Correction
+## ReconAI — Safe Extraction Correction
 
-**Version:** 1.0
-**Status:** Planned — Epic 15
-**Last Updated:** 2026-09-14
+**Version:** 1.1
+**Status:** Implemented portfolio workflow — Epic 15; verification limits below
+**Last Updated:** 2026-09-26
 **Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/05-API-Spec.md`, `docs/06-UX-Flow.md`, `docs/08-Test-Plan.md`, `docs/10-Hybrid-Document-Extraction.md`
 **Document Owner:** Prasetyo Suhada
 
 ---
 
-## 1. Purpose and Status
+## 1. Purpose and Implementation Status
 
-This document is the design source of truth for Epic 15. It defines how an extraction
-reviewer will inspect the stored source document, understand extraction warnings and page
-coverage, correct structured accounting fields, and continue the workflow safely.
+Extraction reviewers can compare structured fields with stored PDF/image evidence,
+inspect intake diagnostics, correct accounting fields, and continue to Bookkeeping
+through deterministic validation and an atomic persistence boundary.
 
-Everything in this document is **planned** until its corresponding Epic 15 task is
-implemented and verified. The current implemented document-content pipeline remains
-defined by `docs/10-Hybrid-Document-Extraction.md`.
+This document describes the implemented portfolio behavior. It supersedes the initial
+Epic 15 design where that design proposed a combined evidence response, additional audit
+events, or authorization that the application does not implement. The document-content
+pipeline is defined in `docs/10-Hybrid-Document-Extraction.md`.
 
-The current application already creates extraction review items and provides editable
-fields. Epic 15 adds the missing trust boundary around that experience:
+## 2. Scope and Non-Goals
 
-- a real source document served by a backend-controlled resource endpoint;
-- explicit content quality and processed-page context;
-- deterministic validation of both approve-as-is and edited extraction payloads;
-- consistent, idempotent persistence of the human decision and downstream continuation;
-- regression coverage for the backend contract and critical frontend review journey.
+Implemented:
 
----
+- controlled source-byte delivery by document ID;
+- native PDF iframe and JPEG/PNG/WebP preview;
+- persisted extraction diagnostics and partial-page notices;
+- backend validation for approve-as-is and edited extraction;
+- transactional, idempotent persistence with PostgreSQL concurrency regression tests;
+- API and component regression tests with external model behavior stubbed.
 
-## 2. Goals and Non-Goals
+Not implemented by Epic 15:
 
-### 2.1 Goals
+- production authentication, tenant authorization, or document sharing;
+- a dedicated OCR service, redaction, annotation, or encrypted-PDF password recovery;
+- a combined `source_document` / `extraction_context` review-detail response;
+- new audit events for source reads or failed correction validation;
+- removal of legacy `stored_file_path` from document list/detail responses;
+- a cross-browser PDF renderer or measured LLM extraction accuracy.
 
-1. Let a reviewer compare the structured extraction with the actual uploaded PDF or
-   image without exposing an internal filesystem path.
-2. Make missing, unreadable, corrupt, and partially processed source conditions visible
-   and actionable.
-3. Apply the same deterministic essential-field and monetary rules to human-corrected
-   extraction data before Bookkeeping can run.
-4. Preserve the original model output, confidence, warnings, and provider metadata while
-   recording human corrections separately.
-5. Ensure retries or concurrent review submissions do not create duplicate journal,
-   review, status, or audit side effects.
-6. Keep the frontend useful for correction while retaining the backend as the
-   authoritative validation boundary.
-
-### 2.2 Non-Goals
-
-- A dedicated OCR service or persisted full-page OCR transcript.
-- Editing the original uploaded file.
-- Password recovery for encrypted PDFs.
-- Production-grade multi-tenant authorization or document sharing.
-- Automatic learning from reviewer corrections.
-- General-purpose annotation, redaction, or document management.
-- Changing the extraction confidence reported by the model into a synthetic human
-  confidence score.
-
----
-
-## 3. Design Principles
-
-| Principle | Planned Behavior |
-|---|---|
-| Source content is untrusted | Resolve content from a document ID, validate the stored path and media type, and never interpret a client-provided path. |
-| Evidence stays distinguishable | Preserve original extraction facts, model confidence, warnings, and page metadata separately from human corrections. |
-| Validation is deterministic | Reuse the backend extraction validation rules for both approve-as-is and edit-and-continue actions. |
-| Invalid input remains reviewable | Return field-level errors, keep the review pending, and do not invoke Bookkeeping. |
-| One decision has one continuation | Commit the resolved review, corrected extraction, downstream persistence, status changes, and audit records consistently. |
-| UI claims follow evidence | Unknown payment or document facts remain unknown; missing or unrenderable source content is shown as unavailable. |
-| Implementation claims require verification | Specifications retain the `Planned` label until Task 15.8 verifies and documents the implemented behavior. |
-
----
-
-## 4. Planned Review Flow
+## 3. Implemented Review Flow
 
 ```text
 Pending extraction review
-        │
-        ├── load review detail + latest extraction metadata
-        ├── load source through document-ID content endpoint
-        │       ├── available → show PDF/image evidence
-        │       └── unavailable/unrenderable → show explicit source state
-        │
-        ▼
-Reviewer chooses Approve as-is, Edit and Continue, or Reject
-        │
-        ├── Reject → persist human rejection + audit; stop downstream workflow
-        │
-        ▼
-Build allowlisted extraction payload
-        │
-        ▼
-Deterministic extraction validation
-        │
-        ├── invalid → HTTP 422 + field errors; review remains pending; no Bookkeeping
-        │
-        ▼
-Bookkeeping classification and deterministic bookkeeping checks
-        │
-        ▼
-Short database transaction
-        ├── lock and re-check pending review
-        ├── persist corrected extraction and provenance
-        ├── persist downstream journal/review outcome
-        ├── update document and review statuses
-        └── append human and workflow audit events
-                │
-                ▼
-          Commit once and return next workflow state
+  ├─ GET review detail (original/edited payload and document source ID)
+  ├─ GET latest extraction (fields, confidence, provider_metadata)
+  └─ GET document content (source bytes or safe error)
+          │
+          ├─ Reject → lock/recheck → reject document/review + audit → commit once
+          │
+          ▼
+Approve as-is or Save Fields & Continue
+  → merge persisted extraction with allowlisted correction
+  → deterministic validation
+      ├─ invalid: 422; pending; no model call or persisted mutation
+      └─ valid: end read transaction → call Bookkeeping without a held DB connection
+          → lock/reload review, document, latest extraction
+          → recheck pending status and unchanged source snapshot
+          → persist extraction, downstream outcome, review, status, human/agent audits
+          → commit once (or roll back all changes)
 ```
 
-The implementation may perform the external Bookkeeping model call before the final
-short database transaction. It must re-check the review state under a database lock
-before persistence. A concurrent loser must not create a second continuation.
+The orchestration lives in `backend/app/services/review_continuation.py`; HTTP transport
+stays in `backend/app/api/v1/review_items.py`. Accounting validation and persistence remain
+deterministic. Extraction approval may result in `ready_to_post` or
+`bookkeeping_review_required`; it is not itself ledger posting.
 
----
+## 4. Evidence and Diagnostic Reads
 
-## 5. Source Evidence Contract
+The frontend assembles evidence from separate API calls:
 
-### 5.1 Source State Model
-
-The review contract uses two separate concepts so file availability is not confused with
-extraction quality.
-
-| Field | Values | Meaning |
-|---|---|---|
-| `availability` | `available`, `missing`, `blocked` | Whether the backend can safely serve the stored source bytes. |
-| `content_quality` | `readable`, `unreadable`, `corrupt`, `partial`, `unknown` | What the extraction pipeline learned about usable source content. |
-
-- `missing` means the document row exists but the stored file no longer exists.
-- `blocked` means the stored reference fails the server's source-access policy. Internal
-  path details must not be returned to the client.
-- `unreadable` or `corrupt` may still have `availability: available`; the reviewer may
-  download or attempt to view the original bytes even though semantic extraction failed.
-- `partial` means only part of the source was processed, including page-limit truncation
-  or a required visual page that could not be rendered.
-
-### 5.2 Review Detail Evidence
-
-For an extraction review, the planned detail response exposes a safe source descriptor
-and normalized diagnostic fields. It does not expose `stored_file_path`.
-
-```json
-{
-  "source_document": {
-    "document_id": "uuid",
-    "original_filename": "office-supplies.pdf",
-    "mime_type": "application/pdf",
-    "content_url": "/api/v1/documents/uuid/content",
-    "availability": "available",
-    "content_quality": "partial"
-  },
-  "extraction_context": {
-    "extraction_method": "pdf_hybrid",
-    "source_page_count": 11,
-    "processed_page_count": 10,
-    "page_limit_applied": true,
-    "text_page_numbers": [1, 2, 3],
-    "vision_page_numbers": [4, 5],
-    "rendered_page_numbers": [4, 5],
-    "warnings": ["Only the first 10 pages were processed."],
-    "low_confidence_fields": [],
-    "risk_flags": ["partial_document_page_limit"]
-  }
-}
-```
-
-Only normalized diagnostic metadata is exposed. Raw base64 visual pages, API keys,
-internal paths, and provider request payloads are excluded.
-
-### 5.3 Document Content Endpoint
-
-Planned endpoint:
-
-```text
-GET /api/v1/documents/{document_id}/content
-```
-
-Planned success behavior:
-
-- Resolve the document by UUID through PostgreSQL.
-- Resolve and normalize the stored path on the server.
-- Require the resolved path to remain inside the configured upload storage root.
-- Require a supported PDF or image media type and serve the stored bytes without
-  transforming accounting content.
-- Return the persisted MIME type after server-side validation.
-- Use a safely encoded original filename for inline display.
-- Support byte-range responses needed by browser PDF viewers when the response stack
-  provides them.
-
-Planned response headers:
-
-| Header | Planned Value or Behavior |
+| Source | Implemented contract |
 |---|---|
-| `Content-Type` | Validated PDF/JPEG/PNG/WebP MIME type. |
-| `Content-Disposition` | `inline` with a safely encoded original filename. |
+| `GET /api/v1/review-items/{id}` | Review type, source ID, original/edited payload, confidence and review risk flags. No new combined evidence descriptor. |
+| `GET /api/v1/documents/{id}/extractions/latest` | Persisted accounting fields, model confidence/rationale and `provider_metadata`. |
+| `GET /api/v1/documents/{id}/content` | Validated stored bytes, safe headers, or stable error envelope. |
+
+The modal uses the document source ID (or linked payload/extraction document ID), and
+builds the content URL. Its filename comes from available payload metadata or review
+title. It does not use `stored_file_path` to fetch evidence.
+
+`ExtractionReviewContext.tsx` reads the existing metadata keys:
+
+- `extraction_method`;
+- `source_page_count`, `processed_page_count`, `page_limit_applied`;
+- `text_page_numbers`, `vision_page_numbers`, `rendered_page_numbers`;
+- `warnings`, `low_confidence_fields`, `risk_flags`.
+
+Review risk flags are a fallback if metadata has no recorded flags. Missing diagnostics
+are shown as unavailable/not recorded; empty recorded lists are distinguished from
+missing lists. Page limits, lower processed counts, or partial risk flags show a partial
+processing notice. No full visual page base64 payload is persisted for this panel.
+
+Availability and extraction quality are separate signals, not new response enum fields.
+Missing or blocked source access maps to one public unavailable state (`410`); diagnostic
+warnings and flags describe unreadable or partial processing. A valid file signature does
+not prove that a PDF is readable or unencrypted. Source availability does not determine
+whether a valid accounting correction can continue: the backend requires the document
+record and valid fields, not a successful viewer fetch.
+
+## 5. Controlled Source Endpoint
+
+`GET /api/v1/documents/{document_id}/content` in `backend/app/api/v1/documents.py`:
+
+1. Parses UUID and loads the document row.
+2. Normalizes stored JPEG aliases and checks the PDF/JPEG/PNG/WebP MIME allowlist.
+3. Resolves the file under `UPLOAD_STORAGE_DIR` (`./storage/uploads` relative to backend).
+4. Rejects traversal and symlink escapes or absent/non-regular files.
+5. Checks a bounded file signature against the stored MIME.
+6. Uses `FileResponse` for stored bytes, safely encoded inline filename, and byte ranges.
+
+| Header | Value |
+|---|---|
+| `Content-Type` | Validated PDF/JPEG/PNG/WebP MIME. |
+| `Content-Disposition` | `inline` with encoded original filename. |
 | `X-Content-Type-Options` | `nosniff`. |
-| `Cache-Control` | `private, no-store` for the portfolio implementation. |
-| `Accept-Ranges` | `bytes` when range support is available. |
+| `Cache-Control` | `private, no-store`. |
+| `Accept-Ranges` | `bytes` from the response stack. |
 
-Planned failures:
-
-| HTTP | Stable Code | Condition |
+| HTTP | Stable code | Condition |
 |---:|---|---|
-| `400` | `invalid_document_id` | UUID syntax is invalid. |
-| `404` | `document_not_found` | No document row exists. |
-| `410` | `source_content_unavailable` | The document exists but the stored source is missing or cannot be served safely. |
-| `415` | `unsupported_source_media_type` | The persisted source type cannot be rendered by the supported review contract. |
+| 400 | `invalid_document_id` | Invalid UUID. |
+| 404 | `document_not_found` | No document row. |
+| 410 | `source_content_unavailable` | File missing or path cannot be served safely. |
+| 415 | `unsupported_source_media_type` | Unsupported stored MIME or signature mismatch. |
 
-Server logs and audit diagnostics may retain a safe internal reason. API errors must not
-include absolute paths or filesystem exception details.
+Source response errors do not expose filesystem paths. The route has no authentication
+or ownership dependency in this demo application. Production access control and removal
+of storage paths from legacy document list/detail responses remain separate hardening
+work; path containment is not user authorization.
 
-The portfolio version continues to use its demo-user authentication boundary. When
-identity and authorization are added, this endpoint must use the same document-resource
-authorization dependency as review detail.
+## 6. Correction and Validation Contract
 
----
+`backend/app/services/review_validation.py` filters corrections to:
 
-## 6. Correction Payload and Validation
+- `document_type`, `vendor_name`, `transaction_date`, `currency`;
+- `subtotal_amount`, `tax_amount`, `total_amount`;
+- `line_items`: `description`, `quantity`, `unit_price`, `amount`.
 
-### 6.1 Allowlisted Fields
+Other keys are ignored, including confidence, provider metadata, raw text, risk flags,
+payment status, status, and journal lines. Approve-as-is validates the original review
+payload overlaid by persisted document/latest extraction fields, including persisted
+nulls. Edit overlays only allowlisted correction fields onto that effective snapshot.
+Legacy wrapped line-item lists are normalized before validation.
 
-An extraction correction may contain only:
+The typed boundary and shared deterministic intake rules require an invoice/receipt,
+non-empty vendor, exact valid `YYYY-MM-DD` date, uppercase three-letter currency,
+finite non-negative supplied numeric fields and a positive total. Subtotal plus tax must
+match total within `0.05` when all three are present; complete line amounts must match
+subtotal within `0.05`. Decimal arithmetic is used for monetary comparisons.
 
-- `document_type`;
-- `vendor_name`;
-- `transaction_date`;
-- `subtotal_amount`;
-- `tax_amount`;
-- `total_amount`;
-- `currency`;
-- `line_items` with `description`, `quantity`, `unit_price`, and `amount`.
-
-Transport-only UI fields such as `payment_status` are not authoritative extraction
-fields unless a later specification explicitly adds them to the data model. Provider
-metadata, model confidence, risk flags, and original raw text cannot be overwritten by
-an edit request.
-
-### 6.2 Effective Payload
-
-- **Approve as-is:** validate the original extraction review payload merged with the
-  latest persisted extraction fields.
-- **Edit and Continue:** merge only allowlisted edited fields over that effective payload,
-  then validate the complete result.
-- **Reject:** no correction validation is required, but the rejection and optional
-  resolution note are audited.
-
-The backend owns merge precedence and validation. Client-side validation may improve
-feedback but cannot authorize continuation.
-
-### 6.3 Deterministic Rules
-
-The planned correction boundary reuses the extraction rules defined in
-`docs/10-Hybrid-Document-Extraction.md`:
-
-- document type is `invoice` or `receipt` before Bookkeeping;
-- vendor is non-empty;
-- transaction date is an exact valid `YYYY-MM-DD` date;
-- currency is an uppercase three-letter code;
-- monetary and line-item numeric values are finite and non-negative;
-- total is present and greater than zero;
-- subtotal plus tax matches total within `0.05` when all values are present;
-- complete line-item amounts match subtotal within `0.05`.
-
-Human correction resolves uncertainty about field values; it does not erase historical
-source warnings or change the model-reported confidence. The audit trail records that a
-human validated or edited the payload.
-
-### 6.4 Validation Failure Response
-
-Planned response: HTTP `422` with the standard API error envelope.
+Invalid decisions return HTTP `422`:
 
 ```json
 {
@@ -279,174 +159,111 @@ Planned response: HTTP `422` with the standard API error envelope.
     "code": "extraction_validation_failed",
     "message": "The extraction still contains fields that must be corrected.",
     "details": [
-      {
-        "field": "transaction_date",
-        "code": "invalid_transaction_date",
-        "message": "Use a valid date in YYYY-MM-DD format."
-      }
+      {"field": "vendor_name", "code": "missing_vendor_name", "message": "Vendor name is required."}
     ],
     "warnings": [],
-    "risk_flags": ["invalid_transaction_date"]
+    "risk_flags": ["missing_vendor_name"]
   }
 }
 ```
 
-On validation failure:
+Messages may vary by validation rule; clients use the code and field path. Validation
+failure leaves the review/document/extraction unchanged, invokes no Bookkeeping, and
+creates no audit or journal. The frontend opens the editor, retains the draft, associates
+errors with inputs using `aria-invalid`/`aria-describedby`, and shows an alert summary.
+Reject does not require valid accounting fields.
 
-- the review remains `pending`;
-- the document remains `extraction_review_required`;
-- no Bookkeeping call or journal persistence occurs;
-- the UI keeps the correction draft and associates errors with the affected fields;
-- the failure may create a validation audit event without marking the review resolved.
+## 7. Atomic Persistence and Concurrency
 
----
+After model classification, locks are acquired in order: review → document → latest
+extraction. The service rechecks pending status and compares the accounting snapshot
+with the pre-classification snapshot. One transaction persists corrected fields,
+downstream journal/review, review resolution, document status, and audit events. Shared
+bookkeeping persistence flushes without committing; the caller commits once.
 
-## 7. Transaction and Idempotency Contract
+| Failure | Response / state |
+|---|---|
+| Already resolved or losing concurrent request | `409 review_already_resolved`, current `review_status` and `next_workflow_status` where available; no second persistence. |
+| Source snapshot changed during classification | `409 review_source_changed`; refresh before continuing. |
+| Classification, deterministic bookkeeping, persistence, or audit failure | `503 review_continuation_failed`; rollback leaves the decision pending unless another request already resolved it. |
 
-### 7.1 Successful Continuation
+Reject uses the same locking/pending recheck and cannot overwrite a winning approval.
+Concurrent valid callers may both invoke the LLM before locking; only one may persist.
+This is not an exactly-once model invocation guarantee. PostgreSQL tests use independent
+sessions and observe the losing session waiting on a real row lock.
 
-The final persistence boundary must be caller-controlled and commit once. Within that
-transaction it must:
+## 8. UI Behavior and Browser Limits
 
-1. Lock and reload the review item.
-2. Confirm the item is still `pending` and its source document still exists.
-3. Persist corrected extraction fields without replacing original provider metadata or
-   model confidence with fabricated values.
-4. Persist the Bookkeeping outcome through a helper that performs no internal commit.
-5. Resolve the extraction review and update document status.
-6. Append the human action and downstream workflow audit events.
-7. Commit all changes together or roll all of them back.
+`SourceDocumentViewer.tsx` fetches bytes into an object URL and revokes it on source
+change/unmount. PDF uses a native iframe with `#page=N`; custom Previous/Next controls
+are bounded by persisted `source_page_count`. For a one-page PDF both are disabled;
+with no known count the component uses native viewer controls without a custom counter.
+JPEG/PNG/WebP use contained image scaling. Open Source always targets the same endpoint.
 
-If Bookkeeping fails before persistence, the extraction review remains pending and the
-API returns a recoverable error. The system must not present a completed human decision
-when downstream state was not saved consistently.
+Loading, missing ID, unavailable, unsupported, fetch failure, and image-render failure
+have explicit text. Native PDF plugin errors/password prompts may remain inside the
+browser viewer; iframe `onError` is not reliable for detecting these failures. The
+component suite does not render PDF pixels. Browser-specific rendering, keyboard/focus
+behavior across the full modal, and responsive layout remain manual verification items.
 
-### 7.2 Duplicate and Concurrent Submission
+Confirm Extraction and Save Fields & Continue wait for API success before closing and
+refreshing the queue. Submission is disabled while the mutation is pending. API conflicts
+and recoverable failures keep the modal and draft open with an error; conflicts instruct
+the user to refresh rather than silently treating a stale decision as successful.
 
-- Only the first valid request may resolve a pending review.
-- Repeated or concurrent requests must not create duplicate journals, review items,
-  status transitions, or audit events.
-- A request that loses the pending-state race returns `409 review_already_resolved` with
-  the current review status and next workflow state where available.
-- Existing unique pending-review and idempotent bookkeeping persistence safeguards
-  should be reused rather than duplicated in the API layer.
-- Transaction-race verification requires PostgreSQL; sequential SQLite tests alone are
-  insufficient evidence for the concurrency claim.
+Payment remains `unknown` unless recorded; a positive total does not imply paid. Existing
+legacy form fallbacks (such as IDR currency and zero/derived amount display) are not
+independent evidence of what was read. The backend revalidates persisted fields for
+approve-as-is; the reviewer must verify all fields before saving a correction.
 
----
-
-## 8. Planned Review UI Contract
-
-### 8.1 Evidence Panel
-
-The Extraction Review view will replace decorative source artwork with:
-
-- inline PDF viewing with page navigation;
-- JPEG, PNG, and WebP image viewing with contained scaling;
-- filename and validated media type;
-- loading, unavailable, unsupported, and browser-render failure states;
-- an Open Source action backed by the same controlled content endpoint.
-
-If the source cannot be displayed, the UI must say so directly. It must not show a
-placeholder that looks like the uploaded document.
-
-### 8.2 Extraction Context
-
-The review displays:
-
-- original AI suggestion and any saved correction;
-- model confidence and rationale;
-- extraction method;
-- source and processed page counts;
-- text, vision, and rendered page coverage when available;
-- warnings, low-confidence fields, and risk flags;
-- a clear partial-processing notice when page limits or rendering failures apply.
-
-Unknown facts remain unknown. In particular, a positive total does not prove that an
-invoice was paid.
-
-### 8.3 Actions
-
-- **Confirm Extraction** validates the as-is effective payload before continuation.
-- **Save Fields & Continue** submits the allowlisted correction and displays server field
-  errors without closing the review.
-- **Reject Item** records a deliberate human rejection.
-- Action buttons remain disabled while a mutation is in flight to reduce accidental
-  duplicate submissions; the backend remains responsible for concurrency safety.
-
-### 8.4 Accessibility
-
-- Viewer controls and review actions are keyboard reachable and visibly focused.
-- PDF pages or images include a useful accessible label derived from safe metadata.
-- Field errors are associated with their inputs and summarized for screen-reader users.
-- Warning and source states use text/icons in addition to color.
-
----
+Upload UI uses the backend's `10 * 1024 * 1024` byte limit, supports PDF/JPEG/PNG/WebP,
+rejects empty files, and uses **Text & Vision** terminology.
 
 ## 9. Audit and Provenance
 
-The original extraction remains distinguishable from the human decision. Planned audit
-coverage includes:
+Successful decisions preserve `ReviewItem.original_payload`, model confidence,
+rationale, raw text, and provider metadata. Accounting fields in the newest extraction
+are updated in place (or a row is created if absent); this is not an immutable extraction
+version history. Original persisted fields and effective corrected fields are captured
+in the human audit snapshots.
 
-| Event | Required Context |
+| Event | Implemented context |
 |---|---|
-| Source unavailable during review | Document ID, normalized public reason, and source state; no absolute path. |
-| Correction validation failed | Review ID, stable field error codes, and risk flags. |
-| Extraction approved | Review ID, original extraction ID, actor, resolution note, and effective payload reference. |
-| Extraction edited | Review ID, allowlisted changed fields, actor, resolution note, and effective payload reference. |
-| Bookkeeping continued | Corrected extraction ID, resulting journal/review IDs, status, and agent rationale/confidence. |
+| `review_item_approved` / `review_item_edited` | Actor `human_user`, note, review type, original extraction ID/fields, filtered edits, effective fields, resulting extraction/journal/review IDs and next state. |
+| `review_item_rejected` | Human rejection and resolution note. |
+| `bookkeeping_completed` | Agent rationale/confidence, outcome, resulting entities, actual completion timestamp and duration. |
 
-Sensitive content should not be copied into every audit event. Existing entity links and
-bounded structured snapshots are preferred.
+Human decision and Bookkeeping audit records are saved together. Failed validation,
+failed continuation, and source reads do not append separate failure/access audit events.
 
----
+## 10. Regression Evidence
 
-## 10. Planned Verification Matrix
-
-| Area | Required Verification |
+| Area | Automated evidence |
 |---|---|
-| Source endpoint | Valid PDF/JPEG/PNG/WebP response, correct MIME, inline filename, missing file, unsupported type, malformed UUID, and path-containment rejection. |
-| Evidence UI | PDF multi-page navigation, image rendering, loading, missing source, unsupported/browser failure, and Open Source action. |
-| Context UI | Warnings, risk flags, low-confidence fields, extraction method, and partial page coverage render from persisted metadata. |
-| Approve as-is | Valid extraction continues; invalid extraction returns field errors and remains pending. |
-| Edit and Continue | Valid correction continues; missing/invalid fields and inconsistent amounts remain pending. |
-| Provenance | Original provider metadata/confidence is retained and human changes are auditable. |
-| Idempotency | Repeated submission creates one downstream outcome and one resolution. |
-| Concurrency | Two simultaneous valid submissions produce one winner and no duplicate persistence under PostgreSQL. |
-| Regression | Existing digital, scanned, mixed, corrupt, encrypted, partial, bookkeeping, and audit paths remain valid. |
+| Safe source delivery | `backend/tests/test_documents_api.py`: supported types, range response, headers, missing/unsupported content, UUID and path traversal/symlink checks. |
+| Validation / provenance | `test_review_correction_validation.py`: valid/invalid approve/edit, persisted precedence, protected metadata, numeric boundaries and recovery. |
+| Rollback / retry | `test_review_continuation.py`: failures at model, persistence, audit and commit boundaries; all decision retries. |
+| Real concurrency | `test_review_continuation_postgres.py`: PostgreSQL winner/loser, reject races and transaction rollback. |
+| Cross-endpoint journey | `test_review_workflow_regression.py`: actual digital/scanned multi-page PDFs, PNG or missing source → invalid approve/edit → valid correction → duplicate conflict. |
+| Evidence UI | `frontend/tests/SourceDocumentViewer.test.tsx`: bounded PDF controls/URL, images, source failures, URL cleanup. |
+| Context UI | `frontend/tests/ExtractionReviewContext.test.tsx`: persisted diagnostics, partial coverage and absent metadata. |
+| Form + API adapter | `frontend/tests/ExtractionReviewModal.test.tsx`: success, 422 draft retention/errors, duplicate click, 409/503 and rejection. |
+| Upload | `frontend/tests/documentUpload.test.ts`: 10 MB boundary, formats, empty/unsupported files. |
 
-Frontend component testing is planned as part of Epic 15; it is not available at the
-time this design is written. Browser or component tests must stub external model behavior
-at a controlled boundary and must not claim real LLM accuracy.
+See `docs/08-Test-Plan.md` for commands and recorded run results. Frontend tests use
+Vitest, React Testing Library and jsdom with mocked fetch. Backend tests mock external
+classification; local file preparation and API persistence run for real. No coverage
+percentage, model accuracy benchmark, or live-browser pass is implied.
 
----
+## 11. Configuration and Documentation
 
-## 11. Delivery and Documentation Map
+No application `.env` addition or migration is required. Install frontend test
+dependencies with `npm ci`; run `npm test`. PostgreSQL race tests opt in via
+`RECONAI_TEST_POSTGRES_URL` in the test process environment, using a database user allowed
+to create/drop isolated test schemas. Without it those tests skip; SQLite is not evidence
+for row-lock correctness. See `docs/09-Setup-Guide.md`.
 
-| Task | Planned Deliverable |
-|---|---|
-| 15.1 | This design and planned alignment of PRD, Architecture, Agent Design, API, UX, and Test Plan. |
-| 15.2 | Controlled source document endpoint and backend contract tests. |
-| 15.3 | Real PDF/image evidence viewer and its frontend tests. |
-| 15.4 | Persisted extraction diagnostic context in the review UI. |
-| 15.5 | Shared deterministic correction validation for approve and edit actions. |
-| 15.6 | Transactional and idempotent review continuation with concurrency coverage. |
-| 15.7 | Frontend upload contract aligned to 10 MB, WebP, and Text & Vision terminology. |
-| 15.8 | Full regression checks and conversion of verified planned claims into implemented documentation. |
-
-At Task 15.8, update `docs/07-Demo-Plan.md` and
-`docs/11-Hybrid-Extraction-Manual-Test.md`, and add the verified review handoff to
-`docs/10-Hybrid-Document-Extraction.md`. Update `docs/03-Data-Model.md` or
-`docs/09-Setup-Guide.md` only if the implementation changes schema, persistence, or
-setup behavior.
-
----
-
-## 12. Configuration Impact
-
-Task 15.1 requires no `.env` changes. The planned source endpoint uses the existing
-document storage configuration and does not require an external service or credential.
-
-If later Epic 15 tasks introduce a configurable upload root, explicit content caching,
-or a new browser-test service, those settings must be documented when they are actually
-added. They are not current configuration requirements.
+Manual review and demo procedures are in `docs/11-Hybrid-Extraction-Manual-Test.md` and
+`docs/07-Demo-Plan.md`. Their unchecked runbook steps are instructions, not completed test
+results. Related PRD, architecture, API, agent, UX, and persistence sections describe the
+same implemented boundaries and remaining limitations.

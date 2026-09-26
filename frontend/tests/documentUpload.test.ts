@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { test } from 'vitest'
 import { validateDocumentUpload } from '../src/utils/documentUpload.ts'
 
 for (const [name, type] of [

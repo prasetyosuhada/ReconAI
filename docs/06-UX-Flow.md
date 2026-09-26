@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/05-API-Spec.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Planned — Epic 15)
+**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/05-API-Spec.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Implemented — Epic 15)
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -85,7 +85,7 @@ Documents
 Review Queue
   ├── Pending items list
   ├── Review item detail
-  ├── Source PDF/image evidence (Planned — Epic 15)
+  ├── Source PDF/image evidence (Implemented — Epic 15)
   ├── Approve action
   ├── Edit and approve action
   └── Reject action
@@ -151,7 +151,7 @@ Screen: **Review Queue**
 User actions:
 
 1. Open the pending review item.
-2. Inspect original AI suggestion and, for extraction review in planned Epic 15, compare
+2. Inspect original AI suggestion and, for extraction review in Epic 15, compare
    it with the actual source PDF or image.
 3. Approve, edit, or reject.
 
@@ -159,7 +159,7 @@ System response:
 
 - If approved or edited, update review item status.
 - Resume downstream workflow.
-- Planned for Epic 15: validate the complete effective extraction before resolving the
+- Implemented in Epic 15: validate the complete effective extraction before resolving the
   review. If validation fails, keep the item pending, retain the correction draft, show
   field errors, and do not start Bookkeeping.
 - If reviewing bookkeeping, validate and post the journal entry if valid.
@@ -172,7 +172,7 @@ Visible AI signals:
 - Risk flags.
 - Sensitive account warning.
 - Original payload and edited payload comparison, if edited.
-- Planned for Epic 15 extraction review: source availability, content quality,
+- Extraction review: source availability, content quality,
   extraction method, page coverage, warnings, low-confidence fields, and risk flags.
 
 ### 6.3 Step 3 — Inspect Ledger Entry
@@ -413,24 +413,36 @@ Reconciliation edit fields:
 - Editable fields where appropriate.
 - Audit trail link.
 
-### 9.7 Source-Backed Extraction Review (Planned — Epic 15)
+### 9.7 Source-Backed Extraction Review (Implemented — Epic 15)
 
-Extraction review will use a two-panel workspace: the stored source evidence on one side
-and editable structured fields on the other. PDF controls provide page navigation;
-JPEG, PNG, and WebP sources use contained image scaling. An **Open Source** action uses
-the same backend-controlled content URL and never exposes a filesystem path.
+Extraction review shows the source, editable fields, and diagnostics in a responsive
+workspace (three columns on wide screens). PDF uses a native iframe; custom Previous/Next
+controls are bounded by persisted source page count. One-page PDFs cannot advance; an
+unknown count uses native viewer controls. JPEG/PNG/WebP images use contained scaling.
+**Open Source** always links to the document-ID endpoint.
 
-The evidence panel has explicit loading, available, missing, blocked, unsupported, and
-browser-render-failure states. Availability is displayed separately from content quality
-(`readable`, `unreadable`, `corrupt`, `partial`, or `unknown`). A missing or unreadable
-source is never presented as proof of payment state or any other accounting fact.
+Source loading, absent ID, unavailable (`410`, including blocked paths), unsupported
+(`415`), fetch failure and image-render failure have explicit messages. Extraction quality
+is conveyed independently through persisted warnings, method and page metadata, not
+new availability/content-quality enum fields. Native PDF plugin failures/password prompts
+may stay inside the browser viewer; automatic detection is not reliable.
 
-The form shows the original suggestion, saved correction when present, model confidence,
-rationale, extraction method, processed-page coverage, warnings, low-confidence fields,
-and risk flags. Partial processing receives a prominent notice. **Confirm Extraction**
-and **Save Fields & Continue** display backend field errors in place and remain on the
-review item until validation succeeds. Mutation buttons are disabled while a request is
-in flight; the backend remains authoritative for duplicate and concurrent submissions.
+The form displays persisted extraction fields, saved corrections where present, model
+confidence/rationale, method, processed-page coverage, warnings, low-confidence fields,
+and risk flags. Partial processing has a notice. Payment remains unknown unless recorded;
+a positive total does not imply payment. Legacy currency/amount defaults in the form are
+not evidence of source values; verify them before submitting corrections.
+
+**Confirm Extraction** and **Save Fields & Continue** wait for API success to refresh and
+close. On `422`, the editor stays open with its draft, an alert summary, and field-linked
+errors. Actual submission buttons are disabled while awaiting the response. A `409`
+conflict or `503` failure displays the server message and keeps the draft; a stale review
+must be refreshed. Source unavailability alone does not prevent submitting validated
+fields. Backend row locks and atomic persistence enforce concurrency safety.
+
+Component tests verify controls, metadata and form/API behavior in jsdom. Native PDF
+rendering, full keyboard/focus behavior and responsive browser layout require the manual
+checks in `11-Hybrid-Extraction-Manual-Test.md`; they are not claimed as automated passes.
 
 ---
 
@@ -634,9 +646,9 @@ Examples:
 
 - Unsupported file type.
 - Unreadable, corrupt, encrypted, or partially processed document routed to Human Review.
-- Planned for Epic 15: stored source is missing or blocked, while the review remains
+- Implemented in Epic 15: stored source is missing or blocked, while the review remains
   available with an explicit evidence state.
-- Planned for Epic 15: corrected extraction fails deterministic validation, with errors
+- Implemented in Epic 15: corrected extraction fails deterministic validation, with errors
   attached to the affected fields and no downstream continuation.
 - CSV parsing failed.
 - Agent provider unavailable.
@@ -670,7 +682,7 @@ Baseline requirements:
 - Form fields should have visible labels.
 - Error states should be associated with the affected field or action.
 - Keyboard navigation should work for primary review actions.
-- Planned Epic 15 viewer controls, Open Source action, and editable extraction fields
+- Epic 15 viewer controls, Open Source action, and editable extraction fields
   should be keyboard reachable with visible focus; field errors should be announced and
   associated with their inputs.
 - Destructive actions, such as rejection, should require a short confirmation or deliberate click.

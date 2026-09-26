@@ -293,6 +293,29 @@ manual evidence template, see
 
 ---
 
+### 11.1 Human Review Handoff (Epic 15)
+
+The implemented review workspace loads source bytes by document ID and displays the
+persisted `provider_metadata` method, page counts/sets, warnings, low-confidence fields
+and risk flags. A partial-processing notice is separate from source-file availability.
+PDF custom navigation uses the original source page count, not the number of pages
+processed by intake. Missing metadata falls back to native viewer controls.
+
+Approve-as-is and corrected extraction both pass the shared deterministic intake rules
+before Bookkeeping. Invalid fields return `422` and remain pending without a model call.
+Successful decisions preserve original confidence/provider diagnostics while updating
+accounting fields; human before/after audit snapshots retain provenance. Atomic
+continuation and a pending-state row lock prevent duplicate persistence, including reject
+races. Concurrent valid calls may both classify before one wins the write transaction.
+
+`test_review_workflow_regression.py` verifies the source/metadata → validation → correction
+→ duplicate-conflict handoff for real digital/scanned PDFs, PNG and absent source bytes.
+Frontend component tests verify controls/metadata/form behavior with stubbed HTTP, not
+native PDF rendering or semantic accuracy. Detailed behavior and limitations are in
+[`12-Source-Backed-Human-Review.md`](12-Source-Backed-Human-Review.md).
+
+---
+
 ## 12. Known Limitations
 
 - No dedicated OCR engine or separately persisted OCR transcript exists.

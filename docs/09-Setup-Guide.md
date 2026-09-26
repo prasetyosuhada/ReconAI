@@ -1,7 +1,7 @@
 # ReconAI — Local Setup & Execution Guide
 
 Document Version: 1.0  
-Last Updated: 2026-09-10
+Last Updated: 2026-09-26
 
 This guide provides step-by-step instructions for installing, configuring, running, and testing the **ReconAI Agentic Platform for Accounting Automation** on your local workstation.
 
@@ -14,7 +14,7 @@ Before starting, ensure you have installed:
 - **Docker & Docker Compose**: (v20.10+) for running PostgreSQL database container.
 - **Python**: 3.11 or 3.12.
 - **`uv` / `pip`**: Package manager (`uv` recommended for fast dependency resolution).
-- **Node.js & `npm`**: Node.js 18+ for running React Vite frontend.
+- **Node.js & `npm`**: Node.js 24 LTS recommended (verified with 24.14.0) for the frontend and Vitest suite. Node 18 is unsupported by the current test dependencies.
 - **Git**: For version control.
 
 ---
@@ -92,7 +92,7 @@ uv run alembic upgrade head
 uv run python app/db/seed.py
 
 # Start FastAPI development server
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8100
 ```
 
 ```bash
@@ -106,12 +106,12 @@ alembic upgrade head
 python app/db/seed.py
 
 # Start FastAPI dev server
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8100
 ```
 
 FastAPI Interactive API Documentation:
-- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+- **Swagger UI**: [http://localhost:8100/docs](http://localhost:8100/docs)
+- **ReDoc**: [http://localhost:8100/redoc](http://localhost:8100/redoc)
 
 ---
 
@@ -215,11 +215,39 @@ Manual hybrid extraction verification, including generated scanned/mixed/encrypt
 fixtures, is documented in
 [`docs/11-Hybrid-Extraction-Manual-Test.md`](11-Hybrid-Extraction-Manual-Test.md).
 
-Frontend Production Build Validation:
+Frontend component tests and build validation:
 ```bash
 cd frontend
+npm ci
+npm test
+npm run lint
+npm run format:check
 npm run build
 ```
+
+`npm test` typechecks application/test TypeScript and runs Vitest/React Testing Library
+in jsdom. `npm run test:watch` runs watch mode. Tests stub HTTP/LLM boundaries; no live
+API service, browser driver, or LLM credential is needed for these component tests.
+
+PostgreSQL review race tests require an explicit test-process variable:
+
+```bash
+cd backend
+# Replace placeholders with a PostgreSQL test connection allowed to CREATE/DROP schemas.
+export RECONAI_TEST_POSTGRES_URL='postgresql+psycopg2://TEST_USER:TEST_PASSWORD@localhost:5432/TEST_DATABASE'
+DATABASE_URL="sqlite:///:memory:" .venv/bin/pytest -q
+```
+
+Each PostgreSQL test owns a random `test_review_<uuid>` schema and drops only that schema;
+application tables are not recreated or cleared. Do not remove the SQLite override for
+the general suite. Without `RECONAI_TEST_POSTGRES_URL`, PostgreSQL tests are skipped and
+the run does not verify locking/concurrency. The variable is read from the process
+environment, not automatically from `.env` by pytest.
+
+No new application `.env` fields are required by Epic 15. Existing provider keys are
+needed only for live AI processing. Source files still use `backend/storage/uploads`
+when the API runs from `backend/`; there is no new storage-root environment setting.
+The frontend Vite proxy targets backend port `8100`, matching the commands above.
 
 ---
 

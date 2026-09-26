@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Planned — Epic 15)
+**Related Documents:** `docs/01-PRD.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Implemented — Epic 15)
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -116,7 +116,7 @@ Expected views:
 
 The frontend should not contain accounting business logic. It may perform lightweight client-side validation for usability, but authoritative validation must happen in the backend.
 
-For extraction reviews, Epic 15 plans a source-backed workspace that renders the stored
+Extraction review uses a source-backed workspace that renders the stored
 PDF or image beside editable extraction fields. Source availability, content quality,
 page coverage, warnings, low-confidence fields, and risk flags remain separate signals;
 the interface must not turn an unavailable source into an accounting conclusion.
@@ -136,19 +136,28 @@ Core responsibilities:
 
 The API should treat AI outputs as suggestions until they pass validation and, when required, human approval.
 
-#### 5.2.1 Source-Backed Review Boundary (Planned — Epic 15)
+#### 5.2.1 Source-Backed Review Boundary (Implemented — Epic 15)
 
-The backend will expose authenticated source bytes through a document-content endpoint
-instead of returning an internal filesystem path to the browser. The endpoint will load
-the document record, resolve the configured storage location, enforce path containment,
-verify the stored media type, and return safe inline response headers.
+The document-content endpoint loads the document record, resolves its stored path under
+`./storage/uploads`, enforces containment, checks MIME and file signature, and returns
+safe inline headers. It currently has no authentication/ownership dependency. The viewer
+uses this endpoint rather than a filesystem path; legacy document list/detail responses
+still include `stored_file_path`. Production authorization and path-field removal remain
+hardening work.
 
-Extraction approve and edit actions will construct one effective extraction payload,
+Extraction approve and edit actions construct one effective extraction payload,
 run the same deterministic field and monetary validation used during intake, and return
 structured field errors without resolving the review when validation fails. Successful
-resolution, audit persistence, workflow state changes, and downstream continuation will
+resolution, audit persistence, workflow state changes, and downstream persistence
 run within one short transaction with a pending-state recheck so duplicate or concurrent
-requests cannot create duplicate journal entries.
+requests cannot create duplicate journal entries. `review_continuation.py` ends the read
+transaction before calling Bookkeeping, then locks review → document → extraction,
+rechecks pending state and source snapshot, and commits all persistence once. Concurrent
+callers may both classify, but only one persists; losers receive `409`.
+
+The frontend composes review detail, latest extraction metadata, and source-content
+requests. There is no combined evidence descriptor response. Source failures and failed
+validation create no new audit events; successful human/Bookkeeping events commit together.
 
 ### 5.3 Agent Orchestrator
 
@@ -250,8 +259,8 @@ Recommended services:
 | Ledger Service | Create, post, and query journal entries. |
 | Trial Balance Service | Validate debit and credit equality after posting. |
 | Review Service | Create and resolve human review items. |
-| Source Evidence Service (Planned — Epic 15) | Authorize and safely deliver stored PDF/image bytes without exposing storage paths. |
-| Extraction Review Validation (Planned — Epic 15) | Normalize allowlisted corrections and apply deterministic field and monetary rules before resolution. |
+| Source Evidence Service (Implemented — Epic 15) | Safely deliver stored PDF/image bytes with path containment and MIME/signature checks; production authorization is not implemented. |
+| Extraction Review Validation (Implemented — Epic 15) | Normalize allowlisted corrections and apply deterministic field and monetary rules before resolution. |
 | Reconciliation Service | Apply deterministic match scoring and persist reconciliation status. |
 | Audit Service | Record agent decisions, system events, and human actions. |
 | COA Service | Manage and query the chart of accounts. |
@@ -429,7 +438,7 @@ Detailed API contracts should be documented separately in `05-API-Spec.md`. At a
 |---|---|---|
 | `POST` | `/documents` | Upload invoice or receipt. |
 | `GET` | `/documents/{document_id}` | Fetch document processing status and extracted data. |
-| `GET` | `/documents/{document_id}/content` | **Planned — Epic 15:** securely stream the stored PDF or image for review. |
+| `GET` | `/documents/{document_id}/content` | **Implemented — Epic 15:** securely stream the stored PDF or image for review. |
 | `GET` | `/review-items` | List pending human review items. |
 | `POST` | `/review-items/{review_item_id}/approve` | Approve an AI suggestion. |
 | `POST` | `/review-items/{review_item_id}/edit` | Edit and approve a suggestion. |
@@ -535,9 +544,9 @@ Errors should be visible and recoverable where possible.
 | Trial balance failure | Block posting and create audit event. |
 | CSV parsing error | Reject import with row-level error details where possible. |
 | Reconciliation ambiguity | Route candidate matches to human review. |
-| Source document missing or outside the configured storage boundary | **Planned — Epic 15:** return an explicit unavailable response, preserve the pending review, and do not expose the resolved path. |
-| Corrected extraction fails deterministic validation | **Planned — Epic 15:** return structured field errors and keep the item pending without downstream side effects. |
-| Duplicate or concurrent review resolution | **Planned — Epic 15:** lock and recheck pending state, then commit resolution and continuation atomically. |
+| Source document missing or outside the configured storage boundary | **Implemented — Epic 15:** return an explicit unavailable response, preserve the pending review, and do not expose the resolved path. |
+| Corrected extraction fails deterministic validation | **Implemented — Epic 15:** return structured field errors and keep the item pending without downstream side effects. |
+| Duplicate or concurrent review resolution | **Implemented — Epic 15:** lock and recheck pending state, then commit resolution and continuation atomically. |
 
 ---
 
@@ -549,11 +558,12 @@ Recommended baseline:
 
 - Validate uploaded file type and size.
 - Store uploaded files outside frontend-accessible paths.
-- Planned for Epic 15: serve source documents only through an authorized endpoint that
-  enforces storage-root containment and a PDF/image MIME allowlist.
-- Planned for Epic 15: omit internal storage paths from public document and review
-  responses, and return `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`,
-  and `Cache-Control: private, no-store` for source bytes.
+- Implemented in Epic 15: serve review source bytes through an endpoint that enforces
+  storage-root containment and a PDF/image MIME/signature allowlist, returning
+  `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`, and
+  `Cache-Control: private, no-store`.
+- Still required for production: document ownership/authorization and removal of the
+  legacy `stored_file_path` field from document list/detail responses.
 - Avoid logging raw secrets or API keys.
 - Use environment variables for provider credentials.
 - Keep audit logs focused on workflow traceability.
@@ -638,4 +648,4 @@ The following documents should build on this architecture:
 | `07-Demo-Plan.md` | Defines the portfolio demo script and sample data flow. |
 | `08-Test-Plan.md` | Defines validation and test coverage for critical workflows. |
 | `10-Hybrid-Document-Extraction.md` | Defines the implemented document-content contract, limits, validation, metadata, and safe-failure behavior. |
-| `12-Source-Backed-Human-Review.md` | Defines the planned Epic 15 source evidence, correction validation, transactional continuation, UI, audit, and test contracts. |
+| `12-Source-Backed-Human-Review.md` | Defines the Epic 15 source evidence, correction validation, transactional continuation, UI, audit, and test contracts. |

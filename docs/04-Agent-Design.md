@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Planned — Epic 15)
+**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Implemented — Epic 15)
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -64,7 +64,7 @@ extracting
   │   extraction_review_required
   │       │
   │       ▼
-  │   inspect source + approve/edit (Planned — Epic 15)
+  │   inspect source + approve/edit (Implemented — Epic 15)
   │       │
   │       ├── deterministic validation fails → remain pending
   │       │
@@ -118,22 +118,26 @@ matching_in_progress
       resolved
 ```
 
-### 4.3 Extraction Review Continuation (Planned — Epic 15)
+### 4.3 Extraction Review Continuation (Implemented — Epic 15)
 
-The extraction review path resumes through application services rather than invoking a
-new agent to judge a human correction. The planned sequence is:
+The extraction review path resumes through `review_continuation.py` rather than a new
+agent judging human corrections:
 
-1. Load and lock the pending review item together with its document and latest
-   extraction.
-2. Build the effective payload from the original suggestion for approve-as-is, or from
-   allowlisted corrected fields for edit-and-approve.
-3. Run the same deterministic essential-field, date, currency, finite-value,
-   non-negative-value, line-item, and subtotal/tax/total checks used during intake.
-4. If validation fails, return structured field errors and keep the review and workflow
-   state unchanged.
-5. If validation succeeds, preserve the provider's original confidence and provenance,
-   record the human action and corrected snapshot, resolve the review, and continue to
-   Bookkeeping once.
+1. Read the pending review, document and newest extraction; overlay persisted fields
+   (including nulls) on the original suggestion, then allowlisted edits when supplied.
+2. Apply typed deterministic essential-field/date/currency/numeric/monetary validation.
+   Invalid approve/edit returns `422`, with no mutation or Bookkeeping invocation.
+3. Load COA and end the read transaction before calling the Bookkeeping classifier.
+4. Lock/reload review → document → latest extraction, recheck pending state, and compare
+   the source snapshot. A losing request gets `409 review_already_resolved`; changed
+   source data gets `409 review_source_changed`.
+5. Update extraction accounting fields while preserving model confidence/raw text and
+   provider metadata, persist the downstream outcome, human decision and audit events,
+   and commit once. Classification/persistence failure returns `503` and rolls back.
+
+Concurrent callers can both invoke classification; only the winning pending-state
+request persists. No row lock is held across the external model call. Successful
+extraction review does not imply that the downstream journal was posted.
 
 Source availability and source content quality are separate signals. A missing file is
 not evidence that an invoice is unpaid, invalid, or otherwise classifiable. The review

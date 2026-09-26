@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Status:** Draft  
-**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Planned — Epic 15)
+**Related Documents:** `docs/01-PRD.md`, `docs/02-System-Architecture.md`, `docs/03-Data-Model.md`, `docs/04-Agent-Design.md`, `docs/10-Hybrid-Document-Extraction.md`, `docs/12-Source-Backed-Human-Review.md` (Implemented — Epic 15)
 **Document Owner:** Prasetyo Suhada
 
 ---
@@ -46,7 +46,7 @@ http://localhost:8000/api/v1
 | JSON requests | `application/json` |
 | File uploads | `multipart/form-data` |
 | JSON responses | `application/json` |
-| Source document response (Planned — Epic 15) | Stored `application/pdf` or allowlisted `image/*` media type |
+| Source document response (Implemented — Epic 15) | Stored `application/pdf` or allowlisted `image/*` media type |
 
 ### 3.3 Identifiers
 
@@ -133,10 +133,13 @@ Common error codes:
 | Code | HTTP Status | Description |
 |---|---:|---|
 | `validation_error` | `400` | Request payload is invalid. |
-| `extraction_validation_failed` | `422` | Planned extraction correction failed deterministic field or monetary validation. |
+| `review_already_resolved` | `409` | Extraction review already resolved; current review/workflow status returned where available. |
+| `review_source_changed` | `409` | Source accounting snapshot changed during classification; refresh required. |
+| `review_continuation_failed` | `503` | Extraction continuation failed; no partial decision saved. |
+| `extraction_validation_failed` | `422` | Extraction correction failed deterministic field or monetary validation. |
 | `not_found` | `404` | Resource does not exist. |
 | `conflict` | `409` | Resource state does not allow the requested action. |
-| `source_content_unavailable` | `410` | Planned source-content endpoint cannot safely retrieve the stored bytes. |
+| `source_content_unavailable` | `410` | Source-content endpoint cannot safely retrieve the stored bytes. |
 | `unsupported_file_type` | `415` | Uploaded file type is not supported. |
 | `workflow_failed` | `500` | Workflow execution failed unexpectedly. |
 | `provider_unavailable` | `503` | LLM or another external provider is unavailable. |
@@ -286,14 +289,15 @@ Response `200`:
 }
 ```
 
-The current response may expose `stored_file_path`. Epic 15 plans to remove that field
-from public document and review responses after the source-content endpoint is available;
-clients must use the content link rather than depend on an internal path.
+Document list/detail responses still expose the legacy `stored_file_path` field.
+The review viewer uses the document-ID content endpoint instead. Removal of this field
+and production document authorization remain hardening work; they are not completed by
+Epic 15.
 
-### 7.4 `GET /documents/{document_id}/content` (Planned — Epic 15)
+### 7.4 `GET /documents/{document_id}/content` (Implemented — Epic 15)
 
-Returns the stored PDF or image bytes for an authorized review experience. This route is
-not available until Task 15.2 is implemented and verified.
+Returns stored PDF/image bytes for review. Implemented in `documents.py`; no
+authentication or document-ownership dependency is currently attached to this demo route.
 
 Response `200`:
 
@@ -306,13 +310,13 @@ Cache-Control: private, no-store
 
 Behavior:
 
-- Load the document by UUID and authorize access through the application boundary.
+- Load the document by UUID; enforce the storage boundary, not user authorization.
 - Resolve the stored file under the configured upload root and reject path traversal or
   symlink escape.
-- Serve only the stored PDF/JPEG/PNG/WebP MIME allowlist; never infer media type solely
-  from a request parameter.
-- Do not expose `stored_file_path` or the resolved server path in headers, payloads,
-  logs, or errors.
+- Serve only the stored PDF/JPEG/PNG/WebP MIME allowlist after a bounded byte-signature
+  check; a mismatch returns `415`. JPEG aliases normalize to `image/jpeg`.
+- Do not expose `stored_file_path` or the resolved server path in headers, payloads
+  or errors.
 - Support byte ranges if the selected PDF viewer requires them; otherwise return the
   complete bounded upload.
 
@@ -492,40 +496,20 @@ Response `200`:
 }
 ```
 
-#### Planned Epic 15 extraction review extension
+#### Implemented extraction evidence reads
 
-For `review_type: extraction`, the detail response will add normalized evidence without
-exposing `stored_file_path` or raw provider payloads:
+Review detail keeps its existing payload shape. The frontend obtains the document ID
+from the review source/payload and fetches:
 
-```json
-{
-  "source_document": {
-    "document_id": "uuid",
-    "original_filename": "office-supplies.pdf",
-    "mime_type": "application/pdf",
-    "content_url": "/api/v1/documents/uuid/content",
-    "availability": "available",
-    "content_quality": "partial"
-  },
-  "extraction_context": {
-    "extraction_method": "pdf_hybrid",
-    "source_page_count": 11,
-    "processed_page_count": 10,
-    "page_limit_applied": true,
-    "text_page_numbers": [1, 2, 3],
-    "vision_page_numbers": [4, 5],
-    "rendered_page_numbers": [4, 5],
-    "warnings": ["Only the first 10 pages were processed."],
-    "low_confidence_fields": [],
-    "risk_flags": ["partial_document_page_limit"]
-  }
-}
-```
+- `GET /documents/{id}/extractions/latest` for persisted fields, confidence, rationale,
+  and `provider_metadata` (method, page counts/sets, warnings, low-confidence fields,
+  risk flags);
+- `GET /documents/{id}/content` for the source bytes and validated MIME.
 
-`availability` (`available`, `missing`, or `blocked`) describes whether the source can
-be served safely. `content_quality` (`readable`, `unreadable`, `corrupt`, `partial`, or
-`unknown`) describes what intake learned about usable evidence. Clients must not infer
-payment state or accounting fields from either signal.
+There are no `source_document`, `extraction_context`, `availability`, or `content_quality`
+response fields. A `410` maps missing/blocked source access to unavailable; persisted
+warnings and flags describe extraction quality independently. Reading evidence does not
+resolve the review or generate a source-access audit event.
 
 ### 9.3 `POST /review-items/{review_item_id}/approve`
 
@@ -555,7 +539,7 @@ Behavior by review type:
 
 | Review Type | Behavior |
 |---|---|
-| `extraction` | Current behavior marks extraction approved and continues to bookkeeping. **Planned — Epic 15:** first validate the effective persisted extraction with deterministic intake rules; invalid data remains pending. |
+| `extraction` | **Implemented — Epic 15:** first validate the effective persisted extraction with deterministic intake rules; invalid data remains pending. |
 | `bookkeeping` | Re-run validation, then post if valid. |
 | `reconciliation` | Accept proposed match or mark manual resolution. |
 | `validation` | Re-run validation before continuing. |
@@ -602,13 +586,13 @@ Response `200`:
 }
 ```
 
-For an extraction review, the planned Epic 15 `edited_payload` allowlist is
+For an extraction review, the `edited_payload` allowlist is
 `document_type`, `vendor_name`, `transaction_date`, `subtotal_amount`, `tax_amount`,
 `total_amount`, `currency`, and `line_items` (`description`, `quantity`, `unit_price`,
 `amount`). Provider metadata, confidence, raw text, risk flags, and transport-only UI
 fields such as `payment_status` cannot be overwritten.
 
-Both extraction approval paths will apply the essential-field, exact-date, currency,
+Both extraction approval paths apply the essential-field, exact-date, currency,
 finite/non-negative numeric, line-item, and subtotal/tax/total consistency rules in
 `docs/10-Hybrid-Document-Extraction.md`. A failure returns `422` and leaves the review
 pending:
@@ -631,11 +615,21 @@ pending:
 }
 ```
 
-On success, Epic 15 will resolve the review, retain original model confidence and
-provider provenance, persist the human snapshot and downstream outcome, update workflow
-state, and append audit events through one caller-controlled transaction. A duplicate or
+On success, the service resolves the review, retains original model confidence and
+provider provenance, persists the human snapshot and downstream outcome, updates workflow
+state, and appends audit events through one caller-controlled transaction. A duplicate or
 concurrent request that loses the pending-state race returns `409` with
-`review_already_resolved` and creates no second continuation.
+`review_already_resolved`, `review_status`, and `next_workflow_status` where available,
+and creates no second persistence. Reject participates in the same pending-state race.
+`409 review_source_changed` means the accounting snapshot changed during classification;
+`503 review_continuation_failed` means classification or atomic persistence failed.
+Errors use the top-level `error` envelope. These contracts apply to extraction review;
+other review types retain their existing error behavior.
+
+The external model call precedes the short locked transaction. Concurrent callers may
+both classify, but only one saves. Failed validation/continuation appends no audit event.
+Source-byte availability is not an approval prerequisite: the document row and valid
+accounting fields are required, and missing evidence remains visible to the reviewer.
 
 ### 9.5 `POST /review-items/{review_item_id}/reject`
 
@@ -1214,7 +1208,7 @@ Response `200`:
 | `rejected` | No transition. |
 | `cancelled` | No transition. |
 
-For extraction reviews, Epic 15 plans to make this transition conditional on successful
+For extraction approve/edit, this transition is conditional on successful
 deterministic validation and a pending-state recheck under a database lock. Validation
 failure leaves both the review and document state unchanged; only one concurrent request
 may persist the transition and downstream continuation.
@@ -1237,12 +1231,12 @@ may persist the transition and downstream continuation.
 | Endpoint | Key Validation |
 |---|---|
 | `POST /documents/upload` | PDF/JPEG/PNG/WebP type, non-empty content, 10 MB size limit, and document type normalization. |
-| `GET /documents/{id}/content` | **Planned — Epic 15:** document exists; stored path remains inside the upload root; persisted MIME is an allowlisted PDF/image type. |
+| `GET /documents/{id}/content` | **Implemented — Epic 15:** document exists; stored path remains inside the upload root; persisted MIME is an allowlisted PDF/image type. |
 | `GET /documents/stream/{id}` | Valid document UUID and existing document; stream observation must not start duplicate processing. |
 | Document content pipeline | First 10 PDF pages, 4,000,000 pixels per rendered page, readable content, essential fields, and monetary consistency. |
 | `POST /review-items/{id}/approve` | Review item must be pending and source must still exist. |
-| `POST /review-items/{id}/approve` for extraction | **Planned — Epic 15:** effective persisted extraction must also pass deterministic intake validation. |
-| `POST /review-items/{id}/edit` | Edited payload must pass source-specific schema validation. **Planned — Epic 15:** extraction edits are allowlisted and the complete effective payload must pass deterministic intake validation. |
+| `POST /review-items/{id}/approve` for extraction | **Implemented — Epic 15:** effective persisted extraction must also pass deterministic intake validation. |
+| `POST /review-items/{id}/edit` | Edited payload must pass source-specific schema validation. **Implemented — Epic 15:** extraction edits are allowlisted and the complete effective payload must pass deterministic intake validation. |
 | `POST /ledger/journal-entries/{id}/post` | Entry must balance and required reviews must be resolved. |
 | `POST /bank-statements/import` | CSV columns, parseable dates, numeric amounts. |
 | `POST /reconciliation/run` | Bank statement import must exist and have transactions. |

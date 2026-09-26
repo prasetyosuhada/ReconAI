@@ -143,6 +143,11 @@ Notes:
 
 - Background processing performs an idempotent upsert keyed by `document_id`; review
   approval/edit updates the newest extraction in the current implementation.
+- Epic 15 review continuation updates only allowlisted accounting fields in the latest
+  extraction, retaining original raw text, confidence, rationale and provider metadata.
+  The review's original payload is unchanged; original persisted accounting fields and
+  effective corrected fields are captured in the human audit snapshots. This is not
+  append-only extraction versioning. No new schema or migration is introduced.
 - Visual page base64 data is transient and is not stored in `provider_metadata`.
 - `provider_metadata` reuses the existing JSONB column, so hybrid extraction did not
   require a database migration.
@@ -395,6 +400,13 @@ Notes:
 
 - `source_type` and `source_id` allow review items to point at different workflow entities without requiring many nullable foreign keys.
 - The backend should validate that the referenced source exists before creating a review item.
+- Extraction decisions lock/recheck the review, document and latest extraction before
+  writing. Corrected fields, resolution, document status, journal/downstream review and
+  human/agent audits commit once; failure rolls back all changes. Reject shares the lock
+  order. Concurrent losers receive `409` rather than persisting a second continuation.
+- `edited_payload` stores filtered correction fields. `resolved_by` is the demo actor
+  `human_user`; it is not a production authenticated identity. Failed correction
+  validation and source reads do not create separate audit rows.
 
 ---
 

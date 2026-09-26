@@ -3,7 +3,7 @@
 
 **Version:** 1.0
 **Status:** Active Runbook
-**Last Updated:** 2026-09-11
+**Last Updated:** 2026-09-26
 **Related Documents:** `docs/08-Test-Plan.md`, `docs/09-Setup-Guide.md`, `docs/10-Hybrid-Document-Extraction.md`
 **Document Owner:** Prasetyo Suhada
 
@@ -56,7 +56,7 @@ cd backend
 uv sync
 uv run alembic upgrade head
 uv run python app/db/seed.py
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8100
 ```
 
 Start the frontend in another terminal:
@@ -70,7 +70,7 @@ npm run dev
 Open:
 
 - Documents UI: [http://localhost:5173/documents](http://localhost:5173/documents)
-- API documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
+- API documentation: [http://localhost:8100/docs](http://localhost:8100/docs)
 
 ---
 
@@ -215,7 +215,7 @@ Upload one fixture from a terminal:
 RECON_UPLOAD_JSON=$(curl -sS \
   -F "file=@/tmp/reconai-manual-test/invoice-mixed.pdf" \
   -F "document_type=invoice" \
-  http://localhost:8000/api/v1/documents/upload)
+  http://localhost:8100/api/v1/documents/upload)
 
 printf '%s\n' "$RECON_UPLOAD_JSON" | jq
 RECON_DOCUMENT_ID=$(printf '%s\n' "$RECON_UPLOAD_JSON" | jq -r '.id')
@@ -225,14 +225,14 @@ Observe retained Redis Stream events:
 
 ```bash
 curl -N \
-  "http://localhost:8000/api/v1/documents/stream/$RECON_DOCUMENT_ID"
+  "http://localhost:8100/api/v1/documents/stream/$RECON_DOCUMENT_ID"
 ```
 
 After processing finishes, inspect the extraction:
 
 ```bash
 curl -sS \
-  "http://localhost:8000/api/v1/documents/$RECON_DOCUMENT_ID/extractions/latest" \
+  "http://localhost:8100/api/v1/documents/$RECON_DOCUMENT_ID/extractions/latest" \
   | jq '{
       status,
       vendor_name,
@@ -268,7 +268,7 @@ Inspect pending extraction reviews for the document:
 
 ```bash
 curl -sS \
-  "http://localhost:8000/api/v1/review-items?status=pending&review_type=extraction" \
+  "http://localhost:8100/api/v1/review-items?status=pending&review_type=extraction" \
   | jq --arg document_id "$RECON_DOCUMENT_ID" \
       '.items[] | select(.source_id == $document_id)'
 ```
@@ -277,7 +277,7 @@ Verify whether a journal was created:
 
 ```bash
 curl -sS \
-  "http://localhost:8000/api/v1/ledger?document_id=$RECON_DOCUMENT_ID" \
+  "http://localhost:8100/api/v1/ledger?document_id=$RECON_DOCUMENT_ID" \
   | jq '{total, items}'
 ```
 
@@ -285,7 +285,7 @@ Inspect the extraction audit event:
 
 ```bash
 curl -sS \
-  "http://localhost:8000/api/v1/audit-log/$RECON_DOCUMENT_ID" \
+  "http://localhost:8100/api/v1/audit-log/$RECON_DOCUMENT_ID" \
   | jq '.timeline[] | select(.event_type == "extraction_completed")'
 ```
 
@@ -328,9 +328,9 @@ are the hard pass/fail assertions.
 |---|---|---|
 | Corrupt PDF | `invoice-corrupt.pdf` | `scanned_pdf_fallback`; no LLM call; confidence `0.0`; extraction review; no journal. |
 | Encrypted PDF | `invoice-encrypted.pdf` | Same safe-failure behavior as corrupt PDF; password is not requested or guessed. |
-| Empty file | `invoice-empty.pdf` | Upload rejected with HTTP `400`; no document workflow starts. |
-| Unsupported type | `unsupported.txt` | Upload rejected with HTTP `400`; no document workflow starts. |
-| Over 10 MB | `oversized.pdf` | Upload rejected with HTTP `413`; no document workflow starts. |
+| Empty file | `invoice-empty.pdf` | UI rejects locally; direct API returns `400`; no workflow starts. |
+| Unsupported type | `unsupported.txt` | UI rejects locally; direct API returns `400`; no workflow starts. |
+| Over 10 MB | `oversized.pdf` | UI rejects locally; direct API returns `413`; no workflow starts. |
 
 For the corrupt-file guardrail, optionally rename the fixture to something containing
 fake accounting data, such as `PT-Acme-IDR-999999.pdf`. The persisted extraction must not
@@ -358,6 +358,64 @@ For a valid high-confidence extraction, verify:
 - runtime provider/model and durations are persisted;
 - subtotal, tax, and total are deterministically consistent;
 - any Bookkeeping review is distinguishable from an Extraction review.
+
+---
+
+### 7.1 Source-backed extraction review
+
+These are manual steps to execute and record, not claims of an already completed browser
+run. Use a pending **extraction** review; a valid high-confidence upload may proceed
+straight to Bookkeeping. Partial/unreadable fixtures deterministically create extraction
+review, while low-confidence outcomes on readable fixtures depend on the provider.
+
+1. Open the extraction review and compare fields with **Source Document**. Use an
+   available one-page PDF and a multi-page scanned/mixed fixture; record the displayed
+   filename, page count and whether native PDF rendering works in your browser.
+2. For one page, verify Next is disabled. For multiple pages, navigate to the final page
+   and back; verify content changes and Next stops at the source-page count. If metadata
+   lacks a count, verify the custom counter/Next is absent and native controls are used.
+3. Open a PNG/JPEG/WebP source and verify contained scaling. **Open Source** must use
+   `/api/v1/documents/{id}/content`, not a local filesystem URL.
+4. Inspect method, text/vision/rendered pages, warnings and low-confidence/risk flags.
+   An eleven-page fixture should still expose eleven source pages while diagnostics
+   clearly identify the ten processed pages and partial warning.
+5. For missing/blocked source, use a disposable test record or a local HTTP response
+   override returning `410 source_content_unavailable`; do not delete real source files.
+   Expect an unavailable message while review fields remain visible. For `415`, expect
+   unsupported source. Record whether a state was simulated or produced by the backend.
+6. For corrupt/encrypted PDF, record the native viewer error/password prompt or `415`
+   response. A recognizable PDF signature can be served despite unreadable contents;
+   the app cannot reliably detect native PDF plugin failure. No placeholder image should
+   pretend to be the document. An image decode error should show the inline fallback.
+
+### 7.2 Correction, failure, and duplicate submission
+
+1. On an extraction with invalid persisted fields, click **Confirm Extraction**. Expect
+   HTTP `422`, the editor/field errors to appear, review still pending, and no journal or
+   Bookkeeping event. A correct extraction may continue; choose the fixture accordingly.
+2. In **Edit Fields**, clear Vendor or enter an invalid currency, then **Save Fields &
+   Continue**. Expect the draft retained, alert summary and field-linked errors. Review
+   and document statuses must remain unchanged.
+3. Correct all required fields against evidence, including date, document type, currency,
+   subtotal/tax/total and line amounts. Submit once. Expect resolved extraction review and
+   the returned next state (`ready_to_post` or `bookkeeping_review_required`); this action
+   does not itself prove a journal is posted.
+4. In Audit, compare the human event's original/effective accounting snapshots and linked
+   Bookkeeping event. Original model confidence, raw text and provider diagnostics must
+   remain intact; human corrections must not replace the model confidence with 100%.
+5. Repeat the same API decision, or submit from a second stale tab. Expect `409
+   review_already_resolved`, with one downstream journal/outcome and no extra audit rows.
+   The modal should show the conflict and retain the unsaved draft; refresh the queue.
+6. For recoverable `503` UI behavior, use a controlled local HTTP override, record that it
+   is simulated, and verify the modal does not announce success or discard the draft.
+   Real rollback and concurrent locking are covered by automated PostgreSQL tests; a
+   browser response override is not evidence of database atomicity.
+7. Check keyboard activation of viewer controls, readable focus, and field-error feedback
+   at desktop and narrow widths. Record limitations, browser/version, and screenshots.
+
+No application `.env` additions are needed. Live correction continuation uses the existing
+Bookkeeping provider credentials. Run the automated suite for deterministic failure and
+concurrency coverage without paid model calls (`09-Setup-Guide.md`).
 
 ---
 
@@ -407,6 +465,13 @@ limits, or a journal created from unreadable content.
 - [ ] `extraction_completed` audit snapshot verified.
 - [ ] Filename non-inference guardrail verified.
 - [ ] Human Review and Bookkeeping outcomes distinguished.
+- [ ] One-page navigation bound and actual multi-page scanned preview verified in browser.
+- [ ] Image/Open Source, unavailable and unsupported source states verified.
+- [ ] Partial page diagnostics and unknown payment state verified.
+- [ ] Invalid approve/edit keeps pending state and correction draft.
+- [ ] Valid correction continues with preserved model provenance and human audit.
+- [ ] Duplicate decision shows conflict without a second downstream outcome.
+- [ ] Keyboard/focus and responsive layout observations recorded.
 
 Disposable fixtures live outside the repository and may be removed after evidence has
 been captured. Database cleanup should follow the normal local reset procedure rather

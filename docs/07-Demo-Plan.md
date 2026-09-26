@@ -212,6 +212,31 @@ Talking points:
 - Extraction is persisted, not just displayed.
 - Unreadable, partial, inconsistent, or low-confidence extraction goes to Human Review.
 
+### 7.2.1 Optional Source-Backed Extraction Review Segment
+
+Reserve 45–60 seconds within the review segment; use a rehearsed pending extraction
+review to keep the demo under five minutes. This script is a manual presentation plan,
+not a record of executed browser or live-provider tests.
+
+1. Open a pending extraction review with a readable scanned/multi-page PDF or WebP.
+   Show real source evidence and **Open Source**, then the extraction method/page coverage
+   and warnings. A partial fixture reliably routes to review; readable high-confidence
+   documents may skip extraction review.
+2. Clear Vendor and submit **Save Fields & Continue**. Show the field error, retained
+   draft, pending state, and the fact that Bookkeeping has not continued.
+3. Correct fields from the source and submit. Explain that backend validation must pass
+   before the human decision and downstream result are committed. A subsequent
+   Bookkeeping review is a separate approval step.
+4. In Audit, show the original/effective human snapshots, unchanged model confidence,
+   and Bookkeeping event. If time permits, a stale second-tab submission shows `409`
+   without creating a second journal; otherwise reference the PostgreSQL race tests.
+
+Fallback: if source bytes are unavailable, show the explicit unavailable state and a
+prepared source-backed item. Native PDF rendering depends on the browser; use Open
+Source or the PNG fixture if needed. Do not present missing evidence as proof of payment,
+claim a dedicated OCR engine, or describe path containment as production authorization.
+See `11-Hybrid-Extraction-Manual-Test.md` for the detailed evidence checklist.
+
 ### 7.3 Step 2 — Show Bookkeeping Suggestion
 
 Screen: **Documents** or **Review Queue**
