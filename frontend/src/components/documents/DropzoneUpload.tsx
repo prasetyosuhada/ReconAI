@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react'
 import { AlertCircle, CheckCircle2, FileText, Loader2, UploadCloud, X } from 'lucide-react'
 import { uploadDocument } from '../../services/api'
+import { DOCUMENT_UPLOAD_ACCEPT, validateDocumentUpload } from '../../utils/documentUpload'
 
 interface DropzoneUploadProps {
   onUploadSuccess: () => void
@@ -19,29 +20,13 @@ export const DropzoneUpload: React.FC<DropzoneUploadProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const validateFile = (file: File): boolean => {
-    setErrorMsg(null)
-    setSuccessMsg(null)
-
-    const allowedTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg']
-    if (!allowedTypes.includes(file.type)) {
-      setErrorMsg('Only PDF, PNG, and JPEG files are supported.')
-      return false
-    }
-
-    const maxSize = 15 * 1024 * 1024 // 15MB
-    if (file.size > maxSize) {
-      setErrorMsg('File size exceeds maximum limit of 15MB.')
-      return false
-    }
-
-    return true
-  }
-
   const handleFileSelect = (file: File) => {
-    if (validateFile(file)) {
-      setSelectedFile(file)
-    }
+    if (uploading) return
+    const error = validateDocumentUpload(file)
+    setErrorMsg(error)
+    setSuccessMsg(null)
+    setSelectedFile(error ? null : file)
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -103,14 +88,14 @@ export const DropzoneUpload: React.FC<DropzoneUploadProps> = ({
         <div>
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <UploadCloud className="w-5 h-5 text-indigo-400" />
-            Document Intake & OCR Upload
+            Document Intake — Text & Vision
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Upload receipt or invoice (PDF, PNG, JPEG) to start automated extraction.
+            Upload receipt or invoice (PDF, PNG, JPEG, WebP) to start automated extraction.
           </p>
         </div>
         <span className="text-[11px] font-semibold text-indigo-400 bg-indigo-500/10 px-2.5 py-1 rounded-full border border-indigo-500/20">
-          Max 15MB
+          Max 10 MB
         </span>
       </div>
 
@@ -131,7 +116,7 @@ export const DropzoneUpload: React.FC<DropzoneUploadProps> = ({
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.png,.jpg,.jpeg"
+          accept={DOCUMENT_UPLOAD_ACCEPT}
           className="hidden"
           onChange={handleInputChange}
           disabled={uploading}
@@ -169,7 +154,9 @@ export const DropzoneUpload: React.FC<DropzoneUploadProps> = ({
                 Drag and drop your file here, or{' '}
                 <span className="text-indigo-400 underline underline-offset-2">browse</span>
               </p>
-              <p className="text-xs text-slate-400 mt-1">Supports PDF, PNG, and JPEG documents</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Supports PDF, PNG, JPEG, and WebP documents
+              </p>
             </div>
           </div>
         )}

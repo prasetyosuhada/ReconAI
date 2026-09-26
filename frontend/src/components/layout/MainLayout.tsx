@@ -10,7 +10,7 @@ interface MainLayoutProps {
 
 const TAB_TITLES: Record<NavTab, string> = {
   dashboard: 'Executive Dashboard',
-  documents: 'Document Intake & OCR Processing',
+  documents: 'Document Intake — Text & Vision',
   review: 'Human-in-the-Loop Review Queue',
   ledger: 'General Ledger & Trial Balance',
   reconciliation: 'Bank Mutation Reconciliation',

@@ -177,8 +177,8 @@ function App() {
                   AI-Powered Bookkeeping &amp; Reconciliation
                 </h2>
                 <p className="text-slate-400 text-sm max-w-2xl mt-2 leading-relaxed">
-                  Multi-agent accounting automation framework. Autonomous OCR intake, LLM journal
-                  entry suggestions with deterministic double-entry guardrails, and
+                  Multi-agent accounting automation framework. Text & Vision document intake, LLM
+                  journal entry suggestions with deterministic double-entry guardrails, and
                   human-in-the-loop verification.
                 </p>
               </div>
