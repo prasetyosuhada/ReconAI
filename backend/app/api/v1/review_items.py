@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -27,6 +28,7 @@ from app.services.accounting import (
     post_journal_entry_to_ledger,
 )
 from app.services.audit_service import log_event
+from app.services.journal_posting import JournalPostingError, post_bookkeeping_review
 from app.services.review_continuation import (
     reject_extraction_review,
     resolve_extraction_review,
@@ -54,6 +56,19 @@ def _get_review_item_or_404(review_item_id: str, db: Session) -> ReviewItem:
             detail=f"Review item [{review_item_id}] not found.",
         )
     return item
+
+
+def _get_review_for_decision(review_item_id: str, db: Session) -> ReviewItem:
+    try:
+        return _get_review_item_or_404(review_item_id, db)
+    except HTTPException as exc:
+        code = "invalid_id" if exc.status_code == 400 else "not_found"
+        raise JournalPostingError(exc.status_code, code, exc.detail) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise JournalPostingError(
+            503, "posting_failed", "Could not load the review. Refresh before retrying."
+        ) from exc
 
 
 @router.get(
@@ -226,7 +241,9 @@ def approve_review_item(
     db: Session = Depends(get_db),
 ) -> ReviewApproveResponse:
     """Approve a pending review item as-is."""
-    item = _get_review_item_or_404(review_item_id, db)
+    item = _get_review_for_decision(review_item_id, db)
+    if item.review_type == "bookkeeping":
+        return post_bookkeeping_review(db, item, req.resolution_note if req else None)
 
     if item.source_type == "document" and item.review_type == "extraction":
         result = resolve_extraction_review(
@@ -422,7 +439,11 @@ def edit_review_item(
     db: Session = Depends(get_db),
 ) -> ReviewEditResponse:
     """Edit review item payload parameters and approve."""
-    item = _get_review_item_or_404(review_item_id, db)
+    item = _get_review_for_decision(review_item_id, db)
+    if item.review_type == "bookkeeping":
+        return post_bookkeeping_review(
+            db, item, req.resolution_note, req.edited_payload
+        )
 
     if item.source_type == "document" and item.review_type == "extraction":
         result = resolve_extraction_review(

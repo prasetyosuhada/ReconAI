@@ -303,6 +303,24 @@ def test_edit_review_item_success(client, db_session):
     db_session.add_all([doc, je, item])
     db_session.commit()
 
+    db_session.add_all(
+        [
+            ChartOfAccount(
+                account_code="5100",
+                account_name="Supplies Expense",
+                account_type="expense",
+                normal_balance="debit",
+            ),
+            ChartOfAccount(
+                account_code="2000",
+                account_name="Accounts Payable",
+                account_type="liability",
+                normal_balance="credit",
+            ),
+        ]
+    )
+    db_session.commit()
+
     edited_payload = {
         "lines": [
             {
@@ -674,8 +692,9 @@ def test_action_already_resolved_review_item(client, db_session):
     db_session.commit()
 
     response = client.post(f"/api/v1/review-items/{item_id}/approve")
-    assert response.status_code == 400
-    assert "already approved" in response.json()["detail"]
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "review_already_resolved"
+    assert response.json()["error"]["review_status"] == "approved"
 
 
 def test_review_queue_header_counts_independent_of_pagination(client, db_session):

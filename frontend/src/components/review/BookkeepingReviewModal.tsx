@@ -144,11 +144,7 @@ export const BookkeepingReviewModal: React.FC<BookkeepingReviewModalProps> = ({
     try {
       await editReviewItem(
         activeItem.id,
-        {
-          lines,
-          entry_date: payload.entry_date || transactionDate,
-          description: payload.description || payload.entry_description || activeItem.title,
-        },
+        { lines },
         'Edited COA classification via Bookkeeping Review Modal'
       )
       onResolved()

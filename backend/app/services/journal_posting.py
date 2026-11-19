@@ -1,22 +1,27 @@
-"""Eligibility checks and transaction ownership for direct ledger posting."""
+"""Atomic direct and human-reviewed journal posting."""
 
 import logging
-from decimal import Decimal
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
 from app.schemas.ledger import PostJournalEntryResponse
+from app.schemas.review import ReviewApproveResponse, ReviewEditResponse
 from app.services.accounting import (
     CONFIDENCE_THRESHOLD_BOOKKEEPING,
     check_sensitive_accounts,
     post_journal_entry_to_ledger,
 )
 from app.services.audit_service import log_event
+from app.services.journal_edits import ReviewedLine, apply_journal_edits
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +40,6 @@ class JournalPostingError(Exception):
         self.code = code
         self.journal_status = journal_status
         self.review_status = review_status
-
-
-class ReviewedLine(BaseModel):
-    account_code: str
-    debit_amount: Decimal = Decimal(0)
-    credit_amount: Decimal = Decimal(0)
-    description: str | None = None
 
 
 def _review_required(
@@ -68,39 +66,56 @@ def _not_postable(
     )
 
 
-def _review_targets_entry(db: Session, entry: JournalEntry, review: ReviewItem) -> bool:
-    """A document review can belong to a sibling journal, or predate journal IDs."""
-    targets = set()
+def _journal_for_review(
+    db: Session,
+    review: ReviewItem,
+    candidate: JournalEntry | None = None,
+) -> JournalEntry:
+    """Resolve either review link. A document may have several journals."""
+    conflict = JournalPostingError(
+        409,
+        "journal_not_postable",
+        "Refresh the review and verify its journal link.",
+        candidate.status if candidate is not None else None,
+        review.status,
+    )
+    if review.review_type != "bookkeeping":
+        raise conflict
+
+    target = review.source_id if review.source_type == "journal_entry" else None
     for payload in (review.original_payload, review.edited_payload):
         if isinstance(payload, dict) and "journal_entry_id" in payload:
             try:
-                targets.add(UUID(str(payload["journal_entry_id"])))
+                declared = UUID(str(payload["journal_entry_id"]))
             except ValueError:
-                raise _not_postable(entry, review) from None
+                raise conflict from None
+            if target is not None and declared != target:
+                raise conflict
+            target = declared
 
-    if review.source_type == "journal_entry":
-        if targets and targets != {entry.id}:
-            raise _not_postable(entry, review)
-        return True
-
-    if targets == {entry.id}:
-        return True
-    if len(targets) == 1:
-        sibling = db.get(JournalEntry, targets.pop())
-        if sibling is not None and sibling.document_id == entry.document_id:
-            return False
-    elif not targets:
-        sibling_exists = (
-            db.query(JournalEntry.id)
-            .filter(
-                JournalEntry.document_id == entry.document_id,
-                JournalEntry.id != entry.id,
-            )
-            .first()
+    if review.source_type not in {"journal_entry", "document"}:
+        raise conflict
+    if target is None:
+        entries = (
+            db.query(JournalEntry)
+            .filter_by(document_id=review.source_id)
+            .limit(2)
+            .all()
         )
-        if sibling_exists is None:
-            return True
-    raise _not_postable(entry, review)
+        if len(entries) > 1:
+            raise conflict
+        entry = next(iter(entries), None)
+    else:
+        entry = db.get(JournalEntry, target)
+    if entry is None:
+        if candidate is not None:
+            raise conflict
+        raise JournalPostingError(
+            404, "not_found", "The journal linked to this review was not found."
+        )
+    if review.source_type == "document" and entry.document_id != review.source_id:
+        raise conflict
+    return entry
 
 
 def _review_matches_lines(review: ReviewItem, lines: list[ReviewedLine]) -> bool:
@@ -118,24 +133,34 @@ def _review_matches_lines(review: ReviewItem, lines: list[ReviewedLine]) -> bool
         return False
 
 
-def _check_direct_post(db: Session, entry: JournalEntry) -> None:
+def _check_state(entry: JournalEntry, decision: ReviewItem | None) -> None:
     if entry.status == "posted":
         raise JournalPostingError(
             409,
             "journal_already_posted",
             "This journal is already posted. Refresh the journal.",
             entry.status,
+            decision.status if decision else None,
         )
-    if entry.status == "review_required":
+    if decision is None and entry.status == "review_required":
         raise _review_required(entry)
-    if entry.status not in {"draft", "approved"} or entry.source_type not in {
+    allowed = {"draft", "review_required"} if decision else {"draft", "approved"}
+    if entry.status not in allowed or entry.source_type not in {
         "document",
         "manual",
         "import",
         "system",
     }:
-        raise _not_postable(entry)
+        raise _not_postable(entry, decision)
 
+
+def _check_approvals(
+    db: Session,
+    entry: JournalEntry,
+    decision: ReviewItem | None = None,
+    *,
+    replaced_lines: bool = False,
+) -> None:
     source = and_(
         ReviewItem.source_type == "journal_entry", ReviewItem.source_id == entry.id
     )
@@ -157,17 +182,25 @@ def _check_direct_post(db: Session, entry: JournalEntry) -> None:
         )
         if pending is not None:
             raise _review_required(entry, pending)
-        if document.status in {
-            "extraction_review_required",
-            "bookkeeping_review_required",
-        }:
-            raise _review_required(entry)
-        if document.status != "ready_to_post" and not (
-            document.status == "approved" and entry.status == "approved"
-        ):
-            raise _not_postable(entry)
+        allowed = {"ready_to_post"}
+        if decision is not None:
+            allowed.update({"bookkeeping_review_required", "approved"})
+            # Older document-linked reviews can predate the Bookkeeping workflow status.
+            if decision.source_type == "document":
+                allowed.add("uploaded")
+        elif entry.status == "approved":
+            allowed.add("approved")
+        if document.status not in allowed:
+            if document.status in {
+                "extraction_review_required",
+                "bookkeeping_review_required",
+            }:
+                raise _review_required(entry)
+            raise _not_postable(entry, decision)
         source = or_(source, document_source)
-    elif entry.status == "draft" and entry.source_type == "document":
+    elif (
+        decision is None and entry.status == "draft" and entry.source_type == "document"
+    ):
         raise _not_postable(entry)
 
     effective_lines = []
@@ -192,7 +225,19 @@ def _check_direct_post(db: Session, entry: JournalEntry) -> None:
         source, ReviewItem.review_type == "bookkeeping"
     )
     for review in reviews.order_by(ReviewItem.id):
-        if not _review_targets_entry(db, entry, review):
+        if _journal_for_review(db, review, candidate=entry).id != entry.id:
+            continue
+        if decision is not None and review.id == decision.id:
+            # An approve-as-is uses the displayed snapshot when one was recorded.
+            original = review.original_payload
+            if (
+                not replaced_lines
+                and isinstance(original, dict)
+                and ("lines" in original or "journal_lines" in original)
+                and not _review_matches_lines(review, effective_lines)
+            ):
+                raise _not_postable(entry, review)
+            approved = True
             continue
         if review.status not in {"approved", "edited"} or not _review_matches_lines(
             review, effective_lines
@@ -211,55 +256,148 @@ def _check_direct_post(db: Session, entry: JournalEntry) -> None:
         raise _review_required(entry)
 
 
-def post_directly(db: Session, journal_id: UUID) -> PostJournalEntryResponse:
-    """Return a successful outcome only after journal, document and audit commit."""
+@contextmanager
+def _posting_transaction(db: Session) -> Iterator[None]:
     try:
-        entry = db.get(JournalEntry, journal_id)
-        if entry is None:
-            raise JournalPostingError(404, "not_found", "Journal entry not found.")
-        _check_direct_post(db, entry)
-        posted = post_journal_entry_to_ledger(entry, db, posted_by="api_user")
-        if not posted.success:
-            raise JournalPostingError(
-                422, "journal_validation_failed", " ".join(posted.errors)
-            )
-
-        if entry.document is not None:
-            entry.document.status = "posted"
-        log_event(
-            db=db,
-            event_type="journal_entry_posted",
-            source_type="journal_entry",
-            source_id=entry.id,
-            actor_type="human",
-            actor_name="api_user",
-            input_snapshot={"journal_entry_id": str(entry.id)},
-            output_snapshot={
-                "status": "posted",
-                "journal_entry_id": str(entry.id),
-                "gl_period": entry.entry_date.strftime("%Y-%m"),
-                "document_id": str(entry.document_id) if entry.document_id else None,
-            },
-            rationale="Journal entry posted to general ledger.",
-            document_id=entry.document_id,
-            created_at=entry.posted_at,
-        )
-        response = PostJournalEntryResponse(
-            id=entry.id,
-            status=entry.status,
-            posted_at=entry.posted_at,
-            trial_balance_status="balanced",
-        )
+        yield
         db.commit()
-        return response
     except JournalPostingError:
         db.rollback()
         raise
     except Exception as exc:
         db.rollback()
-        logger.exception("Direct posting failed for journal %s", journal_id)
+        logger.exception("Journal posting transaction failed")
         raise JournalPostingError(
             503,
             "posting_failed",
             "Posting could not be confirmed. Refresh the journal before retrying.",
         ) from exc
+
+
+def _stage_post(db: Session, entry: JournalEntry, actor: str) -> None:
+    posted = post_journal_entry_to_ledger(entry, db, posted_by=actor)
+    if not posted.success:
+        raise JournalPostingError(
+            422, "journal_validation_failed", " ".join(posted.errors)
+        )
+    if entry.document is not None:
+        entry.document.status = "posted"
+
+
+def _audit_post(
+    db: Session, entry: JournalEntry, actor: str, review: ReviewItem | None = None
+) -> None:
+    refs = {"journal_entry_id": str(entry.id)}
+    if review is not None:
+        refs["review_item_id"] = str(review.id)
+    inputs = dict(refs)
+    if review is not None:
+        inputs["triggered_by"] = f"review_item_{review.status}"
+    log_event(
+        db=db,
+        event_type="journal_entry_posted",
+        source_type="journal_entry",
+        source_id=entry.id,
+        actor_type="human",
+        actor_name=actor,
+        input_snapshot=inputs,
+        output_snapshot={
+            **refs,
+            "status": "posted",
+            "gl_period": entry.entry_date.strftime("%Y-%m"),
+            "document_id": str(entry.document_id) if entry.document_id else None,
+        },
+        rationale="Journal entry posted to general ledger.",
+        document_id=entry.document_id,
+        created_at=entry.posted_at,
+    )
+
+
+def post_directly(db: Session, journal_id: UUID) -> PostJournalEntryResponse:
+    """Return a successful outcome only after journal, document and audit commit."""
+    with _posting_transaction(db):
+        entry = db.get(JournalEntry, journal_id)
+        if entry is None:
+            raise JournalPostingError(404, "not_found", "Journal entry not found.")
+        _check_state(entry, None)
+        _check_approvals(db, entry)
+        _stage_post(db, entry, "api_user")
+        _audit_post(db, entry, "api_user")
+        return PostJournalEntryResponse(
+            id=entry.id,
+            status=entry.status,
+            posted_at=entry.posted_at,
+            trial_balance_status="balanced",
+        )
+
+
+def post_bookkeeping_review(
+    db: Session,
+    review: ReviewItem,
+    resolution_note: str | None,
+    edited_payload: dict[str, Any] | None = None,
+) -> ReviewApproveResponse | ReviewEditResponse:
+    with _posting_transaction(db):
+        if review.status != "pending":
+            raise JournalPostingError(
+                409,
+                "review_already_resolved",
+                "This review has already been resolved. Refresh the review.",
+                review_status=review.status,
+            )
+        entry = _journal_for_review(db, review)
+        _check_state(entry, review)
+        replaced_lines = False
+        if edited_payload is not None:
+            try:
+                replaced_lines = apply_journal_edits(db, entry, edited_payload)
+            except ValueError as exc:
+                raise JournalPostingError(
+                    422, "journal_validation_failed", str(exc)
+                ) from exc
+        _check_approvals(db, entry, review, replaced_lines=replaced_lines)
+        resolved_at = datetime.now(UTC)
+        _stage_post(db, entry, "human_user")
+        entry.posted_at = max(entry.posted_at, resolved_at + timedelta(microseconds=1))
+        decision = "edited" if edited_payload is not None else "approved"
+        review.status = decision
+        review.resolution_note = resolution_note
+        review.resolved_by = "human_user"
+        review.resolved_at = resolved_at
+        inputs: dict[str, Any] = {
+            "review_type": review.review_type,
+            "resolution_note": resolution_note,
+        }
+        if edited_payload is not None:
+            review.edited_payload = edited_payload
+            inputs["edited_payload"] = edited_payload
+        log_event(
+            db=db,
+            event_type=f"review_item_{decision}",
+            source_type="review_item",
+            source_id=review.id,
+            actor_type="human",
+            actor_name=review.resolved_by,
+            human_action=decision,
+            input_snapshot=inputs,
+            output_snapshot={
+                "status": decision,
+                "next_workflow_status": "posted",
+                "journal_entry_id": str(entry.id),
+            },
+            document_id=entry.document_id,
+            created_at=resolved_at,
+        )
+        _audit_post(db, entry, "human_user", review)
+        response = (
+            ReviewEditResponse if edited_payload is not None else ReviewApproveResponse
+        )
+        return response(
+            id=review.id,
+            status=decision,
+            resolved_at=resolved_at,
+            next_workflow_status="posted",
+            message="Review item edited and approved."
+            if edited_payload is not None
+            else "Review item approved successfully.",
+        )
