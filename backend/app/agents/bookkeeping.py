@@ -18,10 +18,9 @@ from app.agents.schemas import (
     ProposedJournalLine,
 )
 from app.core.llm import get_llm
+from app.services.accounting import CONFIDENCE_THRESHOLD_BOOKKEEPING
 
 logger = logging.getLogger(__name__)
-
-CONFIDENCE_THRESHOLD_BOOKKEEPING = 0.85
 
 
 def route_after_bookkeeping(

@@ -1,8 +1,7 @@
 """FastAPI Ledger API Router (General Ledger & Trial Balance)."""
 
-import logging
 import uuid
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -23,10 +22,7 @@ from app.schemas.ledger import (
     TrialBalanceAccountBalance,
     TrialBalanceResponse,
 )
-from app.services.accounting import post_journal_entry_to_ledger
-from app.services.audit_service import log_event
-
-logger = logging.getLogger(__name__)
+from app.services.journal_posting import JournalPostingError, post_directly
 
 router = APIRouter(prefix="/ledger", tags=["Ledger"])
 
@@ -219,75 +215,20 @@ def get_journal_entry_detail(
     "/journal-entries/{journal_entry_id}/post",
     response_model=PostJournalEntryResponse,
     status_code=status.HTTP_200_OK,
-    summary="Post approved journal entry to general ledger",
+    summary="Post an eligible journal entry to the general ledger",
 )
 def post_journal_entry(
     journal_entry_id: str,
     db: Session = Depends(get_db),
 ) -> PostJournalEntryResponse:
-    """Post an approved or ready_to_post journal entry to ledger."""
+    """Post an eligible journal and persist its audit in the same transaction."""
     try:
-        je_uuid = uuid.UUID(journal_entry_id)
+        journal_id = uuid.UUID(journal_entry_id)
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid journal entry UUID format.",
+        raise JournalPostingError(
+            400, "invalid_id", "Invalid journal entry UUID."
         ) from None
-
-    entry = db.query(JournalEntry).filter(JournalEntry.id == je_uuid).first()
-    if not entry:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Journal entry [{journal_entry_id}] not found.",
-        )
-
-    post_res = post_journal_entry_to_ledger(
-        journal_entry=entry, db_session=db, posted_by="api_user"
-    )
-    if not post_res.success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Posting failed: {'; '.join(post_res.errors)}",
-        )
-
-    posted_at_dt = (
-        datetime.fromisoformat(post_res.posted_at)
-        if post_res.posted_at
-        else datetime.now(UTC)
-    )
-
-    if entry.document_id:
-        doc = db.query(Document).filter(Document.id == entry.document_id).first()
-        if doc:
-            doc.status = "posted"
-
-    log_event(
-        db=db,
-        event_type="journal_entry_posted",
-        source_type="journal_entry",
-        source_id=entry.id,
-        actor_type="human",
-        actor_name="api_user",
-        input_snapshot={"journal_entry_id": str(entry.id)},
-        output_snapshot={
-            "status": "posted",
-            "journal_entry_id": str(entry.id),
-            "gl_period": entry.entry_date.strftime("%Y-%m")
-            if entry.entry_date
-            else None,
-            "document_id": str(entry.document_id) if entry.document_id else None,
-        },
-        rationale="Journal entry posted to general ledger.",
-        document_id=entry.document_id,
-    )
-    db.commit()
-
-    return PostJournalEntryResponse(
-        id=entry.id,
-        status="posted",
-        posted_at=posted_at_dt,
-        trial_balance_status="balanced",
-    )
+    return post_directly(db, journal_id)
 
 
 @router.get(

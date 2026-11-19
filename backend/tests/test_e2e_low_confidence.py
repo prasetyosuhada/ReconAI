@@ -20,10 +20,7 @@ from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
-from app.services.accounting import (
-    post_journal_entry_to_ledger,
-    validate_double_entry,
-)
+from app.services.accounting import validate_double_entry
 
 
 def seed_coa_accounts(db):
@@ -223,8 +220,21 @@ def test_e2e_low_confidence_review_queue_workflow(client, db_session):
     val_res = validate_double_entry(je.lines)
     assert val_res.is_valid is True
 
-    post_res = post_journal_entry_to_ledger(je, db_session)
-    assert post_res.success is True
+    blocked = client.post(f"/api/v1/ledger/journal-entries/{je.id}/post")
+    assert blocked.json()["error"]["code"] == "posting_review_required"
+    review = (
+        db_session.query(ReviewItem)
+        .filter_by(
+            source_type="journal_entry",
+            source_id=je.id,
+            review_type="bookkeeping",
+            status="pending",
+        )
+        .one()
+    )
+    posted = client.post(f"/api/v1/review-items/{review.id}/approve", json={})
+    assert posted.status_code == 200
+    db_session.refresh(je)
     assert je.status == "posted"
 
     # -------------------------------------------------------------

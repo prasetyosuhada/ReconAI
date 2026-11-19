@@ -16,10 +16,7 @@ from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
 from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
-from app.services.accounting import (
-    post_journal_entry_to_ledger,
-    validate_double_entry,
-)
+from app.services.accounting import validate_double_entry
 from app.services.reconciliation import execute_reconciliation_workflow
 
 
@@ -207,8 +204,9 @@ def test_e2e_happy_path_workflow(client, db_session):
     # -------------------------------------------------------------
     # STEP 5: Post Journal Entry to Ledger & Verify Trial Balance
     # -------------------------------------------------------------
-    post_res = post_journal_entry_to_ledger(je, db_session)
-    assert post_res.success is True
+    posted = client.post(f"/api/v1/ledger/journal-entries/{je.id}/post")
+    assert posted.status_code == 200
+    db_session.refresh(je)
     assert je.status == "posted"
 
     tb_res = client.get("/api/v1/ledger/trial-balance")

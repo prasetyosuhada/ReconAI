@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+CONFIDENCE_THRESHOLD_BOOKKEEPING = 0.85
+
 
 class DoubleEntryValidationResult(BaseModel):
     """Structured result returned by double-entry validation."""
@@ -451,7 +453,7 @@ def post_journal_entry_to_ledger(
     Actions on Success:
     - Update `status = "posted"`.
     - Set `posted_at = datetime.now(UTC)`.
-    - If db_session provided: commit to database.
+    - If db_session is provided, stage the entry in the caller-owned transaction.
 
     Args:
         journal_entry: Dict or SQLAlchemy JournalEntry ORM model.
@@ -514,28 +516,10 @@ def post_journal_entry_to_ledger(
         journal_entry.status = "posted"
         journal_entry.posted_at = now_utc
 
-    if db_session:
-        try:
-            db_session.add(journal_entry)
-            db_session.commit()
-            if hasattr(db_session, "refresh"):
-                db_session.refresh(journal_entry)
-        except Exception as e:
-            logger.error("DB Error posting journal entry %s: %s", entry_id, str(e))
-            if hasattr(db_session, "rollback"):
-                db_session.rollback()
-            return PostToLedgerResult(
-                success=False,
-                journal_entry_id=entry_id,
-                status=current_status,
-                errors=[f"Database commit error: {str(e)}"],
-            )
+    if db_session is not None:
+        db_session.add(journal_entry)
 
-    logger.info(
-        "Successfully posted journal entry %s to ledger at %s",
-        entry_id,
-        posted_at_iso,
-    )
+    logger.debug("Staged journal entry %s for posting by %s", entry_id, posted_by)
 
     return PostToLedgerResult(
         success=True,

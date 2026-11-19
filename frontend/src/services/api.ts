@@ -544,7 +544,7 @@ export async function postJournalEntry(journalEntryId: string): Promise<PostJour
   })
   if (!response.ok) {
     const err = await response.json().catch(() => ({}))
-    throw new Error(err.detail || 'Failed to post journal entry')
+    throw new Error(err.error?.message || err.detail || 'Failed to post journal entry')
   }
   return response.json()
 }

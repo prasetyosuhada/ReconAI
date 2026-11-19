@@ -95,7 +95,7 @@ export const JournalDetailModal: React.FC<JournalDetailModalProps> = ({
   const computedTotalDebit = lines.reduce((sum, line) => sum + (line.debit_amount ?? 0), 0)
   const computedTotalCredit = lines.reduce((sum, line) => sum + (line.credit_amount ?? 0), 0)
   const isBalanced = Math.abs(computedTotalDebit - computedTotalCredit) < 0.01
-  const canPost = detail?.status === 'draft' || detail?.status === 'ready_to_post'
+  const canPost = detail?.status === 'draft' || detail?.status === 'approved'
   const extractionLineItems = extraction?.line_items
   const rawLineItems = Array.isArray(extractionLineItems)
     ? extractionLineItems
