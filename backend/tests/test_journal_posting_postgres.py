@@ -216,3 +216,70 @@ def test_waiting_reject_rechecks_review_link(pg_api):
             == "draft"
         )
         assert db.query(AuditEvent).count() == 0
+
+
+@pytest.mark.parametrize("action", ["post", "approve", "edit"])
+@pytest.mark.parametrize("timing", ["IMMEDIATE", "DEFERRED"])
+def test_posting_rolls_back_on_database_failure(pg_api, action, timing):
+    client, sessions, _ = pg_api
+    with sessions() as db:
+        journal_id, review_id = seed_journal(
+            db,
+            standalone=False,
+            review_source=None if action == "post" else "journal_entry",
+        )
+        entry = db.get(JournalEntry, journal_id)
+        original_lines = [line.id for line in entry.lines]
+        # In this test's private schema, allow the human audit but fail the posting
+        # audit at INSERT or at COMMIT, depending on the constraint timing.
+        db.execute(text("CREATE TABLE permitted_events (kind text PRIMARY KEY)"))
+        db.execute(
+            text(
+                "INSERT INTO permitted_events VALUES ('review_item_approved'), ('review_item_edited')"
+            )
+        )
+        db.execute(
+            text(f"""ALTER TABLE audit_events ADD CONSTRAINT test_audit_failure
+            FOREIGN KEY (event_type) REFERENCES permitted_events(kind)
+            DEFERRABLE INITIALLY {timing}""")
+        )
+        db.commit()
+
+    failure = request_action(client, action, journal_id, review_id)
+    assert failure.status_code == 503
+    assert failure.json()["error"]["code"] == "posting_failed"
+    assert "test_audit_failure" not in failure.text
+    with sessions() as db:
+        entry = db.get(JournalEntry, journal_id)
+        assert entry.status == "draft" and entry.posted_at is None
+        assert entry.document.status == "ready_to_post"
+        assert entry.description == "Original"
+        assert [line.id for line in entry.lines] == original_lines
+        assert entry.lines[0].debit_amount == entry.lines[1].credit_amount == 100
+        if review_id:
+            review = db.get(ReviewItem, review_id)
+            assert review.status == "pending"
+            assert (
+                review.resolved_at
+                is review.resolved_by
+                is review.resolution_note
+                is review.edited_payload
+                is None
+            )
+            assert review.original_payload == {"journal_entry_id": str(journal_id)}
+        assert db.query(AuditEvent).count() == 0
+        db.execute(text("INSERT INTO permitted_events VALUES ('journal_entry_posted')"))
+        db.commit()
+
+    retry = request_action(client, action, journal_id, review_id)
+    assert retry.status_code == 200, retry.text
+    with sessions() as db:
+        entry = db.get(JournalEntry, journal_id)
+        assert entry.status == entry.document.status == "posted"
+        assert entry.posted_at is not None
+        assert (
+            db.query(AuditEvent)
+            .filter_by(event_type="journal_entry_posted", source_id=journal_id)
+            .count()
+            == 1
+        )

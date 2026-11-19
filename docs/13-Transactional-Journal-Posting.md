@@ -1,12 +1,11 @@
 # Transactional Journal Posting and Audit
 
-**Status:** Planned — Epic 16. Posting contract documented in Task 16.1.
+**Status:** Implemented and verified — Epic 16.
 **Last Updated:** 2026-11-19
 
 This contract covers direct posting in the Ledger API and Bookkeeping review approval
-with or without edits. Today, the posting helper can commit the journal before the API
-stores the linked document status and posting audit. The target is one transaction for
-each decision. Extraction review continuation is governed by the
+with or without edits. Each action commits its journal, linked document and audit
+events in one transaction. Bookkeeping reject uses the same lock order. Extraction review continuation is governed by the
 [Epic 15 contract](12-Source-Backed-Human-Review.md).
 
 ## Posting eligibility
@@ -87,12 +86,12 @@ duplicate guard. A lost response after a successful commit is handled like a rep
 - Invalid requests, conflicts, and rollbacks write no success audit. Repeats preserve
   the original posting timestamp and audit count.
 
-## Planned HTTP behavior
+## HTTP behavior
 
 Success remains `200`, using the existing response fields. For Bookkeeping approve/edit,
 return the resolved review and `next_workflow_status: posted`. For direct post, return
 the journal ID, `posted` status, and posting timestamp along with the legacy
-`trial_balance_status` field. Planned domain errors use the API's top-level `error`
+`trial_balance_status` field. Domain errors use the API's top-level `error`
 envelope with `code` and a user-facing `message`. Include `journal_status` and
 `review_status` on a conflict where available. Native request-schema validation can
 retain FastAPI's current `422` response.
@@ -111,19 +110,14 @@ retain FastAPI's current `422` response.
 For review routes, check resolved review status before journal status so a replay of
 the same completed review returns `review_already_resolved`. If its review is still
 pending but another route already posted the journal, return `journal_already_posted`.
-Keep error messages free of raw database details. When the new errors ship, affected
-frontend API clients must surface their messages and prompt a refresh on conflicts.
+The Ledger and Bookkeeping clients display the API error message. Refresh after a
+conflict to see the committed outcome.
 
-## Acceptance checks for implementation
+## Regression evidence
 
-- Direct posting succeeds for eligible entries and is blocked for pending or missing
-  required approvals, legacy links that cannot be resolved safely, and invalid journals.
-- Approve and edit-and-post commit journal, review, document, and ordered audit records
-  together. Inject an audit write failure after staging changes and a pre-commit failure
-  to verify rollback of statuses, journal lines, timestamps, and audit rows.
-- Real PostgreSQL sessions cover repeat posting, direct post racing review decisions,
-  and approve/edit or reject racing on the same review and journal. Assert one terminal
-  decision, consistent entity state, and one posting event when a post wins.
-
-Task 16.1 documents the contract only. Tasks 16.2–16.5 implement the behavior and run
-the regression checks. This contract introduces no `.env` setting or schema change.
+SQLite API tests cover eligibility, legacy review links, edited account references,
+audit order and one-commit behavior. PostgreSQL tests observe competing sessions
+waiting on locks and check the final journal, decision and audit count after replay.
+For each posting route, immediate and deferred database constraints exercise rollback
+during the audit insert and at commit. A fresh session checks durable state before a
+successful retry. [Test matrix and results](08-Test-Plan.md#63-transactional-posting-regression)

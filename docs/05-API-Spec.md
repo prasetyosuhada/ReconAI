@@ -544,8 +544,11 @@ Behavior by review type:
 | `reconciliation` | Accept proposed match or mark manual resolution. |
 | `validation` | Re-run validation before continuing. |
 
-The planned Epic 16 contract for Bookkeeping approve, edit-and-post, and conflicts
-with rejection is in [Transactional Journal Posting and Audit](13-Transactional-Journal-Posting.md).
+Bookkeeping approve and edit return `200` with `next_workflow_status: posted` after
+the review decision, journal, linked document and both audit events commit together.
+The pending review must resolve to one eligible journal. An unresolved extraction
+review blocks posting. Repeating a completed decision returns `409 review_already_resolved`.
+[Posting errors and recovery](13-Transactional-Journal-Posting.md#http-behavior)
 
 ### 9.4 `POST /review-items/{review_item_id}/edit`
 
@@ -589,6 +592,11 @@ Response `200`:
 }
 ```
 
+For Bookkeeping, supply one or more of `entry_date`, `description`, and `lines`
+(also accepted as `journal_lines`). Replacement lines must reference active accounts
+and pass double-entry validation. Invalid edits return `422 journal_validation_failed`
+and preserve the original journal and pending decision.
+
 For an extraction review, the `edited_payload` allowlist is
 `document_type`, `vendor_name`, `transaction_date`, `subtotal_amount`, `tax_amount`,
 `total_amount`, `currency`, and `line_items` (`description`, `quantity`, `unit_price`,
@@ -626,8 +634,7 @@ concurrent request that loses the pending-state race returns `409` with
 and creates no second persistence. Reject participates in the same pending-state race.
 `409 review_source_changed` means the accounting snapshot changed during classification;
 `503 review_continuation_failed` means classification or atomic persistence failed.
-Errors use the top-level `error` envelope. These contracts apply to extraction review;
-other review types retain their existing error behavior.
+Errors use the top-level `error` envelope. These continuation errors apply to extraction review.
 
 The external model call precedes the short locked transaction. Concurrent callers may
 both classify, but only one saves. Failed validation/continuation appends no audit event.
@@ -661,7 +668,7 @@ Behavior:
 
 - Mark review item as rejected.
 - Mark related suggestion as rejected where applicable.
-- Create a human rejection audit event.
+- Create a human rejection audit event. Bookkeeping reject locks and rechecks the target. A winning rejection marks the review, journal and linked document rejected. A conflicting request returns `409`.
 - Do not continue downstream workflow automatically.
 
 ---
@@ -782,7 +789,7 @@ Response `200`:
 
 ### 10.4 `POST /ledger/journal-entries/{journal_entry_id}/post`
 
-Posts an approved journal entry.
+Posts an eligible draft or approved journal entry.
 
 Response `200`:
 
@@ -795,15 +802,19 @@ Response `200`:
 }
 ```
 
-Allowed when:
+A document-backed draft requires a `ready_to_post` document. An approved journal
+can also use the legacy `approved` document state. Direct posting checks required
+reviews, active account references and double-entry balance before committing the
+journal, timestamp, linked document and one `journal_entry_posted` audit.
+Standalone eligibility and legacy review links follow the
+[posting rules](13-Transactional-Journal-Posting.md#posting-eligibility).
+The success field `trial_balance_status` reflects this journal's validation.
+Use the trial balance endpoint for ledger-wide totals.
 
-- Journal entry status is `approved` or `ready_to_post`.
-- Journal entry passes deterministic validation.
-- Required review items are resolved.
-
-The planned Epic 16 [posting eligibility rules](13-Transactional-Journal-Posting.md#posting-eligibility)
-distinguish the journal's `draft` status from the linked document's `ready_to_post`
-status and require positive decisions on all applicable reviews before direct posting.
+A replay returns `409 journal_already_posted` and preserves the original timestamp
+and audit. Missing approvals return `409 posting_review_required`. Database or audit
+failure returns `503 posting_failed`. Read the current state before retrying.
+[Error envelope and codes](13-Transactional-Journal-Posting.md#http-behavior)
 
 ### 10.5 `GET /ledger/trial-balance`
 
@@ -1200,8 +1211,8 @@ Response `200`:
 | `extraction_review_required` | `extracted`, `failed` |
 | `extracted` | `bookkeeping_in_progress`, `failed` |
 | `bookkeeping_in_progress` | `bookkeeping_review_required`, `ready_to_post`, `failed` |
-| `bookkeeping_review_required` | `ready_to_post`, `failed` |
-| `ready_to_post` | `posted`, `failed` |
+| `bookkeeping_review_required` | `posted` on successful Bookkeeping approve/edit, `rejected` on reject, `failed` |
+| `ready_to_post` | `posted`, `rejected`, `failed` |
 | `posted` | No automatic transition in version 1. |
 | `failed` | `extracting` through retry. |
 
@@ -1224,9 +1235,9 @@ may persist the transition and downstream continuation.
 
 | Current Status | Allowed Next Status |
 |---|---|
-| `draft` | `review_required`, `approved`, `rejected` |
-| `review_required` | `approved`, `rejected` |
-| `approved` | `posted` |
+| `draft` | `review_required`, `approved`, `posted` when eligible, `rejected` |
+| `review_required` | `posted` through a pending Bookkeeping decision, `rejected` |
+| `approved` | `posted` when eligible, `rejected` through a pending Bookkeeping review |
 | `posted` | No direct edit in version 1. |
 | `rejected` | No automatic transition. |
 | `voided` | No automatic transition. |

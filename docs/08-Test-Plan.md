@@ -238,3 +238,21 @@ belonged to another OS user. No application data was reset. Existing Starlette T
 `httpx` deprecation and Vite's bundle-size advisory remain. No manual/live-browser run,
 coverage percentage, or external LLM benchmark was recorded; manual checklist boxes stay
 unchecked until a tester supplies evidence.
+
+### 6.3 Transactional posting regression
+
+| Test module in `backend/tests/` | Behavior verified |
+|---|---|
+| `test_ledger_api.py` | Direct eligibility, one commit, per-entry balance, rollback and replay preserving the timestamp and audit. |
+| `test_bookkeeping_review_posting.py` | Approve and edit, effective lines, active accounts, legacy links, ordered human and posting audits, pending review and original lines after rollback. |
+| `test_journal_posting_postgres.py` | Independent sessions observe actual lock waits across direct post, approve, edit and reject. A replay preserves the winning decision. A waiting rejection rechecks its link. |
+| Same PostgreSQL module, `test_posting_rolls_back_on_database_failure` | Each of the three posting endpoints encounters an immediate or deferred audit constraint violation. A fresh session checks the journal, line IDs and amounts, document, review and audit count. Lifting the constraint permits one successful retry. |
+
+To reproduce from `backend/` with the PostgreSQL test URL set as in §6.1, run
+`.venv/bin/python -m pytest -q tests/test_ledger_api.py tests/test_bookkeeping_review_posting.py tests/test_journal_posting_postgres.py`.
+Each PostgreSQL case uses a temporary schema, including its test-only constraints.
+
+Verified on 2026-11-19 with PostgreSQL 16.14. The full backend suite passed all
+319 tests, including 14 PostgreSQL journal posting cases. All 33 frontend tests,
+TypeScript, lint, format and production build passed. Ruff lint and format passed
+for the updated regression module.

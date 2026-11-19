@@ -388,14 +388,19 @@ Extraction edit fields:
 - Currency.
 - Line items.
 
-Bookkeeping edit fields:
+Bookkeeping Review Modal line edits:
 
-- Entry date.
-- Description.
 - Account codes.
 - Debit amounts.
 - Credit amounts.
 - Line descriptions.
+
+In the Bookkeeping Review Modal, **Confirm & Post** accepts the current classification.
+**Save & Post** submits the edited lines. Success closes the modal and refreshes the
+queue. A validation failure keeps the review pending and shows the error so the
+reviewer can correct the lines. If another reviewer has already acted, refresh the
+queue and inspect the recorded decision. A successful rejection leaves a rejection
+audit and stops posting.
 
 Reconciliation edit fields:
 
@@ -483,6 +488,12 @@ The detail view should show:
 - Related document.
 - Related extraction.
 - Related audit events.
+
+**Post to Ledger** appears on draft and approved journals. An unbalanced entry
+disables the action. The server also checks document status and required reviews.
+Follow a missing-approval message to the Review Queue. If posting cannot be
+confirmed, refresh the journal before trying again. A posted journal retains its
+original posting time on a repeat request.
 
 The debit and credit table should look familiar to accounting users and clearly show whether the entry balances.
 

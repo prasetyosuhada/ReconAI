@@ -159,6 +159,20 @@ The frontend composes review detail, latest extraction metadata, and source-cont
 requests. There is no combined evidence descriptor response. Source failures and failed
 validation create no new audit events; successful human/Bookkeeping events commit together.
 
+#### 5.2.2 Ledger and Bookkeeping posting (Epic 16)
+
+The Ledger post endpoint and Bookkeeping approve, edit and reject endpoints delegate
+transaction ownership to `backend/app/services/journal_posting.py`. The service locks
+the linked document (when present), the journal, then candidate Bookkeeping reviews
+in ID order. It reloads their state and verifies the review links under lock. It
+reads pending extraction reviews without acquiring an extraction-review lock.
+
+For posting, the accounting helper validates the effective lines and stages the
+posting timestamp. One commit persists the journal, linked document and posting audit.
+A Bookkeeping decision adds the reviewer, any edits and the human audit to that same
+commit. Reject records the rejection and prevents a waiting request from posting.
+[Posting contract](13-Transactional-Journal-Posting.md)
+
 ### 5.3 Agent Orchestrator
 
 The orchestrator coordinates multi-step workflows across agents. LangGraph is a strong fit because the system requires explicit state transitions, conditional routing, and human-in-the-loop pauses.
@@ -322,10 +336,10 @@ Draft journal entry persisted and audit event recorded
 Domain service validates debit = credit
         │
         ▼
-Approved journal entry posted to ledger
+Journal and linked document posted with audit in one transaction
         │
         ▼
-Trial balance validation runs
+Posted lines available to the trial balance query
 ```
 
 ### 6.2 Bank Reconciliation Flow
@@ -444,6 +458,7 @@ Detailed API contracts should be documented separately in `05-API-Spec.md`. At a
 | `POST` | `/review-items/{review_item_id}/edit` | Edit and approve a suggestion. |
 | `POST` | `/review-items/{review_item_id}/reject` | Reject a suggestion. |
 | `GET` | `/ledger/journal-entries` | List posted and draft journal entries. |
+| `POST` | `/ledger/journal-entries/{journal_entry_id}/post` | Post an eligible journal and record the audit in one transaction. |
 | `GET` | `/ledger/trial-balance` | Fetch trial balance validation status. |
 | `POST` | `/bank-statements/import` | Import mock bank statement CSV. |
 | `POST` | `/reconciliation/run` | Run reconciliation workflow. |
@@ -466,7 +481,7 @@ Recommended document workflow states:
 | `extracted` | Extraction result is accepted. |
 | `bookkeeping_in_progress` | Bookkeeping Agent is creating a journal entry suggestion. |
 | `bookkeeping_review_required` | Journal entry suggestion needs human review. |
-| `ready_to_post` | Journal entry is valid and approved. |
+| `ready_to_post` | Document is ready for posting eligibility checks on its draft or approved journal. |
 | `posted` | Journal entry has been posted to the ledger. |
 | `failed` | Workflow failed and requires investigation. |
 
@@ -540,8 +555,8 @@ Errors should be visible and recoverable where possible.
 | Partial PDF or failed page rendering | Cap confidence, record affected pages, and route to Human Review. |
 | LLM provider failure | Mark workflow as failed, preserve available metadata, and expose a recoverable status. |
 | Low-confidence AI result | Route to review queue. |
-| Invalid journal entry | Block posting and create review item. |
-| Trial balance failure | Block posting and create audit event. |
+| Invalid journal at posting | Return a validation error. A pending Bookkeeping decision remains pending. |
+| Posting audit or commit failure | Roll back staged changes when possible. Return a safe error directing the caller to refresh before retrying. |
 | CSV parsing error | Reject import with row-level error details where possible. |
 | Reconciliation ambiguity | Route candidate matches to human review. |
 | Source document missing or outside the configured storage boundary | **Implemented — Epic 15:** return an explicit unavailable response, preserve the pending review, and do not expose the resolved path. |
