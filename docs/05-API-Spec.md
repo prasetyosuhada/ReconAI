@@ -544,6 +544,9 @@ Behavior by review type:
 | `reconciliation` | Accept proposed match or mark manual resolution. |
 | `validation` | Re-run validation before continuing. |
 
+The planned Epic 16 contract for Bookkeeping approve, edit-and-post, and conflicts
+with rejection is in [Transactional Journal Posting and Audit](13-Transactional-Journal-Posting.md).
+
 ### 9.4 `POST /review-items/{review_item_id}/edit`
 
 Edits a suggestion and approves the edited payload.
@@ -797,6 +800,10 @@ Allowed when:
 - Journal entry status is `approved` or `ready_to_post`.
 - Journal entry passes deterministic validation.
 - Required review items are resolved.
+
+The planned Epic 16 [posting eligibility rules](13-Transactional-Journal-Posting.md#posting-eligibility)
+distinguish the journal's `draft` status from the linked document's `ready_to_post`
+status and require positive decisions on all applicable reviews before direct posting.
 
 ### 10.5 `GET /ledger/trial-balance`
 
