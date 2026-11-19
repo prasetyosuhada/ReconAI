@@ -4,7 +4,6 @@ Each test owns a randomly named schema; application tables are never recreated o
 cleared. Only that test's schema is dropped on exit. LLM calls are stubbed.
 """
 
-import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -13,14 +12,9 @@ from threading import Barrier, Event
 from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
 
 from app.agents.schemas import BookkeepingOutcome
-from app.db.base import Base
-from app.db.session import get_db
-from app.main import app
 from app.models.audit import AuditEvent
 from app.models.coa import ChartOfAccount
 from app.models.document import Document, DocumentExtraction
@@ -30,99 +24,65 @@ from app.services import review_continuation as service
 
 
 @pytest.fixture
-def pg_review():
-    url = os.environ.get("RECONAI_TEST_POSTGRES_URL")
-    if not url:
-        pytest.skip("Set RECONAI_TEST_POSTGRES_URL to run PostgreSQL race tests.")
-    admin = create_engine(url, connect_args={"connect_timeout": 5})
-    assert admin.dialect.name == "postgresql"
-    schema = "test_review_" + uuid.uuid4().hex
-    with admin.begin() as conn:
-        conn.execute(text(f'CREATE SCHEMA "{schema}"'))
-    engine = create_engine(
-        url,
-        connect_args={
-            "options": f"-csearch_path={schema} -clock_timeout=10000 -cstatement_timeout=15000",
-            "application_name": schema,
-        },
-    )
-    sessions = sessionmaker(bind=engine, autoflush=False)
-    previous = app.dependency_overrides.get(get_db)
-
-    def get_test_db():
-        with sessions() as db:
-            yield db
-
-    try:
-        Base.metadata.create_all(engine)
-        with sessions() as db:
-            doc = Document(
-                id=uuid.uuid4(),
-                original_filename="test.pdf",
-                stored_file_path="/tmp/test.pdf",
-                mime_type="application/pdf",
-                file_size_bytes=1,
-                document_type="invoice",
-                status="extraction_review_required",
-            )
-            extraction = DocumentExtraction(
-                id=uuid.uuid4(),
-                document_id=doc.id,
-                vendor_name="Original",
-                transaction_date=date(2026, 9, 25),
-                subtotal_amount=100,
-                tax_amount=10,
-                total_amount=110,
-                currency="IDR",
-                line_items=[],
-                confidence_score=0.5,
-                provider_metadata={"warnings": ["Original evidence"]},
-                status="draft",
-            )
-            review = ReviewItem(
-                id=uuid.uuid4(),
-                review_type="extraction",
-                source_type="document",
-                source_id=doc.id,
-                status="pending",
-                title="Review",
-                original_payload={"vendor_name": "Original"},
-            )
-            db.add_all(
-                [
-                    doc,
-                    extraction,
-                    review,
-                    ChartOfAccount(
-                        account_code="5100",
-                        account_name="Expense",
-                        account_type="expense",
-                        normal_balance="debit",
-                        is_active=True,
-                    ),
-                    ChartOfAccount(
-                        account_code="2000",
-                        account_name="Payable",
-                        account_type="liability",
-                        normal_balance="credit",
-                        is_active=True,
-                    ),
-                ]
-            )
-            db.commit()
-            ids = doc.id, extraction.id, review.id
-        app.dependency_overrides[get_db] = get_test_db
-        with TestClient(app) as client:
-            yield client, sessions, ids, schema
-    finally:
-        if previous is None:
-            app.dependency_overrides.pop(get_db, None)
-        else:
-            app.dependency_overrides[get_db] = previous
-        engine.dispose()
-        with admin.begin() as conn:
-            conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        admin.dispose()
+def pg_review(pg_api):
+    client, sessions, schema = pg_api
+    with sessions() as db:
+        doc = Document(
+            id=uuid.uuid4(),
+            original_filename="test.pdf",
+            stored_file_path="/tmp/test.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=1,
+            document_type="invoice",
+            status="extraction_review_required",
+        )
+        extraction = DocumentExtraction(
+            id=uuid.uuid4(),
+            document_id=doc.id,
+            vendor_name="Original",
+            transaction_date=date(2026, 9, 25),
+            subtotal_amount=100,
+            tax_amount=10,
+            total_amount=110,
+            currency="IDR",
+            line_items=[],
+            confidence_score=0.5,
+            provider_metadata={"warnings": ["Original evidence"]},
+            status="draft",
+        )
+        review = ReviewItem(
+            id=uuid.uuid4(),
+            review_type="extraction",
+            source_type="document",
+            source_id=doc.id,
+            status="pending",
+            title="Review",
+            original_payload={"vendor_name": "Original"},
+        )
+        db.add_all(
+            [
+                doc,
+                extraction,
+                review,
+                ChartOfAccount(
+                    account_code="5100",
+                    account_name="Expense",
+                    account_type="expense",
+                    normal_balance="debit",
+                    is_active=True,
+                ),
+                ChartOfAccount(
+                    account_code="2000",
+                    account_name="Payable",
+                    account_type="liability",
+                    normal_balance="credit",
+                    is_active=True,
+                ),
+            ]
+        )
+        db.commit()
+        ids = doc.id, extraction.id, review.id
+    return client, sessions, ids, schema
 
 
 def _outcome():

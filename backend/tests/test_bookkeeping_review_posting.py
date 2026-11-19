@@ -294,3 +294,22 @@ def test_legacy_document_review_selects_declared_draft(client, db_session, pendi
     assert response.status_code == 200
     db_session.expire_all()
     assert entry.status == "posted" and sibling.status == "draft"
+
+
+@pytest.mark.parametrize(("initial", "expected"), [("approved", 200), ("posted", 409)])
+def test_reject_checks_durable_journal_state(
+    client, db_session, pending, initial, expected
+):
+    entry, review = pending
+    entry.status = initial
+    db_session.commit()
+    response = client.post(f"/api/v1/review-items/{review.id}/reject")
+    assert response.status_code == expected
+    db_session.expire_all()
+    if expected == 409:
+        assert response.json()["error"]["code"] == "journal_already_posted"
+        assert review.status == "pending" and entry.status == "posted"
+        assert db_session.query(AuditEvent).count() == 0
+    else:
+        assert review.status == entry.status == entry.document.status == "rejected"
+        assert db_session.query(AuditEvent).one().event_type == "review_item_rejected"

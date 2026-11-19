@@ -28,7 +28,11 @@ from app.services.accounting import (
     post_journal_entry_to_ledger,
 )
 from app.services.audit_service import log_event
-from app.services.journal_posting import JournalPostingError, post_bookkeeping_review
+from app.services.journal_posting import (
+    JournalPostingError,
+    post_bookkeeping_review,
+    reject_bookkeeping_review,
+)
 from app.services.review_continuation import (
     reject_extraction_review,
     resolve_extraction_review,
@@ -621,7 +625,9 @@ def reject_review_item(
     db: Session = Depends(get_db),
 ) -> ReviewRejectResponse:
     """Reject a pending review item."""
-    item = _get_review_item_or_404(review_item_id, db)
+    item = _get_review_for_decision(review_item_id, db)
+    if item.review_type == "bookkeeping":
+        return reject_bookkeeping_review(db, item, req.resolution_note if req else None)
 
     if item.source_type == "document" and item.review_type == "extraction":
         result = reject_extraction_review(

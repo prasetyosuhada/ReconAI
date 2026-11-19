@@ -11,10 +11,15 @@ from pydantic import ValidationError
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.models.document import Document
 from app.models.journal import JournalEntry
 from app.models.review import ReviewItem
 from app.schemas.ledger import PostJournalEntryResponse
-from app.schemas.review import ReviewApproveResponse, ReviewEditResponse
+from app.schemas.review import (
+    ReviewApproveResponse,
+    ReviewEditResponse,
+    ReviewRejectResponse,
+)
 from app.services.accounting import (
     CONFIDENCE_THRESHOLD_BOOKKEEPING,
     check_sensitive_accounts,
@@ -133,7 +138,9 @@ def _review_matches_lines(review: ReviewItem, lines: list[ReviewedLine]) -> bool
         return False
 
 
-def _check_state(entry: JournalEntry, decision: ReviewItem | None) -> None:
+def _check_state(
+    entry: JournalEntry, decision: ReviewItem | None, *, rejecting: bool = False
+) -> None:
     if entry.status == "posted":
         raise JournalPostingError(
             409,
@@ -145,6 +152,9 @@ def _check_state(entry: JournalEntry, decision: ReviewItem | None) -> None:
     if decision is None and entry.status == "review_required":
         raise _review_required(entry)
     allowed = {"draft", "review_required"} if decision else {"draft", "approved"}
+    if rejecting:
+        # A pending review can still veto an approved but unposted journal.
+        allowed.add("approved")
     if entry.status not in allowed or entry.source_type not in {
         "document",
         "manual",
@@ -154,16 +164,90 @@ def _check_state(entry: JournalEntry, decision: ReviewItem | None) -> None:
         raise _not_postable(entry, decision)
 
 
+def _lock_posting_rows(
+    db: Session,
+    journal_id: UUID,
+) -> tuple[JournalEntry, list[ReviewItem]]:
+    """Acquire document, journal, then Bookkeeping review locks in the common order."""
+    missing = JournalPostingError(404, "not_found", "Journal entry not found.")
+    candidate = (
+        db.query(JournalEntry.document_id).filter_by(id=journal_id).one_or_none()
+    )
+    if candidate is None:
+        raise missing
+    document_id = candidate.document_id
+    if document_id is not None:
+        document = db.get(
+            Document, document_id, populate_existing=True, with_for_update=True
+        )
+        if document is None:
+            raise JournalPostingError(404, "not_found", "Linked document not found.")
+
+    entry = db.get(
+        JournalEntry, journal_id, populate_existing=True, with_for_update=True
+    )
+    if entry is None:
+        raise missing
+    if entry.document_id != document_id:
+        raise _not_postable(entry)
+
+    source = and_(
+        ReviewItem.source_type == "journal_entry", ReviewItem.source_id == journal_id
+    )
+    if document_id is not None:
+        source = or_(
+            source,
+            and_(
+                ReviewItem.source_type == "document",
+                ReviewItem.source_id == document_id,
+            ),
+        )
+    reviews = (
+        db.query(ReviewItem)
+        .filter(ReviewItem.review_type == "bookkeeping", source)
+        .order_by(ReviewItem.id)
+        .populate_existing()
+        .with_for_update()
+        .all()
+    )
+    return entry, reviews
+
+
+def _require_pending(review: ReviewItem, entry: JournalEntry | None = None) -> None:
+    if review.status != "pending":
+        raise JournalPostingError(
+            409,
+            "review_already_resolved",
+            "This review has already been resolved. Refresh the review.",
+            entry.status if entry else None,
+            review.status,
+        )
+
+
+def _lock_review_target(
+    db: Session, review: ReviewItem
+) -> tuple[JournalEntry, list[ReviewItem]]:
+    _require_pending(review)
+    candidate = _journal_for_review(db, review)
+    entry, reviews = _lock_posting_rows(db, candidate.id)
+    # The router loaded the decision before waiting. The locking query refreshed
+    # that same session object only if it still belongs to the locked sources.
+    if review not in reviews:
+        raise _not_postable(entry, review)
+    _require_pending(review, entry)
+    if _journal_for_review(db, review, candidate=entry).id != entry.id:
+        raise _not_postable(entry, review)
+    return entry, reviews
+
+
 def _check_approvals(
     db: Session,
     entry: JournalEntry,
+    reviews: list[ReviewItem],
     decision: ReviewItem | None = None,
     *,
     replaced_lines: bool = False,
 ) -> None:
-    source = and_(
-        ReviewItem.source_type == "journal_entry", ReviewItem.source_id == entry.id
-    )
     if entry.document_id is not None:
         document = entry.document
         if document is None:
@@ -197,7 +281,6 @@ def _check_approvals(
             }:
                 raise _review_required(entry)
             raise _not_postable(entry, decision)
-        source = or_(source, document_source)
     elif (
         decision is None and entry.status == "draft" and entry.source_type == "document"
     ):
@@ -221,10 +304,7 @@ def _check_approvals(
         )
 
     approved = False
-    reviews = db.query(ReviewItem).filter(
-        source, ReviewItem.review_type == "bookkeeping"
-    )
-    for review in reviews.order_by(ReviewItem.id):
+    for review in reviews:
         if _journal_for_review(db, review, candidate=entry).id != entry.id:
             continue
         if decision is not None and review.id == decision.id:
@@ -316,11 +396,9 @@ def _audit_post(
 def post_directly(db: Session, journal_id: UUID) -> PostJournalEntryResponse:
     """Return a successful outcome only after journal, document and audit commit."""
     with _posting_transaction(db):
-        entry = db.get(JournalEntry, journal_id)
-        if entry is None:
-            raise JournalPostingError(404, "not_found", "Journal entry not found.")
+        entry, reviews = _lock_posting_rows(db, journal_id)
         _check_state(entry, None)
-        _check_approvals(db, entry)
+        _check_approvals(db, entry, reviews)
         _stage_post(db, entry, "api_user")
         _audit_post(db, entry, "api_user")
         return PostJournalEntryResponse(
@@ -338,14 +416,7 @@ def post_bookkeeping_review(
     edited_payload: dict[str, Any] | None = None,
 ) -> ReviewApproveResponse | ReviewEditResponse:
     with _posting_transaction(db):
-        if review.status != "pending":
-            raise JournalPostingError(
-                409,
-                "review_already_resolved",
-                "This review has already been resolved. Refresh the review.",
-                review_status=review.status,
-            )
-        entry = _journal_for_review(db, review)
+        entry, reviews = _lock_review_target(db, review)
         _check_state(entry, review)
         replaced_lines = False
         if edited_payload is not None:
@@ -355,7 +426,7 @@ def post_bookkeeping_review(
                 raise JournalPostingError(
                     422, "journal_validation_failed", str(exc)
                 ) from exc
-        _check_approvals(db, entry, review, replaced_lines=replaced_lines)
+        _check_approvals(db, entry, reviews, review, replaced_lines=replaced_lines)
         resolved_at = datetime.now(UTC)
         _stage_post(db, entry, "human_user")
         entry.posted_at = max(entry.posted_at, resolved_at + timedelta(microseconds=1))
@@ -400,4 +471,46 @@ def post_bookkeeping_review(
             message="Review item edited and approved."
             if edited_payload is not None
             else "Review item approved successfully.",
+        )
+
+
+def reject_bookkeeping_review(
+    db: Session,
+    review: ReviewItem,
+    resolution_note: str | None,
+) -> ReviewRejectResponse:
+    with _posting_transaction(db):
+        entry, _ = _lock_review_target(db, review)
+        _check_state(entry, review, rejecting=True)
+        document = entry.document
+        if document is not None and document.status in {"posted", "voided", "rejected"}:
+            raise _not_postable(entry, review)
+        now = datetime.now(UTC)
+        review.status = entry.status = "rejected"
+        review.resolution_note = resolution_note
+        review.resolved_by = "human_user"
+        review.resolved_at = now
+        if document is not None:
+            document.status = "rejected"
+        log_event(
+            db=db,
+            event_type="review_item_rejected",
+            source_type="review_item",
+            source_id=review.id,
+            actor_type="human",
+            actor_name=review.resolved_by,
+            human_action="rejected",
+            created_at=now,
+            document_id=entry.document_id,
+            input_snapshot={
+                "review_type": review.review_type,
+                "resolution_note": resolution_note,
+            },
+            output_snapshot={"status": "rejected", "journal_entry_id": str(entry.id)},
+        )
+        return ReviewRejectResponse(
+            id=review.id,
+            status=review.status,
+            resolved_at=now,
+            message="Review item rejected.",
         )
